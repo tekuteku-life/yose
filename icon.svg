@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc" />
+      <stop offset="100%" stop-color="#cbd5e1" />
+    </linearGradient>
+    <filter id="bookShadow" x="-15%" y="-10%" width="130%" height="135%">
+      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#0f172a" flood-opacity="0.22" />
+    </filter>
+    <!-- Clip path for the front cover of the book (x:100..412, y:72..368) -->
+    <clipPath id="coverClip">
+      <path d="M116 72 H388 A24 24 0 0 1 412 96 V344 A24 24 0 0 1 388 368 H116 A16 16 0 0 1 100 352 V88 A16 16 0 0 1 116 72 Z" />
+    </clipPath>
+    <!-- Clip path for the page block at bottom (x:100..412, y:320..416) -->
+    <clipPath id="pageClip">
+      <path d="M100 320 H412 V392 A24 24 0 0 1 388 416 H124 A24 24 0 0 1 100 392 Z" />
+    </clipPath>
+  </defs>
+
+  <!-- App Icon Squircle Background -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+
+  <!-- Main Book Emblem -->
+  <g filter="url(#bookShadow)">
+    <!-- Bookmark Ribbon (しおり紐) peeking from bottom -->
+    <path d="M236 400 H280 V460 L258 442 L236 460 Z" fill="#f43f5e" stroke="#1e293b" stroke-width="8" stroke-linejoin="round" />
+
+    <!-- Book Page Block (本の厚み・ページ層) -->
+    <g clip-path="url(#pageClip)">
+      <rect x="100" y="320" width="312" height="96" fill="#ffffff" />
+      <!-- Spine Bottom Curve Shading -->
+      <rect x="100" y="320" width="60" height="96" fill="#cbd5e1" />
+      <!-- Page Edge Lines -->
+      <line x1="176" y1="384" x2="388" y2="384" stroke="#94a3b8" stroke-width="6" stroke-linecap="round" />
+      <line x1="176" y1="398" x2="376" y2="398" stroke="#94a3b8" stroke-width="6" stroke-linecap="round" />
+    </g>
+    <!-- Page Block Outer Border -->
+    <path d="M100 320 H412 V392 A24 24 0 0 1 388 416 H124 A24 24 0 0 1 100 392 Z" fill="none" stroke="#1e293b" stroke-width="10" />
+
+    <!-- Front Cover with Patchwork ("よせあつめ" Mosaic) -->
+    <g clip-path="url(#coverClip)">
+      <!-- Base dark seam color -->
+      <rect x="100" y="72" width="312" height="296" fill="#1e293b" />
+
+      <!-- Patchwork Tile 1: Top-Left (Blue) -->
+      <rect x="160" y="72" width="124" height="112" fill="#3b82f6" />
+      <!-- Patchwork Tile 2: Top-Right (Amber Gold) -->
+      <rect x="292" y="72" width="120" height="84" fill="#f59e0b" />
+      <!-- Patchwork Tile 3: Mid-Right (Emerald Green) -->
+      <rect x="292" y="164" width="120" height="110" fill="#10b981" />
+      <!-- Patchwork Tile 4: Bottom-Left (Coral Rose) -->
+      <rect x="160" y="192" width="100" height="176" fill="#f43f5e" />
+      <!-- Patchwork Tile 5: Bottom-Right (Sky Cyan) -->
+      <rect x="268" y="282" width="144" height="86" fill="#06b6d4" />
+
+      <!-- Book Spine (背表紙) -->
+      <rect x="100" y="72" width="52" height="296" fill="#1e3a8a" />
+      <!-- Spine Highlight -->
+      <rect x="112" y="72" width="8" height="296" fill="#60a5fa" opacity="0.35" />
+      <!-- Spine Binding Stitches (綴じ糸) -->
+      <line x1="100" y1="128" x2="152" y2="128" stroke="#93c5fd" stroke-width="6" />
+      <line x1="100" y1="220" x2="152" y2="220" stroke="#93c5fd" stroke-width="6" />
+      <line x1="100" y1="312" x2="152" y2="312" stroke="#93c5fd" stroke-width="6" />
+    </g>
+
+    <!-- Front Cover Outer Border -->
+    <path d="M116 72 H388 A24 24 0 0 1 412 96 V344 A24 24 0 0 1 388 368 H116 A16 16 0 0 1 100 352 V88 A16 16 0 0 1 116 72 Z" fill="none" stroke="#1e293b" stroke-width="10" />
+
+    <!-- Kakeibo Ledger Label (題箋ラベル) centered on Patchwork Cover -->
+    <rect x="224" y="140" width="120" height="156" rx="16" fill="#ffffff" stroke="#1e293b" stroke-width="10" />
+    <!-- Yen Symbol inside Label -->
+    <g stroke="#1e293b" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M260 176 L284 212 L308 176" />
+      <line x1="284" y1="212" x2="284" y2="262" />
+      <line x1="260" y1="222" x2="308" y2="222" />
+      <line x1="260" y1="242" x2="308" y2="242" />
+    </g>
+  </g>
+</svg>
