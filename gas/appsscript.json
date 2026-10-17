@@ -1,13 +1,13 @@
 {
-  "timeZone": "Asia/Tokyo",
-  "dependencies": {},
-  "exceptionLogging": "STACKDRIVER",
-  "runtimeVersion": "V8",
-  "oauthScopes": [
-    "https://www.googleapis.com/auth/spreadsheets.currentonly"
-  ],
-  "webapp": {
-    "access": "ANYONE",
-    "executeAs": "USER_DEPLOYING"
-  }
+	"timeZone": "Asia/Tokyo",
+	"dependencies": {},
+	"exceptionLogging": "STACKDRIVER",
+	"runtimeVersion": "V8",
+	"oauthScopes": [
+		"https://www.googleapis.com/auth/spreadsheets.currentonly"
+	],
+	"webapp": {
+		"access": "ANYONE",
+		"executeAs": "USER_DEPLOYING"
+	}
 }
