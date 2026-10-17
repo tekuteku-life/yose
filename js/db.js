@@ -657,17 +657,29 @@ export class YoseDB {
 			return {
 				expense_budget: 0,
 				savings_target_amount: 0,
-				savings_target_rate: 0
+				savings_target_rate: 0,
+				category_budgets: {}
 			};
 		}
 		const config = await this.getMasterConfig();
 		const entry = Object.prototype.hasOwnProperty.call(config?.annual_budgets || {}, yearStr)
 			? config.annual_budgets[yearStr]
 			: null;
-		return entry || {
-			expense_budget: 0,
-			savings_target_amount: 0,
-			savings_target_rate: 0
+		if (!entry) {
+			return {
+				expense_budget: 0,
+				savings_target_amount: 0,
+				savings_target_rate: 0,
+				category_budgets: {}
+			};
+		}
+		return {
+			expense_budget: Math.max(0, Number(entry.expense_budget) || 0),
+			savings_target_amount: Math.max(0, Number(entry.savings_target_amount) || 0),
+			savings_target_rate: Math.max(0, Number(entry.savings_target_rate ?? entry.target_savings_rate) || 0),
+			category_budgets: (entry.category_budgets && typeof entry.category_budgets === 'object')
+				? { ...entry.category_budgets }
+				: {}
 		};
 	}
 
@@ -680,10 +692,22 @@ export class YoseDB {
 		if (!config.annual_budgets || typeof config.annual_budgets !== 'object') {
 			config.annual_budgets = {};
 		}
+
+		const cleanCategoryBudgets = {};
+		if (budget?.category_budgets && typeof budget.category_budgets === 'object') {
+			for (const [catId, val] of Object.entries(budget.category_budgets)) {
+				if (['__proto__', 'constructor', 'prototype'].includes(catId)) continue;
+				if (typeof catId === 'string' && catId.length > 0) {
+					cleanCategoryBudgets[catId] = Math.max(0, Number(val) || 0);
+				}
+			}
+		}
+
 		config.annual_budgets[yearStr] = {
 			expense_budget: Math.max(0, Number(budget?.expense_budget) || 0),
 			savings_target_amount: Math.max(0, Number(budget?.savings_target_amount) || 0),
-			savings_target_rate: Math.max(0, Number(budget?.savings_target_rate ?? budget?.target_savings_rate) || 0)
+			savings_target_rate: Math.max(0, Number(budget?.savings_target_rate ?? budget?.target_savings_rate) || 0),
+			category_budgets: cleanCategoryBudgets
 		};
 		await this.saveMasterConfig(config);
 		return config.annual_budgets[yearStr];
@@ -838,13 +862,34 @@ export class YoseDB {
 				for (const [yKey, bVal] of Object.entries(data.master_config.annual_budgets)) {
 					if (FORBIDDEN_KEYS.has(yKey) || !/^\d{4}$/.test(yKey)) continue;
 					if (!bVal || typeof bVal !== 'object') continue;
+
+					const cleanCatBudgets = {};
+					if (bVal.category_budgets && typeof bVal.category_budgets === 'object') {
+						for (const [cId, cVal] of Object.entries(bVal.category_budgets)) {
+							if (!FORBIDDEN_KEYS.has(cId) && typeof cId === 'string' && cId.length > 0) {
+								cleanCatBudgets[cId] = Math.max(0, Number(cVal) || 0);
+							}
+						}
+					}
+
 					if (!Object.prototype.hasOwnProperty.call(localConfig.annual_budgets, yKey)) {
 						localConfig.annual_budgets[yKey] = {
 							expense_budget: Math.max(0, Number(bVal.expense_budget) || 0),
 							savings_target_amount: Math.max(0, Number(bVal.savings_target_amount) || 0),
-							savings_target_rate: Math.max(0, Number(bVal.savings_target_rate ?? bVal.target_savings_rate) || 0)
+							savings_target_rate: Math.max(0, Number(bVal.savings_target_rate ?? bVal.target_savings_rate) || 0),
+							category_budgets: cleanCatBudgets
 						};
 						stats.addedBudgets++;
+					} else {
+						// Existing year: merge missing category_budgets non-destructively
+						if (!localConfig.annual_budgets[yKey].category_budgets || typeof localConfig.annual_budgets[yKey].category_budgets !== 'object') {
+							localConfig.annual_budgets[yKey].category_budgets = {};
+						}
+						for (const [cId, cVal] of Object.entries(cleanCatBudgets)) {
+							if (!Object.prototype.hasOwnProperty.call(localConfig.annual_budgets[yKey].category_budgets, cId)) {
+								localConfig.annual_budgets[yKey].category_budgets[cId] = cVal;
+							}
+						}
 					}
 				}
 			}

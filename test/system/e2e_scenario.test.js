@@ -15,6 +15,10 @@ import {
 	createPointPaymentTransactions,
 	calculateBalancesAndSummaries,
 	calculateTotalAssetSummary,
+	calculateAnnualBudgetProgress,
+	calculateAnnualBudgetDefaults,
+	generateAnnualTrajectory,
+	roundTieredAmount,
 	JAPANESE_HOLIDAYS_PRESET
 } from '../../js/logic.js';
 import {
@@ -307,6 +311,78 @@ describe('System Test - Yoseatsume Kakeibo End-to-End Complete Scenario', () => 
 		assert.ok(totalAssets.total_assets > 2500000);
 		assert.ok(totalAssets.external_assets_total === 2500000);
 		assert.ok(totalAssets.net_assets > 0);
+
+		// -------------------------------------------------------------
+		// Step 14: Annual Budget & Category Budget Setting, Auto-Calculation Defaults, Sync, and Progress Analytics (Requirement 3.14)
+		// -------------------------------------------------------------
+		const allTxs = await db.getTransactions({ includeDeleted: false });
+		const configBeforeBudget = await db.getMasterConfig();
+
+		// Auto-calculate budget defaults based on 2026 data
+		const budgetDefaults = calculateAnnualBudgetDefaults({
+			previousYearSummary: {
+				income: 300000,
+				expense: 138000,
+				net: 162000,
+				savings_rate: 54
+			},
+			pastTransactions: allTxs,
+			categories: configBeforeBudget.categories,
+			targetYear: 2027
+		});
+
+		assert.ok(budgetDefaults.expense_budget > 0);
+		assert.ok(budgetDefaults.savings_target_amount > 0);
+		assert.ok(budgetDefaults.savings_target_rate > 0);
+		assert.ok(typeof budgetDefaults.category_budgets === 'object');
+
+		// Save annual budget with category budgets for 2027
+		const savedBudget = await db.saveAnnualBudget('2027', {
+			expense_budget: 2000000,
+			savings_target_amount: 1000000,
+			savings_target_rate: 33,
+			category_budgets: {
+				cat_food: 600000,
+				cat_housing: 1000000
+			}
+		});
+		assert.equal(savedBudget.expense_budget, 2000000);
+		assert.equal(savedBudget.category_budgets.cat_food, 600000);
+		assert.equal(savedBudget.category_budgets.cat_housing, 1000000);
+
+		// Sync updated master config containing annual_budgets to GAS
+		const masterWithBudget = await db.getMasterConfig();
+		const gasBudgetSyncRes = await syncManager.sendAction('update_master', { master_config: masterWithBudget });
+		assert.equal(gasBudgetSyncRes.success, true);
+
+		// Fetch remote state from GAS and verify annual_budgets and category_budgets integrity
+		const remoteState = await syncManager.fetchRemoteState();
+		assert.ok(remoteState.master_config.annual_budgets['2027']);
+		assert.equal(remoteState.master_config.annual_budgets['2027'].expense_budget, 2000000);
+		assert.equal(remoteState.master_config.annual_budgets['2027'].category_budgets.cat_food, 600000);
+
+		// Calculate progress and trajectory
+		const budgetProgress = calculateAnnualBudgetProgress({
+			yearlySummary: {
+				expense: 150000,
+				income: 300000,
+				net: 150000
+			},
+			budgetConfig: savedBudget,
+			currentMonth: 1
+		});
+		assert.equal(budgetProgress.expense_budget, 2000000);
+		assert.equal(budgetProgress.total_category_budget, 1600000);
+		assert.equal(budgetProgress.budget_discrepancy, 400000); // 2000000 - 1600000
+
+		const trajectory = generateAnnualTrajectory({
+			year: '2027',
+			monthlySummaries: {},
+			expenseBudget: 2000000,
+			savingsTarget: 1000000
+		});
+		assert.equal(trajectory.length, 12);
+		assert.equal(trajectory[0].month_str, '2027-01');
 	});
 });
 

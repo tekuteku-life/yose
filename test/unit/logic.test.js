@@ -24,6 +24,8 @@ import {
 	calculateTotalAssetSummary,
 	calculateAnnualBudgetProgress,
 	generateAnnualTrajectory,
+	roundTieredAmount,
+	calculateAnnualBudgetDefaults,
 	escapeHtml,
 	JAPANESE_HOLIDAYS_PRESET
 } from '../../js/logic.js';
@@ -1580,6 +1582,208 @@ describe('js/logic.js - Unit Tests', () => {
 			const defTraj = generateAnnualTrajectory();
 			assert.equal(defTraj.length, 12);
 			assert.equal(defTraj[0].monthly_budget_allowance, 0);
+		});
+
+		it('roundTieredAmount rounds numbers according to tiered scale', () => {
+			// >= 1,000,000 -> nearest 10,000
+			assert.equal(roundTieredAmount(3624800), 3620000);
+			assert.equal(roundTieredAmount(3626200), 3630000);
+			assert.equal(roundTieredAmount(1000000), 1000000);
+
+			// >= 10,000 -> nearest 1,000
+			assert.equal(roundTieredAmount(54321), 54000);
+			assert.equal(roundTieredAmount(54890), 55000);
+			assert.equal(roundTieredAmount(10000), 10000);
+
+			// < 10,000 -> nearest 100
+			assert.equal(roundTieredAmount(9876), 9900);
+			assert.equal(roundTieredAmount(1234), 1200);
+			assert.equal(roundTieredAmount(543), 500);
+			assert.equal(roundTieredAmount(49), 0);
+
+			// Edge cases: 0, negative, invalid
+			assert.equal(roundTieredAmount(0), 0);
+			assert.equal(roundTieredAmount(-5000), 0);
+			assert.equal(roundTieredAmount(null), 0);
+			assert.equal(roundTieredAmount(undefined), 0);
+			assert.equal(roundTieredAmount('not-a-number'), 0);
+		});
+
+		it('calculateAnnualBudgetDefaults pre-populates rounded values from previous year data', () => {
+			const categories = [
+				{ id: 'cat_food', name: '食費', type: 'expense' },
+				{ id: 'cat_housing', name: '住居費', type: 'expense' },
+				{ id: 'cat_income_main', name: '給与', type: 'income' },
+				{ id: 'cat_transfer', name: '振替', type: 'transfer' }
+			];
+
+			const pastTransactions = [
+				{ id: 'tx_1', date: '2025-03-15', type: 'expense', amount: 54321, category_id: 'cat_food' },
+				{ id: 'tx_2', date: '2025-06-20', type: 'expense', amount: 1254321, category_id: 'cat_housing' },
+				{ id: 'tx_3', date: '2025-09-10', type: 'expense', amount: 9876, category_id: 'cat_food' },
+				// Transaction from different year (should be filtered out when targetYear is 2026)
+				{ id: 'tx_4', date: '2024-12-01', type: 'expense', amount: 999999, category_id: 'cat_food' },
+				// Deleted transaction (should be ignored)
+				{ id: 'tx_5', date: '2025-07-01', type: 'expense', amount: 500000, category_id: 'cat_food', is_deleted: true }
+			];
+
+			const previousYearSummary = {
+				income: 5000000,
+				expense: 1318518, // 54321 + 1254321 + 9876 = 1318518
+				net: 3681482,
+				savings_rate: 73.6
+			};
+
+			const defaults = calculateAnnualBudgetDefaults({
+				previousYearSummary,
+				pastTransactions,
+				categories,
+				targetYear: 2026
+			});
+
+			// Expense budget rounded to nearest 10,000: 1318518 -> 1320000
+			assert.equal(defaults.expense_budget, 1320000);
+			// Savings target amount rounded to nearest 10,000: 3681482 -> 3680000
+			assert.equal(defaults.savings_target_amount, 3680000);
+			// Savings target rate rounded to integer: 73.6 -> 74
+			assert.equal(defaults.savings_target_rate, 74);
+
+			// Category budgets
+			// cat_food: 54321 + 9876 = 64197 -> rounded to nearest 1,000: 64000
+			assert.equal(defaults.category_budgets.cat_food, 64000);
+			// cat_housing: 1254321 -> rounded to nearest 10,000: 1250000
+			assert.equal(defaults.category_budgets.cat_housing, 1250000);
+			// income and transfer categories should be excluded
+			assert.equal(defaults.category_budgets.cat_income_main, undefined);
+			assert.equal(defaults.category_budgets.cat_transfer, undefined);
+		});
+
+		it('calculateAnnualBudgetDefaults supports by_category from previousYearSummary and prototype safety', () => {
+			const previousYearSummary = {
+				income: 4000000,
+				expense: 2500000,
+				net: 1500000,
+				by_category: {
+					cat_food: { total: 456789 },
+					cat_social: 34567,
+					__proto__: { total: 999999 }
+				}
+			};
+
+			const defaults = calculateAnnualBudgetDefaults({
+				previousYearSummary,
+				targetYear: '2026'
+			});
+
+			assert.equal(defaults.expense_budget, 2500000);
+			assert.equal(defaults.savings_target_amount, 1500000);
+			assert.equal(defaults.savings_target_rate, 38); // 1500000 / 4000000 = 37.5 -> 38
+			// cat_food: 456789 (>= 10,000 and < 1,000,000 -> rounds to 1,000s) -> 457000
+			assert.equal(defaults.category_budgets.cat_food, 457000);
+			// cat_social: 34567 -> 35000
+			assert.equal(defaults.category_budgets.cat_social, 35000);
+			// Prototype pollution defense
+			assert.equal(Object.prototype.hasOwnProperty.call(defaults.category_budgets, '__proto__'), false);
+
+			// Test branch: previousYearSummary without expense, but with income (net calculated as income - expense)
+			const noExpSummary = { income: 3000000 };
+			const txsOnly = [
+				{ id: 'tx_a', date: '2025-01-01', type: 'expense', amount: 800000, category_id: 'cat_rent' }
+			];
+			const derivedDefaults = calculateAnnualBudgetDefaults({
+				previousYearSummary: noExpSummary,
+				pastTransactions: txsOnly,
+				targetYear: 2026
+			});
+			assert.equal(derivedDefaults.expense_budget, 800000);
+			assert.equal(derivedDefaults.savings_target_amount, 2200000); // 3000000 - 800000 = 2200000
+			assert.equal(derivedDefaults.savings_target_rate, 73); // 2200000 / 3000000 = 73.3% -> 73%
+
+			// Empty parameters test
+			const emptyDefaults = calculateAnnualBudgetDefaults();
+			assert.equal(emptyDefaults.expense_budget, 0);
+			assert.equal(emptyDefaults.savings_target_amount, 0);
+			assert.equal(emptyDefaults.savings_target_rate, 0);
+			assert.deepEqual(emptyDefaults.category_budgets, {});
+		});
+
+		it('calculateAnnualBudgetProgress computes category-level progress and discrepancy', () => {
+			const budgetConfig = {
+				expense_budget: 3600000,
+				savings_target_amount: 1200000,
+				savings_target_rate: 25,
+				category_budgets: {
+					cat_food: 600000,
+					cat_housing: 1440000,
+					cat_entertainment: 240000,
+					cat_utilities: 120000
+				}
+			};
+
+			const yearlySummary = {
+				expense: 1500000,
+				income: 2500000,
+				net: 1000000,
+				by_category: {
+					cat_food: { total: 350000 },        // month 6 pace is 50%, 350k/600k = 58.3% -> caution
+					cat_housing: { total: 720000 },     // 720k/1440k = 50.0% -> on_pace
+					cat_entertainment: { total: 260000 }, // 260k/240k = 108.3% -> over_budget
+					cat_utilities: { total: 30000 }      // 30k/120k = 25.0% -> ahead
+				}
+			};
+
+			const progress = calculateAnnualBudgetProgress({
+				yearlySummary,
+				budgetConfig,
+				currentMonth: 6
+			});
+
+			assert.equal(progress.total_category_budget, 2400000);
+			assert.equal(progress.budget_discrepancy, 1200000); // 3600000 - 2400000
+
+			// cat_food
+			const foodProg = progress.category_progress.cat_food;
+			assert.equal(foodProg.budget, 600000);
+			assert.equal(foodProg.actual, 350000);
+			assert.equal(foodProg.remaining, 250000);
+			assert.equal(foodProg.consumption_rate, 58.3);
+			assert.equal(foodProg.pace_status, 'caution');
+
+			// cat_housing
+			const houseProg = progress.category_progress.cat_housing;
+			assert.equal(houseProg.budget, 1440000);
+			assert.equal(houseProg.actual, 720000);
+			assert.equal(houseProg.consumption_rate, 50.0);
+			assert.equal(houseProg.pace_status, 'on_pace');
+
+			// cat_entertainment
+			const entProg = progress.category_progress.cat_entertainment;
+			assert.equal(entProg.budget, 240000);
+			assert.equal(entProg.actual, 260000);
+			assert.equal(entProg.consumption_rate, 108.3);
+			assert.equal(entProg.pace_status, 'over_budget');
+
+			// cat_utilities
+			const utilProg = progress.category_progress.cat_utilities;
+			assert.equal(utilProg.budget, 120000);
+			assert.equal(utilProg.actual, 30000);
+			assert.equal(utilProg.consumption_rate, 25.0);
+			assert.equal(utilProg.pace_status, 'ahead');
+
+			// Prototype pollution defense in category budgets
+			const hackedConfig = {
+				expense_budget: 100000,
+				category_budgets: {
+					__proto__: 999999,
+					cat_normal: 50000
+				}
+			};
+			const hackedProgress = calculateAnnualBudgetProgress({
+				budgetConfig: hackedConfig,
+				categoryActuals: { cat_normal: 25000 }
+			});
+			assert.equal(Object.prototype.hasOwnProperty.call(hackedProgress.category_progress, '__proto__'), false);
+			assert.equal(hackedProgress.category_progress.cat_normal.budget, 50000);
 		});
 	});
 });

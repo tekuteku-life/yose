@@ -1172,9 +1172,140 @@ export function escapeHtml(str) {
  * @param {number} [params.expenseActual] - Direct flat argument
  * @param {number} [params.savingsTargetAmount] - Direct flat argument
  * @param {number} [params.savingsTargetRate] - Direct flat argument
+/**
+ * Lightly rounds an amount according to tiered algorithm (Requirement 3.14):
+ * - Amount >= 1,000,000 yen -> rounded to nearest 10,000 yen (Math.round(amt / 10000) * 10000)
+ * - Amount >= 10,000 yen -> rounded to nearest 1,000 yen (Math.round(amt / 1000) * 1000)
+ * - Amount < 10,000 yen -> rounded to nearest 100 yen (Math.round(amt / 100) * 100)
+ * @param {number} amt
+ * @returns {number}
+ */
+export function roundTieredAmount(amt) {
+	const n = Math.max(0, Math.round(Number(amt) || 0));
+	if (n >= 1000000) {
+		return Math.round(n / 10000) * 10000;
+	} else if (n >= 10000) {
+		return Math.round(n / 1000) * 1000;
+	} else {
+		return Math.round(n / 100) * 100;
+	}
+}
+
+/**
+ * Calculates default annual budget, savings targets, and category budgets based on previous year actuals with tiered rounding.
+ * (Requirement 3.14)
+ * @param {object} [params]
+ * @param {object} [params.previousYearSummary] - Overall summary ({ income, expense, net, savings_rate, by_category }) or null
+ * @param {Array<object>} [params.pastTransactions] - Array of transactions from the previous year
+ * @param {Array<object>} [params.categories] - Array of category masters ({ id, name, type, ... })
+ * @param {string|number} [params.targetYear] - Target year (YYYY)
+ * @returns {object} { expense_budget, savings_target_amount, savings_target_rate, category_budgets }
+ */
+export function calculateAnnualBudgetDefaults({
+	previousYearSummary = null,
+	pastTransactions = [],
+	categories = [],
+	targetYear = null
+} = {}) {
+	const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
+
+	// 1. Calculate category actuals
+	const catActuals = {};
+	const prevYearStr = targetYear ? String(Number(targetYear) - 1) : null;
+
+	// From past transactions if available
+	if (Array.isArray(pastTransactions)) {
+		for (const tx of pastTransactions) {
+			if (!tx || tx.is_deleted) continue;
+			if (prevYearStr && tx.date && !tx.date.startsWith(prevYearStr)) continue;
+			if (tx.type === 'expense') {
+				const catId = tx.category_id || 'cat_unclassified';
+				if (!FORBIDDEN_KEYS.includes(catId)) {
+					catActuals[catId] = (catActuals[catId] || 0) + (Number(tx.amount) || 0);
+				}
+			}
+		}
+	}
+
+	// From previousYearSummary.by_category if available and not yet set
+	if (previousYearSummary?.by_category && typeof previousYearSummary.by_category === 'object') {
+		for (const [catId, val] of Object.entries(previousYearSummary.by_category)) {
+			if (FORBIDDEN_KEYS.includes(catId)) continue;
+			const amt = typeof val === 'object' ? Number(val?.total || 0) : Number(val || 0);
+			if (amt > 0 && !catActuals[catId]) {
+				catActuals[catId] = amt;
+			}
+		}
+	}
+
+	// Calculate rounded category budgets
+	const category_budgets = {};
+	if (Array.isArray(categories) && categories.length > 0) {
+		for (const cat of categories) {
+			if (!cat || !cat.id || FORBIDDEN_KEYS.includes(cat.id)) continue;
+			// Only expense categories or default categories (exclude income/transfer if cat.type is explicit)
+			if (cat.type && cat.type !== 'expense') continue;
+			const actual = catActuals[cat.id] || 0;
+			category_budgets[cat.id] = roundTieredAmount(actual);
+		}
+	} else {
+		for (const [catId, actual] of Object.entries(catActuals)) {
+			category_budgets[catId] = roundTieredAmount(actual);
+		}
+	}
+
+	// Calculate overall expense budget
+	let rawExpense = 0;
+	if (previousYearSummary?.expense !== undefined) {
+		rawExpense = Number(previousYearSummary.expense) || 0;
+	} else {
+		rawExpense = Object.values(catActuals).reduce((sum, v) => sum + v, 0);
+	}
+	const expense_budget = roundTieredAmount(rawExpense);
+
+	// Calculate savings target amount
+	let rawNet = 0;
+	if (previousYearSummary?.net !== undefined) {
+		rawNet = Number(previousYearSummary.net) || 0;
+	} else if (previousYearSummary?.income !== undefined) {
+		rawNet = (Number(previousYearSummary.income) || 0) - rawExpense;
+	}
+	const savings_target_amount = rawNet > 0 ? roundTieredAmount(rawNet) : 0;
+
+	// Calculate savings target rate
+	let savings_target_rate = 0;
+	if (previousYearSummary?.savings_rate !== undefined) {
+		savings_target_rate = Math.max(0, Math.round(Number(previousYearSummary.savings_rate) || 0));
+	} else if (previousYearSummary?.income && rawNet > 0) {
+		const inc = Number(previousYearSummary.income) || 0;
+		if (inc > 0) {
+			savings_target_rate = Math.max(0, Math.round((rawNet / inc) * 100));
+		}
+	}
+
+	return {
+		expense_budget,
+		savings_target_amount,
+		savings_target_rate,
+		category_budgets
+	};
+}
+
+/**
+ * Calculates annual budget and savings targets progress and pace metrics (Requirement 3.14).
+ * @param {object} [params]
+ * @param {object} [params.yearlySummary] - Summary for the target year ({ income, expense, net, savings_rate, by_category })
+ * @param {object} [params.budgetConfig] - Config ({ expense_budget, savings_target_amount, savings_target_rate, category_budgets })
+ * @param {number} [params.currentMonth] - 1-12 (defaults to current system month)
+ * @param {number} [params.expenseBudget] - Direct flat argument
+ * @param {number} [params.expenseActual] - Direct flat argument
+ * @param {number} [params.savingsTargetAmount] - Direct flat argument
+ * @param {number} [params.savingsTargetRate] - Direct flat argument
  * @param {number} [params.incomeActual] - Direct flat argument
  * @param {number} [params.netSavingsActual] - Direct flat argument
  * @param {number} [params.currentMonthIndex] - Direct flat argument (1-12)
+ * @param {object} [params.categoryBudgets] - Direct flat { [catId]: number }
+ * @param {object} [params.categoryActuals] - Direct flat { [catId]: number | { total: number } }
  * @returns {object}
  */
 export function calculateAnnualBudgetProgress({
@@ -1187,7 +1318,9 @@ export function calculateAnnualBudgetProgress({
 	savingsTargetRate = null,
 	incomeActual = null,
 	netSavingsActual = null,
-	currentMonthIndex = null
+	currentMonthIndex = null,
+	categoryBudgets = null,
+	categoryActuals = null
 } = {}) {
 	const finalExpenseBudget = expenseBudget !== null
 		? Math.max(0, Number(expenseBudget) || 0)
@@ -1245,6 +1378,53 @@ export function calculateAnnualBudgetProgress({
 		: 0;
 	const savingsRateAchieved = finalSavingsTargetRate > 0 && savingsActualRate >= finalSavingsTargetRate;
 
+	// Category budgets & progress metrics (Requirement 3.14)
+	const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
+	const finalCategoryBudgets = categoryBudgets !== null
+		? categoryBudgets
+		: (budgetConfig?.category_budgets || {});
+
+	const rawCatActuals = categoryActuals !== null
+		? categoryActuals
+		: (yearlySummary?.by_category || {});
+
+	const category_progress = {};
+	let totalCategoryBudget = 0;
+
+	if (finalCategoryBudgets && typeof finalCategoryBudgets === 'object') {
+		for (const [catId, bAmt] of Object.entries(finalCategoryBudgets)) {
+			if (FORBIDDEN_KEYS.includes(catId)) continue;
+			const catBudget = Math.max(0, Number(bAmt) || 0);
+			totalCategoryBudget += catBudget;
+
+			const catActVal = rawCatActuals[catId];
+			const catActual = Number(catActVal?.total ?? catActVal ?? 0) || 0;
+			const catRemaining = catBudget - catActual;
+			const catConsumptionRate = catBudget > 0
+				? Math.round((catActual / catBudget) * 1000) / 10
+				: 0;
+
+			let catPaceStatus = 'on_pace';
+			if (catConsumptionRate > 100) {
+				catPaceStatus = 'over_budget';
+			} else if (catBudget > 0) {
+				if (catConsumptionRate > expectedPaceRate + 5) {
+					catPaceStatus = 'caution';
+				} else if (catConsumptionRate < expectedPaceRate - 5) {
+					catPaceStatus = 'ahead';
+				}
+			}
+
+			category_progress[catId] = {
+				budget: catBudget,
+				actual: catActual,
+				remaining: catRemaining,
+				consumption_rate: catConsumptionRate,
+				pace_status: catPaceStatus
+			};
+		}
+	}
+
 	return {
 		expense_budget: finalExpenseBudget,
 		expense_actual: finalExpenseActual,
@@ -1259,7 +1439,10 @@ export function calculateAnnualBudgetProgress({
 		is_deficit: isDeficit,
 		savings_target_rate: finalSavingsTargetRate,
 		savings_actual_rate: savingsActualRate,
-		savings_rate_achieved: savingsRateAchieved
+		savings_rate_achieved: savingsRateAchieved,
+		category_progress,
+		total_category_budget: totalCategoryBudget,
+		budget_discrepancy: finalExpenseBudget - totalCategoryBudget
 	};
 }
 

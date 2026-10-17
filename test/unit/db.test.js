@@ -234,25 +234,36 @@ describe('js/db.js - Unit Tests', () => {
 			assert.equal(backup.transactions[0].id, 'tx_backup_1');
 		});
 
-		it('manages annual budget settings per year (Requirement 3.14)', async () => {
+		it('manages annual budget settings per year with category budgets (Requirement 3.14)', async () => {
 			const bDefault = await db.getAnnualBudget('2026');
-			assert.deepEqual(bDefault, { expense_budget: 0, savings_target_amount: 0, savings_target_rate: 0 });
+			assert.deepEqual(bDefault, { expense_budget: 0, savings_target_amount: 0, savings_target_rate: 0, category_budgets: {} });
 
 			const saved = await db.saveAnnualBudget('2026', {
 				expense_budget: 3600000,
 				savings_target_amount: 1200000,
-				savings_target_rate: 25.0
+				savings_target_rate: 25.0,
+				category_budgets: {
+					cat_food: 600000,
+					cat_housing: 1440000,
+					__proto__: 999999
+				}
 			});
 			assert.equal(saved.expense_budget, 3600000);
 			assert.equal(saved.savings_target_amount, 1200000);
 			assert.equal(saved.savings_target_rate, 25.0);
+			assert.equal(saved.category_budgets.cat_food, 600000);
+			assert.equal(saved.category_budgets.cat_housing, 1440000);
+			assert.equal(Object.prototype.hasOwnProperty.call(saved.category_budgets, '__proto__'), false);
 
 			const retrieved = await db.getAnnualBudget('2026');
 			assert.equal(retrieved.expense_budget, 3600000);
+			assert.equal(retrieved.category_budgets.cat_food, 600000);
+			assert.equal(retrieved.category_budgets.cat_housing, 1440000);
 
 			// Defaults missing year
 			const b2027 = await db.getAnnualBudget('2027');
 			assert.equal(b2027.expense_budget, 0);
+			assert.deepEqual(b2027.category_budgets, {});
 		});
 
 		it('performs non-destructive deduplicated JSON import (OR merge) with stats (Requirement 3.15)', async () => {
@@ -298,7 +309,14 @@ describe('js/db.js - Unit Tests', () => {
 				{ id: 'rec_local', name: 'ローカル定期' }
 			];
 			initialConfig.annual_budgets = {
-				'2026': { expense_budget: 3000000, savings_target_amount: 1000000, savings_target_rate: 20 }
+				'2026': {
+					expense_budget: 3000000,
+					savings_target_amount: 1000000,
+					savings_target_rate: 20,
+					category_budgets: {
+						cat_food: 500000
+					}
+				}
 			};
 			await db.saveMasterConfig(initialConfig);
 
@@ -333,8 +351,21 @@ describe('js/db.js - Unit Tests', () => {
 					],
 					holidays: ['2026-01-01', '2026-05-04', '2026-11-23'], // 2026-05-04 and 11-23 are new
 					annual_budgets: {
-						'2026': { expense_budget: 9999999 }, // already exists locally -> local respected
-						'2027': { expense_budget: 3500000, savings_target_amount: 1200000, savings_target_rate: 25 } // new
+						'2026': {
+							expense_budget: 9999999, // already exists locally -> local respected
+							category_budgets: {
+								cat_food: 999999, // already exists locally -> local 500000 respected!
+								cat_housing: 1400000 // new category budget -> added!
+							}
+						},
+						'2027': {
+							expense_budget: 3500000,
+							savings_target_amount: 1200000,
+							savings_target_rate: 25,
+							category_budgets: {
+								cat_food: 550000
+							}
+						} // new
 					}
 				},
 				summary_snapshot: {
@@ -393,7 +424,10 @@ describe('js/db.js - Unit Tests', () => {
 			assert.deepEqual(cfg.holidays, ['2026-01-01', '2026-05-03', '2026-05-04', '2026-11-23']);
 
 			assert.equal(cfg.annual_budgets['2026'].expense_budget, 3000000); // Local preserved
+			assert.equal(cfg.annual_budgets['2026'].category_budgets.cat_food, 500000); // Local preserved
+			assert.equal(cfg.annual_budgets['2026'].category_budgets.cat_housing, 1400000); // New merged
 			assert.equal(cfg.annual_budgets['2027'].expense_budget, 3500000); // New added
+			assert.equal(cfg.annual_budgets['2027'].category_budgets.cat_food, 550000); // New added
 
 			// Rejects invalid schema version
 			await assert.rejects(
@@ -420,7 +454,14 @@ describe('js/db.js - Unit Tests', () => {
 					"annual_budgets": {
 						"__proto__": { "polluted": true, "expense_budget": 999999 },
 						"constructor": { "polluted": true },
-						"invalid_year": { "expense_budget": 1000 }
+						"invalid_year": { "expense_budget": 1000 },
+						"2026": {
+							"category_budgets": {
+								"__proto__": 999999,
+								"constructor": 999999,
+								"cat_food": 500000
+							}
+						}
 					}
 				},
 				"summary_snapshot": {
