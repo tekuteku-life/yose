@@ -48,6 +48,11 @@ import {
   base64ToBytes
 } from './crypto.js';
 import { SyncManager } from './sync.js';
+import {
+  CURRENT_APP_VERSION,
+  checkAppVersion,
+  purgeAppCacheAndReload
+} from './version.js';
 
 class AppController {
   constructor() {
@@ -68,6 +73,8 @@ class AppController {
     this.publicKeyBase64 = '';
     this.isKeyProtectedWithPin = false;
     this.isKeyLocked = false;
+    this.swRegistration = null;
+    this.availableUpdateVersion = null;
   }
 
   async init() {
@@ -275,7 +282,9 @@ class AppController {
 
     // 4. Register Service Worker if in browser
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js').catch(err => {
+      navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(reg => {
+        this.swRegistration = reg;
+      }).catch(err => {
         console.warn('SW registration failed:', err);
       });
     }
@@ -299,6 +308,50 @@ class AppController {
 
     // 6. Initial Render
     await this.refreshAllViews();
+
+    // 7. Check for PWA updates if online
+    this.checkStartupUpdate();
+  }
+
+  async checkStartupUpdate() {
+    if (typeof navigator === 'undefined' || !navigator.onLine) return;
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), 3000) : null;
+      const res = await checkAppVersion({
+        currentVersion: CURRENT_APP_VERSION,
+        isOnline: true,
+        sessionStorage: typeof sessionStorage !== 'undefined' ? sessionStorage : null,
+        suppressRepeatedPrompt: true,
+        fetchFn: (url, opts) => fetch(url, { ...opts, signal: controller?.signal })
+      });
+      if (timeoutId) clearTimeout(timeoutId);
+
+      if (res && res.updateAvailable) {
+        this.availableUpdateVersion = res.serverVersion;
+        this.showUpdateModal(res.serverVersion);
+      }
+    } catch (e) {
+      // Silently catch to avoid disrupting startup in degraded networks
+    }
+  }
+
+  showUpdateModal(serverVersion) {
+    const modal = document.getElementById('modal-app-update');
+    const textEl = document.getElementById('modal-new-version-text');
+    if (textEl) {
+      textEl.textContent = `v${serverVersion}`;
+    }
+    if (modal) {
+      modal.classList.add('active');
+    }
+  }
+
+  hideUpdateModal() {
+    const modal = document.getElementById('modal-app-update');
+    if (modal) {
+      modal.classList.remove('active');
+    }
   }
 
   async generateNewKeyPair() {
@@ -2272,10 +2325,115 @@ class AppController {
         alert(`JSONフォーマットエラー: ${err.message}`);
       }
     });
+
+    // App Version & Forced Update Management
+    const badgeVer = document.getElementById('badge-current-version');
+    if (badgeVer) badgeVer.textContent = `v${CURRENT_APP_VERSION}`;
+
+    const updateStatus = document.getElementById('update-status-msg');
+
+    document.getElementById('btn-check-app-update')?.addEventListener('click', async () => {
+      if (updateStatus) {
+        updateStatus.style.display = 'block';
+        updateStatus.style.backgroundColor = 'var(--bg-card)';
+        updateStatus.style.border = '1px solid var(--border)';
+        updateStatus.style.color = 'var(--text-main)';
+        updateStatus.textContent = '🔄 サーバー上のバージョンを確認中...';
+      }
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        if (updateStatus) {
+          updateStatus.style.backgroundColor = '#fff3cd';
+          updateStatus.style.color = '#856404';
+          updateStatus.style.border = '1px solid #ffeeba';
+          updateStatus.textContent = '⚠️ オフラインのため確認できません。ネットワーク接続を確認してください。';
+        }
+        return;
+      }
+
+      try {
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutId = controller ? setTimeout(() => controller.abort(), 5000) : null;
+        const res = await checkAppVersion({
+          currentVersion: CURRENT_APP_VERSION,
+          isOnline: true,
+          suppressRepeatedPrompt: false,
+          sessionStorage: typeof sessionStorage !== 'undefined' ? sessionStorage : null,
+          fetchFn: (url, opts) => fetch(url, { ...opts, signal: controller?.signal })
+        });
+        if (timeoutId) clearTimeout(timeoutId);
+
+        if (res.updateAvailable) {
+          this.availableUpdateVersion = res.serverVersion;
+          if (updateStatus) {
+            updateStatus.style.backgroundColor = '#d4edda';
+            updateStatus.style.color = '#155724';
+            updateStatus.style.border = '1px solid #c3e6cb';
+            updateStatus.textContent = `🚀 新しいバージョン (v${res.serverVersion}) が利用可能です！`;
+          }
+          this.showUpdateModal(res.serverVersion);
+        } else if (res.error) {
+          if (updateStatus) {
+            updateStatus.style.backgroundColor = '#f8d7da';
+            updateStatus.style.color = '#721c24';
+            updateStatus.style.border = '1px solid #f5c6cb';
+            updateStatus.textContent = `⚠️ バージョン確認エラー: ${res.error}`;
+          }
+        } else {
+          if (updateStatus) {
+            updateStatus.style.backgroundColor = '#d4edda';
+            updateStatus.style.color = '#155724';
+            updateStatus.style.border = '1px solid #c3e6cb';
+            updateStatus.textContent = `✅ お使いのアプリは最新バージョン (v${CURRENT_APP_VERSION}) です。`;
+          }
+        }
+      } catch (err) {
+        if (updateStatus) {
+          updateStatus.style.backgroundColor = '#f8d7da';
+          updateStatus.style.color = '#721c24';
+          updateStatus.style.border = '1px solid #f5c6cb';
+          updateStatus.textContent = `⚠️ 通信エラー: ${err.message}`;
+        }
+      }
+    });
+
+    document.getElementById('btn-force-cache-clear')?.addEventListener('click', async () => {
+      if (confirm('キャッシュストレージを全削除し、サーバーから最新版を強制再読み込みしますか？\n（IndexedDB内の家計データや認証鍵は保持されます）')) {
+        await purgeAppCacheAndReload({
+          caches: typeof caches !== 'undefined' ? caches : null,
+          swRegistration: this.swRegistration,
+          sessionStorage: typeof sessionStorage !== 'undefined' ? sessionStorage : null,
+          targetVersion: CURRENT_APP_VERSION,
+          location: typeof window !== 'undefined' ? window.location : null
+        });
+      }
+    });
+
+    // Update modal action buttons
+    document.getElementById('btn-confirm-app-update')?.addEventListener('click', async () => {
+      await purgeAppCacheAndReload({
+        caches: typeof caches !== 'undefined' ? caches : null,
+        swRegistration: this.swRegistration,
+        sessionStorage: typeof sessionStorage !== 'undefined' ? sessionStorage : null,
+        targetVersion: this.availableUpdateVersion || CURRENT_APP_VERSION,
+        location: typeof window !== 'undefined' ? window.location : null
+      });
+    });
+
+    document.getElementById('btn-dismiss-app-update')?.addEventListener('click', () => {
+      this.hideUpdateModal();
+    });
+
+    document.getElementById('btn-close-app-update-modal')?.addEventListener('click', () => {
+      this.hideUpdateModal();
+    });
   }
 
   async renderSettings() {
     this.updateKeyDisplay();
+    const badgeVer = document.getElementById('badge-current-version');
+    if (badgeVer) badgeVer.textContent = `v${CURRENT_APP_VERSION}`;
+
     const gasUrl = await this.db.getSetting('gas_url', '');
     const urlInput = document.getElementById('input-gas-url');
     if (urlInput) urlInput.value = gasUrl;
