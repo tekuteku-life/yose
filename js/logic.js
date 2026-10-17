@@ -1162,3 +1162,155 @@ export function escapeHtml(str) {
 		.replace(/'/g, '&#39;');
 }
 
+/**
+ * Calculates annual budget and savings targets progress and pace metrics (Requirement 3.14).
+ * @param {object} [params]
+ * @param {object} [params.yearlySummary] - Summary for the target year ({ income, expense, net, savings_rate })
+ * @param {object} [params.budgetConfig] - Config ({ expense_budget, savings_target_amount, savings_target_rate })
+ * @param {number} [params.currentMonth] - 1-12 (defaults to current system month)
+ * @param {number} [params.expenseBudget] - Direct flat argument
+ * @param {number} [params.expenseActual] - Direct flat argument
+ * @param {number} [params.savingsTargetAmount] - Direct flat argument
+ * @param {number} [params.savingsTargetRate] - Direct flat argument
+ * @param {number} [params.incomeActual] - Direct flat argument
+ * @param {number} [params.netSavingsActual] - Direct flat argument
+ * @param {number} [params.currentMonthIndex] - Direct flat argument (1-12)
+ * @returns {object}
+ */
+export function calculateAnnualBudgetProgress({
+	yearlySummary = null,
+	budgetConfig = null,
+	currentMonth = null,
+	expenseBudget = null,
+	expenseActual = null,
+	savingsTargetAmount = null,
+	savingsTargetRate = null,
+	incomeActual = null,
+	netSavingsActual = null,
+	currentMonthIndex = null
+} = {}) {
+	const finalExpenseBudget = expenseBudget !== null
+		? Math.max(0, Number(expenseBudget) || 0)
+		: Math.max(0, Number(budgetConfig?.expense_budget) || 0);
+	const finalSavingsTargetAmount = savingsTargetAmount !== null
+		? Math.max(0, Number(savingsTargetAmount) || 0)
+		: Math.max(0, Number(budgetConfig?.savings_target_amount) || 0);
+	const finalSavingsTargetRate = savingsTargetRate !== null
+		? Math.max(0, Number(savingsTargetRate) || 0)
+		: Math.max(0, Number(budgetConfig?.savings_target_rate ?? budgetConfig?.target_savings_rate) || 0);
+
+	const finalExpenseActual = expenseActual !== null
+		? Number(expenseActual) || 0
+		: Number(yearlySummary?.expense) || 0;
+	const finalIncomeActual = incomeActual !== null
+		? Number(incomeActual) || 0
+		: Number(yearlySummary?.income) || 0;
+	const finalNetSavingsActual = netSavingsActual !== null
+		? Number(netSavingsActual) || 0
+		: Number(yearlySummary?.net !== undefined ? yearlySummary.net : (finalIncomeActual - finalExpenseActual)) || 0;
+
+	// Expense budget metrics
+	const expenseRemaining = finalExpenseBudget - finalExpenseActual;
+	const expenseConsumptionRate = finalExpenseBudget > 0
+		? Math.round((finalExpenseActual / finalExpenseBudget) * 1000) / 10
+		: 0;
+
+	// Month pace
+	const rawMonth = currentMonthIndex !== null ? currentMonthIndex : currentMonth;
+	const month = typeof rawMonth === 'number' && rawMonth >= 1 && rawMonth <= 12
+		? rawMonth
+		: (new Date().getMonth() + 1);
+	const expectedPaceRate = Math.round((month / 12) * 1000) / 10;
+
+	let paceStatus = 'on_pace';
+	if (expenseConsumptionRate > 100) {
+		paceStatus = 'over_budget';
+	} else if (finalExpenseBudget > 0) {
+		if (expenseConsumptionRate > expectedPaceRate + 5) {
+			paceStatus = 'caution';
+		} else if (expenseConsumptionRate < expectedPaceRate - 5) {
+			paceStatus = 'ahead';
+		}
+	}
+
+	// Savings target metrics
+	const isDeficit = finalNetSavingsActual < 0;
+	const savingsAchievementRate = finalSavingsTargetAmount > 0
+		? (isDeficit ? 0 : Math.round((finalNetSavingsActual / finalSavingsTargetAmount) * 1000) / 10)
+		: 0;
+	const savingsRemaining = Math.max(0, finalSavingsTargetAmount - finalNetSavingsActual);
+
+	const savingsActualRate = finalIncomeActual > 0
+		? Math.round((finalNetSavingsActual / finalIncomeActual) * 1000) / 10
+		: 0;
+	const savingsRateAchieved = finalSavingsTargetRate > 0 && savingsActualRate >= finalSavingsTargetRate;
+
+	return {
+		expense_budget: finalExpenseBudget,
+		expense_actual: finalExpenseActual,
+		expense_remaining: expenseRemaining,
+		expense_consumption_rate: expenseConsumptionRate,
+		expected_pace_rate: expectedPaceRate,
+		pace_status: paceStatus,
+		savings_target_amount: finalSavingsTargetAmount,
+		savings_actual: finalNetSavingsActual,
+		savings_achievement_rate: savingsAchievementRate,
+		savings_remaining: savingsRemaining,
+		is_deficit: isDeficit,
+		savings_target_rate: finalSavingsTargetRate,
+		savings_actual_rate: savingsActualRate,
+		savings_rate_achieved: savingsRateAchieved
+	};
+}
+
+/**
+ * Generates monthly trajectory data for 12 months of the year for Chart.js rendering (Requirement 3.14).
+ * @param {object} [params]
+ * @param {string} [params.year] - YYYY
+ * @param {object} [params.monthlySummaries] - Keyed by YYYY-MM
+ * @param {number} [params.expenseBudget]
+ * @param {number} [params.savingsTarget]
+ * @returns {Array<object>}
+ */
+export function generateAnnualTrajectory({
+	year = String(new Date().getFullYear()),
+	monthlySummaries = {},
+	expenseBudget = 0,
+	savingsTarget = 0
+} = {}) {
+	const trajectory = [];
+	const budget = Math.max(0, Number(expenseBudget) || 0);
+	const targetSavings = Math.max(0, Number(savingsTarget) || 0);
+
+	let cumExpense = 0;
+	let cumSavings = 0;
+
+	for (let m = 1; m <= 12; m++) {
+		const mStr = String(m).padStart(2, '0');
+		const periodKey = `${year}-${mStr}`;
+		const hist = monthlySummaries[periodKey] || {};
+
+		const mExp = Number(hist.expense_total || hist.expense_confirmed || hist.expense || 0);
+		const mInc = Number(hist.income_total || hist.income_confirmed || hist.income || 0);
+		const mNet = Number(hist.net !== undefined ? hist.net : (mInc - mExp));
+
+		cumExpense += mExp;
+		cumSavings += mNet;
+
+		trajectory.push({
+			month: mStr,
+			month_str: periodKey,
+			monthly_expense: mExp,
+			monthly_budget_allowance: Math.round(budget / 12),
+			cumulative_expense: cumExpense,
+			cumulative_budget_pace: Math.round((budget / 12) * m),
+			monthly_savings: mNet,
+			cumulative_savings: cumSavings,
+			cumulative_savings_pace: Math.round((targetSavings / 12) * m)
+		});
+	}
+
+	return trajectory;
+}
+
+

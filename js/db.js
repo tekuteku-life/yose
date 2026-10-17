@@ -161,7 +161,8 @@ export const DEFAULT_MASTER_CONFIG = {
 		'2026-04-29', '2026-05-03', '2026-05-04', '2026-05-05', '2026-05-06',
 		'2026-07-20', '2026-08-11', '2026-09-21', '2026-09-22', '2026-09-23',
 		'2026-10-12', '2026-11-03', '2026-11-23'
-	]
+	],
+	annual_budgets: {}
 };
 
 export const DEFAULT_SUMMARY_SNAPSHOT = {
@@ -461,7 +462,7 @@ export class YoseDB {
 	async putTransaction(transaction) {
 		const record = {
 			...transaction,
-			updated_at: new Date().toISOString(),
+			updated_at: transaction.updated_at || new Date().toISOString(),
 			sync_status: transaction.sync_status || 'unsynced'
 		};
 		if (!record.created_at) {
@@ -649,6 +650,45 @@ export class YoseDB {
 		});
 	}
 
+	// --- Annual Budgets (Requirement 3.14) ---
+	async getAnnualBudget(year) {
+		const yearStr = String(year || '');
+		if (['__proto__', 'constructor', 'prototype'].includes(yearStr) || !/^\d{4}$/.test(yearStr)) {
+			return {
+				expense_budget: 0,
+				savings_target_amount: 0,
+				savings_target_rate: 0
+			};
+		}
+		const config = await this.getMasterConfig();
+		const entry = Object.prototype.hasOwnProperty.call(config?.annual_budgets || {}, yearStr)
+			? config.annual_budgets[yearStr]
+			: null;
+		return entry || {
+			expense_budget: 0,
+			savings_target_amount: 0,
+			savings_target_rate: 0
+		};
+	}
+
+	async saveAnnualBudget(year, budget) {
+		const yearStr = String(year || '');
+		if (['__proto__', 'constructor', 'prototype'].includes(yearStr) || !/^\d{4}$/.test(yearStr)) {
+			throw new Error('Invalid budget year: must be a 4-digit year');
+		}
+		const config = await this.getMasterConfig() || { ...DEFAULT_MASTER_CONFIG };
+		if (!config.annual_budgets || typeof config.annual_budgets !== 'object') {
+			config.annual_budgets = {};
+		}
+		config.annual_budgets[yearStr] = {
+			expense_budget: Math.max(0, Number(budget?.expense_budget) || 0),
+			savings_target_amount: Math.max(0, Number(budget?.savings_target_amount) || 0),
+			savings_target_rate: Math.max(0, Number(budget?.savings_target_rate ?? budget?.target_savings_rate) || 0)
+		};
+		await this.saveMasterConfig(config);
+		return config.annual_budgets[yearStr];
+	}
+
 	// --- Backup Export / Import ---
 	async exportFullData() {
 		const config = await this.getMasterConfig();
@@ -663,21 +703,183 @@ export class YoseDB {
 		};
 	}
 
+	/**
+	 * Non-destructive deduplicated JSON import / OR merge (Requirement 3.15).
+	 * Preserves local transactions and masters, adds missing records, and resolves conflicts by updated_at.
+	 * @param {object} data - Parsed backup JSON
+	 * @returns {Promise<{ success: boolean, stats: object }>}
+	 */
 	async importFullData(data) {
 		if (!data || data.schema_version !== 2) {
 			throw new Error('Invalid data schema version');
 		}
-		if (data.master_config) {
-			await this.saveMasterConfig(data.master_config);
-		}
-		if (data.summary_snapshot) {
-			await this.saveSnapshot(data.summary_snapshot);
-		}
+
+		const stats = {
+			addedTransactions: 0,
+			updatedTransactions: 0,
+			skippedTransactions: 0,
+			addedAccounts: 0,
+			addedCategories: 0,
+			addedSubcategories: 0,
+			addedRecurringRules: 0,
+			addedHolidays: 0,
+			addedBudgets: 0
+		};
+
+		const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+		// 1. Transactions Non-Destructive Merge
 		if (Array.isArray(data.transactions)) {
-			for (const tx of data.transactions) {
-				await this.putTransaction(tx);
+			for (const importedTx of data.transactions) {
+				if (!importedTx || typeof importedTx !== 'object' || !importedTx.id || FORBIDDEN_KEYS.has(importedTx.id)) continue;
+				const localTx = await this.getTransaction(importedTx.id);
+				if (!localTx) {
+					await this.putTransaction(importedTx);
+					stats.addedTransactions++;
+				} else {
+					const localTime = localTx.updated_at ? new Date(localTx.updated_at).getTime() : 0;
+					const importedTime = importedTx.updated_at ? new Date(importedTx.updated_at).getTime() : 0;
+					if (importedTime > localTime) {
+						await this.putTransaction(importedTx);
+						stats.updatedTransactions++;
+					} else {
+						stats.skippedTransactions++;
+					}
+				}
 			}
 		}
-		return true;
+
+		// 2. Master Config Non-Destructive Union Merge
+		if (data.master_config && typeof data.master_config === 'object') {
+			const localConfig = await this.getMasterConfig() || {
+				schema_version: 2,
+				accounts: [],
+				categories: [],
+				recurring_rules: [],
+				holidays: [],
+				annual_budgets: {}
+			};
+
+			// Accounts: union by id
+			if (Array.isArray(data.master_config.accounts)) {
+				if (!Array.isArray(localConfig.accounts)) localConfig.accounts = [];
+				const existingAccIds = new Set(localConfig.accounts.map(a => a.id));
+				for (const acc of data.master_config.accounts) {
+					if (acc && acc.id && !FORBIDDEN_KEYS.has(acc.id) && !existingAccIds.has(acc.id)) {
+						localConfig.accounts.push(acc);
+						existingAccIds.add(acc.id);
+						stats.addedAccounts++;
+					}
+				}
+			}
+
+			// Categories & Subcategories: recursive union by id
+			if (Array.isArray(data.master_config.categories)) {
+				if (!Array.isArray(localConfig.categories)) localConfig.categories = [];
+				const catMap = new Map();
+				for (const cat of localConfig.categories) {
+					catMap.set(cat.id, cat);
+				}
+				for (const impCat of data.master_config.categories) {
+					if (!impCat || !impCat.id || FORBIDDEN_KEYS.has(impCat.id)) continue;
+					if (!catMap.has(impCat.id)) {
+						localConfig.categories.push(impCat);
+						catMap.set(impCat.id, impCat);
+						stats.addedCategories++;
+						if (Array.isArray(impCat.subcategories)) {
+							stats.addedSubcategories += impCat.subcategories.length;
+						}
+					} else {
+						const targetCat = catMap.get(impCat.id);
+						if (!Array.isArray(targetCat.subcategories)) {
+							targetCat.subcategories = [];
+						}
+						const existingSubIds = new Set(targetCat.subcategories.map(s => s.id));
+						if (Array.isArray(impCat.subcategories)) {
+							for (const sub of impCat.subcategories) {
+								if (sub && sub.id && !FORBIDDEN_KEYS.has(sub.id) && !existingSubIds.has(sub.id)) {
+									targetCat.subcategories.push(sub);
+									existingSubIds.add(sub.id);
+									stats.addedSubcategories++;
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Recurring Rules: union by id
+			if (Array.isArray(data.master_config.recurring_rules)) {
+				if (!Array.isArray(localConfig.recurring_rules)) localConfig.recurring_rules = [];
+				const existingRuleIds = new Set(localConfig.recurring_rules.map(r => r.id));
+				for (const rule of data.master_config.recurring_rules) {
+					if (rule && rule.id && !FORBIDDEN_KEYS.has(rule.id) && !existingRuleIds.has(rule.id)) {
+						localConfig.recurring_rules.push(rule);
+						existingRuleIds.add(rule.id);
+						stats.addedRecurringRules++;
+					}
+				}
+			}
+
+			// Holidays: Set union & sort
+			if (Array.isArray(data.master_config.holidays)) {
+				const localHolidays = Array.isArray(localConfig.holidays) ? localConfig.holidays : [];
+				const prevCount = localHolidays.length;
+				const unionSet = new Set([...localHolidays, ...data.master_config.holidays]);
+				localConfig.holidays = Array.from(unionSet).sort();
+				stats.addedHolidays = localConfig.holidays.length - prevCount;
+			}
+
+			// Annual Budgets: union by year key
+			if (data.master_config.annual_budgets && typeof data.master_config.annual_budgets === 'object') {
+				if (!localConfig.annual_budgets || typeof localConfig.annual_budgets !== 'object') {
+					localConfig.annual_budgets = {};
+				}
+				for (const [yKey, bVal] of Object.entries(data.master_config.annual_budgets)) {
+					if (FORBIDDEN_KEYS.has(yKey) || !/^\d{4}$/.test(yKey)) continue;
+					if (!bVal || typeof bVal !== 'object') continue;
+					if (!Object.prototype.hasOwnProperty.call(localConfig.annual_budgets, yKey)) {
+						localConfig.annual_budgets[yKey] = {
+							expense_budget: Math.max(0, Number(bVal.expense_budget) || 0),
+							savings_target_amount: Math.max(0, Number(bVal.savings_target_amount) || 0),
+							savings_target_rate: Math.max(0, Number(bVal.savings_target_rate ?? bVal.target_savings_rate) || 0)
+						};
+						stats.addedBudgets++;
+					}
+				}
+			}
+
+			await this.saveMasterConfig(localConfig);
+		}
+
+		// 3. Summary Snapshot Non-Destructive Merge
+		if (data.summary_snapshot && typeof data.summary_snapshot === 'object') {
+			const localSnapshot = await this.getSnapshot() || {
+				schema_version: 2,
+				last_closed_month: '',
+				account_balances: {},
+				monthly_summaries: {}
+			};
+			if (data.summary_snapshot.monthly_summaries && typeof data.summary_snapshot.monthly_summaries === 'object') {
+				if (!localSnapshot.monthly_summaries || typeof localSnapshot.monthly_summaries !== 'object') {
+					localSnapshot.monthly_summaries = {};
+				}
+				for (const [mKey, mVal] of Object.entries(data.summary_snapshot.monthly_summaries)) {
+					if (FORBIDDEN_KEYS.has(mKey) || !/^\d{4}-\d{2}$/.test(mKey)) continue;
+					if (!mVal || typeof mVal !== 'object') continue;
+					if (!Object.prototype.hasOwnProperty.call(localSnapshot.monthly_summaries, mKey)) {
+						localSnapshot.monthly_summaries[mKey] = mVal;
+					}
+				}
+			}
+			if (data.summary_snapshot.last_closed_month) {
+				if (!localSnapshot.last_closed_month || data.summary_snapshot.last_closed_month > localSnapshot.last_closed_month) {
+					localSnapshot.last_closed_month = data.summary_snapshot.last_closed_month;
+				}
+			}
+			await this.saveSnapshot(localSnapshot);
+		}
+
+		return { success: true, stats };
 	}
 }

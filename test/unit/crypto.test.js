@@ -330,33 +330,57 @@ describe('js/crypto.js - Unit Tests', () => {
 			const {
 				registerWebAuthnCredential,
 				authenticateWithWebAuthn,
-				isWebAuthnSupported
+				isWebAuthnSupported,
+				DEFAULT_WEBAUTHN_USER_ID
 			} = await import('../../js/crypto.js');
 
 			// Mock navigator.credentials
 			const mockCredId = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+			let lastCreatedOpts = null;
+			let lastGetOpts = null;
 			const mockNav = {
 				credentials: {
-					create: async (opts) => ({
-						rawId: mockCredId.buffer,
-						id: 'mock_cred_id_base64',
-						type: 'public-key'
-					}),
-					get: async (opts) => ({
-						id: 'mock_cred_id_base64',
-						type: 'public-key'
-					})
+					create: async (opts) => {
+						lastCreatedOpts = opts;
+						return {
+							rawId: mockCredId.buffer,
+							id: 'mock_cred_id_base64',
+							type: 'public-key'
+						};
+					},
+					get: async (opts) => {
+						lastGetOpts = opts;
+						return {
+							rawId: mockCredId.buffer,
+							id: 'mock_cred_id_base64',
+							type: 'public-key'
+						};
+					}
 				}
 			};
 
 			assert.equal(isWebAuthnSupported(mockNav), true);
 			assert.equal(isWebAuthnSupported({}), false);
 
+			// First registration
 			const regResult = await registerWebAuthnCredential('test-user', mockNav);
 			assert.ok(regResult.credentialId);
+			assert.deepEqual(lastCreatedOpts.publicKey.user.id, DEFAULT_WEBAUTHN_USER_ID);
 
+			// Second registration (e.g. update / re-register) passes SAME deterministic user.id
+			const regResult2 = await registerWebAuthnCredential('test-user', mockNav);
+			assert.ok(regResult2.credentialId);
+			assert.deepEqual(lastCreatedOpts.publicKey.user.id, DEFAULT_WEBAUTHN_USER_ID);
+
+			// Authentication
 			const authResult = await authenticateWithWebAuthn(regResult.credentialId, mockNav);
 			assert.equal(authResult.success, true);
+			assert.ok(lastGetOpts.publicKey.allowCredentials);
+
+			// Authentication with omitted/null credential ID (discoverable credentials)
+			const authDiscoverable = await authenticateWithWebAuthn(null, mockNav);
+			assert.equal(authDiscoverable.success, true);
+			assert.equal(lastGetOpts.publicKey.allowCredentials, undefined);
 		});
 
 		it('handles WebAuthn creation or authentication errors gracefully', async () => {

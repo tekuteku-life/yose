@@ -234,40 +234,229 @@ describe('js/db.js - Unit Tests', () => {
 			assert.equal(backup.transactions[0].id, 'tx_backup_1');
 		});
 
-		it('imports backup into database and rejects invalid schema version', async () => {
+		it('manages annual budget settings per year (Requirement 3.14)', async () => {
+			const bDefault = await db.getAnnualBudget('2026');
+			assert.deepEqual(bDefault, { expense_budget: 0, savings_target_amount: 0, savings_target_rate: 0 });
+
+			const saved = await db.saveAnnualBudget('2026', {
+				expense_budget: 3600000,
+				savings_target_amount: 1200000,
+				savings_target_rate: 25.0
+			});
+			assert.equal(saved.expense_budget, 3600000);
+			assert.equal(saved.savings_target_amount, 1200000);
+			assert.equal(saved.savings_target_rate, 25.0);
+
+			const retrieved = await db.getAnnualBudget('2026');
+			assert.equal(retrieved.expense_budget, 3600000);
+
+			// Defaults missing year
+			const b2027 = await db.getAnnualBudget('2027');
+			assert.equal(b2027.expense_budget, 0);
+		});
+
+		it('performs non-destructive deduplicated JSON import (OR merge) with stats (Requirement 3.15)', async () => {
+			// 1. Setup local state
+			await db.putTransaction({
+				id: 'tx_local_older',
+				target_month: '2026-10',
+				amount: 1000,
+				updated_at: '2026-10-01T12:00:00Z',
+				is_deleted: false
+			});
+			await db.putTransaction({
+				id: 'tx_local_newer',
+				target_month: '2026-10',
+				amount: 2000,
+				updated_at: '2026-10-15T12:00:00Z',
+				is_deleted: false
+			});
+			await db.putTransaction({
+				id: 'tx_local_exclusive',
+				target_month: '2026-10',
+				amount: 9999,
+				updated_at: '2026-10-10T12:00:00Z',
+				is_deleted: false
+			});
+
+			const initialConfig = await db.getMasterConfig();
+			initialConfig.accounts = [
+				{ id: 'acc_wallet', name: '財布', is_archived: false }
+			];
+			initialConfig.categories = [
+				{
+					id: 'cat_food',
+					name: '食費',
+					subcategories: [
+						{ id: 'sub_groceries', name: '食材' },
+						{ id: 'sub_local_custom', name: '地元野菜' }
+					]
+				}
+			];
+			initialConfig.holidays = ['2026-01-01', '2026-05-03'];
+			initialConfig.recurring_rules = [
+				{ id: 'rec_local', name: 'ローカル定期' }
+			];
+			initialConfig.annual_budgets = {
+				'2026': { expense_budget: 3000000, savings_target_amount: 1000000, savings_target_rate: 20 }
+			};
+			await db.saveMasterConfig(initialConfig);
+
+			// 2. Prepare imported JSON
 			const backupData = {
 				schema_version: 2,
 				exported_at: new Date().toISOString(),
 				master_config: {
 					schema_version: 2,
-					accounts: [{ id: 'acc_imported', name: 'Imported Bank', is_archived: false }]
+					accounts: [
+						{ id: 'acc_wallet', name: '財布' }, // existing
+						{ id: 'acc_nisa', name: 'つみたてNISA', is_asset: true } // new
+					],
+					categories: [
+						{
+							id: 'cat_food',
+							name: '食費',
+							subcategories: [
+								{ id: 'sub_groceries', name: '食材' }, // existing
+								{ id: 'sub_dining_out', name: '外食' } // new
+							]
+						},
+						{
+							id: 'cat_hobby',
+							name: '趣味・娯楽',
+							subcategories: [{ id: 'sub_games', name: 'ゲーム' }]
+						} // new
+					],
+					recurring_rules: [
+						{ id: 'rec_local', name: 'ローカル定期' }, // existing
+						{ id: 'rec_sub', name: 'サブスク' } // new
+					],
+					holidays: ['2026-01-01', '2026-05-04', '2026-11-23'], // 2026-05-04 and 11-23 are new
+					annual_budgets: {
+						'2026': { expense_budget: 9999999 }, // already exists locally -> local respected
+						'2027': { expense_budget: 3500000, savings_target_amount: 1200000, savings_target_rate: 25 } // new
+					}
 				},
 				summary_snapshot: {
 					schema_version: 2,
-					last_closed_month: '2026-08',
-					account_balances: { acc_imported: 50000 }
+					last_closed_month: '2026-09',
+					monthly_summaries: {
+						'2026-08': { total_income: 300000, total_expense: 200000 }
+					}
 				},
 				transactions: [
-					{ id: 'tx_imp_1', target_month: '2026-09', amount: 500, is_deleted: false }
+					// Newer version of tx_local_older -> Should update
+					{ id: 'tx_local_older', target_month: '2026-10', amount: 1500, updated_at: '2026-10-05T12:00:00Z', is_deleted: false },
+					// Older version of tx_local_newer -> Should skip/retain local
+					{ id: 'tx_local_newer', target_month: '2026-10', amount: 100, updated_at: '2026-10-10T12:00:00Z', is_deleted: false },
+					// Completely new transaction -> Should add
+					{ id: 'tx_imported_new', target_month: '2026-10', amount: 3333, updated_at: '2026-10-16T12:00:00Z', is_deleted: false }
 				]
 			};
 
-			const success = await db.importFullData(backupData);
-			assert.equal(success, true);
+			const result = await db.importFullData(backupData);
+			assert.equal(result.success, true);
+			assert.equal(result.stats.addedTransactions, 1);
+			assert.equal(result.stats.updatedTransactions, 1);
+			assert.equal(result.stats.skippedTransactions, 1);
+			assert.equal(result.stats.addedAccounts, 1);
+			assert.equal(result.stats.addedCategories, 1);
+			assert.equal(result.stats.addedSubcategories, 2); // sub_dining_out + sub_games
+			assert.equal(result.stats.addedRecurringRules, 1);
+			assert.equal(result.stats.addedHolidays, 2);
+			assert.equal(result.stats.addedBudgets, 1); // 2027
 
+			// Verify transactions
+			const tOlder = await db.getTransaction('tx_local_older');
+			assert.equal(tOlder.amount, 1500); // Updated to newer imported value
+
+			const tNewer = await db.getTransaction('tx_local_newer');
+			assert.equal(tNewer.amount, 2000); // Retained local value because local was newer
+
+			const tExclusive = await db.getTransaction('tx_local_exclusive');
+			assert.ok(tExclusive);
+			assert.equal(tExclusive.amount, 9999); // Preserved! Never deleted!
+
+			const tNew = await db.getTransaction('tx_imported_new');
+			assert.equal(tNew.amount, 3333); // Successfully added!
+
+			// Verify master config
 			const cfg = await db.getMasterConfig();
-			assert.equal(cfg.accounts[0].id, 'acc_imported');
+			assert.equal(cfg.accounts.length, 2);
+			assert.ok(cfg.accounts.some(a => a.id === 'acc_nisa'));
 
-			const tx = await db.getTransaction('tx_imp_1');
-			assert.equal(tx.amount, 500);
+			const catFood = cfg.categories.find(c => c.id === 'cat_food');
+			assert.equal(catFood.subcategories.length, 3); // sub_groceries, sub_local_custom, sub_dining_out
+			assert.ok(cfg.categories.some(c => c.id === 'cat_hobby'));
 
-			// Rejects schema_version 1
+			assert.equal(cfg.holidays.length, 4);
+			assert.deepEqual(cfg.holidays, ['2026-01-01', '2026-05-03', '2026-05-04', '2026-11-23']);
+
+			assert.equal(cfg.annual_budgets['2026'].expense_budget, 3000000); // Local preserved
+			assert.equal(cfg.annual_budgets['2027'].expense_budget, 3500000); // New added
+
+			// Rejects invalid schema version
 			await assert.rejects(
 				async () => {
 					await db.importFullData({ schema_version: 1 });
 				},
 				/Invalid data schema version/
 			);
+			await assert.rejects(
+				async () => {
+					await db.importFullData(null);
+				},
+				/Invalid data schema version/
+			);
+		});
+
+		it('prevents Prototype Pollution attacks during importFullData and budget operations', async () => {
+			const maliciousPayload = JSON.parse(`{
+				"schema_version": 2,
+				"master_config": {
+					"accounts": [{ "id": "__proto__", "name": "Evil" }],
+					"categories": [{ "id": "constructor", "name": "Evil Cat", "subcategories": [{ "id": "prototype", "name": "Evil Sub" }] }],
+					"recurring_rules": [{ "id": "__proto__", "name": "Evil Rule" }],
+					"annual_budgets": {
+						"__proto__": { "polluted": true, "expense_budget": 999999 },
+						"constructor": { "polluted": true },
+						"invalid_year": { "expense_budget": 1000 }
+					}
+				},
+				"summary_snapshot": {
+					"monthly_summaries": {
+						"__proto__": { "polluted": true },
+						"prototype": { "polluted": true },
+						"invalid-month": { "total_income": 100 }
+					}
+				},
+				"transactions": [
+					{ "id": "__proto__", "amount": 100 }
+				]
+			}`);
+
+			const result = await db.importFullData(maliciousPayload);
+			assert.equal(result.success, true);
+			assert.equal(Object.prototype.polluted, undefined);
+			assert.equal(({}).polluted, undefined);
+
+			// Budget methods
+			const bProto = await db.getAnnualBudget('__proto__');
+			assert.equal(bProto.expense_budget, 0);
+
+			await assert.rejects(
+				async () => {
+					await db.saveAnnualBudget('__proto__', { expense_budget: 1000 });
+				},
+				/Invalid budget year/
+			);
+			await assert.rejects(
+				async () => {
+					await db.saveAnnualBudget('20', { expense_budget: 1000 });
+				},
+				/Invalid budget year/
+			);
+			assert.equal(Object.prototype.polluted, undefined);
 		});
 	});
 
@@ -319,11 +508,29 @@ describe('js/db.js - Unit Tests', () => {
 			await idbDb.saveSecurityKey('key1', 'val1');
 			const kVal = await idbDb.getSecurityKey('key1');
 			assert.equal(kVal, 'val1');
+			await idbDb.deleteSecurityKey('key1');
+			const kDel = await idbDb.getSecurityKey('key1');
+			assert.equal(kDel, null);
 
 			// Setting
 			await idbDb.setSetting('theme', 'dark');
 			const sVal = await idbDb.getSetting('theme');
 			assert.equal(sVal, 'dark');
+
+			// Locked getTransactions throw
+			await idbDb.putTransaction({
+				id: 'tx_enc_fake',
+				encrypted: true,
+				iv: 'dummy',
+				ciphertext: 'dummy',
+				is_deleted: false
+			});
+			await assert.rejects(
+				async () => {
+					await idbDb.getTransactions();
+				},
+				/Database is locked: encryption key not set/
+			);
 		});
 	});
 });

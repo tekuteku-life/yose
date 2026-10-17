@@ -22,6 +22,8 @@ import {
 	aggregateMonthlySummaries,
 	aggregateYearlySummaries,
 	calculateTotalAssetSummary,
+	calculateAnnualBudgetProgress,
+	generateAnnualTrajectory,
 	escapeHtml,
 	JAPANESE_HOLIDAYS_PRESET
 } from '../../js/logic.js';
@@ -1386,6 +1388,198 @@ describe('js/logic.js - Unit Tests', () => {
 			assert.equal(escapeHtml(null), '');
 			assert.equal(escapeHtml(undefined), '');
 			assert.equal(escapeHtml("Tom & Jerry's"), "Tom &amp; Jerry&#39;s");
+		});
+	});
+
+	describe('Annual Budget & Savings Target Progress Logic (Requirement 3.14)', () => {
+		const budgetConfig = {
+			expense_budget: 3600000,
+			savings_target_amount: 1200000,
+			savings_target_rate: 25.0
+		};
+
+		it('accurately computes progress when spending and savings are on track', () => {
+			const yearlySummary = {
+				income: 4800000,
+				expense: 2400000,
+				net: 2400000,
+				savings_rate: 50.0
+			};
+
+			const progress = calculateAnnualBudgetProgress({
+				yearlySummary,
+				budgetConfig,
+				currentMonth: 8 // August (8 / 12 = 66.7% expected pace)
+			});
+
+			assert.equal(progress.expense_budget, 3600000);
+			assert.equal(progress.expense_actual, 2400000);
+			assert.equal(progress.expense_remaining, 1200000);
+			assert.equal(progress.expense_consumption_rate, 66.7);
+			assert.equal(progress.expected_pace_rate, 66.7);
+			assert.equal(progress.pace_status, 'on_pace');
+
+			assert.equal(progress.savings_target_amount, 1200000);
+			assert.equal(progress.savings_actual, 2400000);
+			assert.equal(progress.savings_achievement_rate, 200.0);
+			assert.equal(progress.savings_remaining, 0);
+			assert.equal(progress.is_deficit, false);
+
+			assert.equal(progress.savings_target_rate, 25.0);
+			assert.equal(progress.savings_actual_rate, 50.0);
+			assert.equal(progress.savings_rate_achieved, true);
+		});
+
+		it('identifies ahead-of-pace status when consumption is significantly lower than month pace', () => {
+			const yearlySummary = {
+				income: 2000000,
+				expense: 1000000,
+				net: 1000000
+			};
+
+			const progress = calculateAnnualBudgetProgress({
+				yearlySummary,
+				budgetConfig,
+				currentMonth: 6 // June (50.0% expected pace, actual is 27.8%)
+			});
+
+			assert.equal(progress.expense_consumption_rate, 27.8);
+			assert.equal(progress.expected_pace_rate, 50.0);
+			assert.equal(progress.pace_status, 'ahead');
+		});
+
+		it('identifies caution status when consumption exceeds expected pace by over 5%', () => {
+			const yearlySummary = {
+				income: 3000000,
+				expense: 2400000,
+				net: 600000
+			};
+
+			const progress = calculateAnnualBudgetProgress({
+				yearlySummary,
+				budgetConfig,
+				currentMonth: 6 // June: expected pace 50.0%, actual is 66.7% (> 55%)
+			});
+
+			assert.equal(progress.expense_consumption_rate, 66.7);
+			assert.equal(progress.expected_pace_rate, 50.0);
+			assert.equal(progress.pace_status, 'caution');
+		});
+
+		it('identifies over_budget when consumption rate exceeds 100%', () => {
+			const yearlySummary = {
+				income: 4000000,
+				expense: 4000000,
+				net: 0
+			};
+
+			const progress = calculateAnnualBudgetProgress({
+				yearlySummary,
+				budgetConfig,
+				currentMonth: 10
+			});
+
+			assert.equal(progress.expense_consumption_rate, 111.1);
+			assert.equal(progress.expense_remaining, -400000);
+			assert.equal(progress.pace_status, 'over_budget');
+		});
+
+		it('handles deficit (negative net income) safely without NaN or negative achievement rate', () => {
+			const yearlySummary = {
+				income: 2000000,
+				expense: 3000000,
+				net: -1000000
+			};
+
+			const progress = calculateAnnualBudgetProgress({
+				yearlySummary,
+				budgetConfig,
+				currentMonth: 10
+			});
+
+			assert.equal(progress.is_deficit, true);
+			assert.equal(progress.savings_actual, -1000000);
+			assert.equal(progress.savings_achievement_rate, 0);
+			assert.equal(progress.savings_remaining, 2200000); // 1200000 - (-1000000)
+			assert.equal(progress.savings_actual_rate, -50.0);
+			assert.equal(progress.savings_rate_achieved, false);
+		});
+
+		it('gracefully handles empty, missing, or zero parameters without division by zero', () => {
+			const def = calculateAnnualBudgetProgress();
+			assert.equal(def.expense_budget, 0);
+			assert.equal(def.expense_consumption_rate, 0);
+			assert.equal(def.savings_achievement_rate, 0);
+			assert.equal(def.pace_status, 'on_pace');
+
+			const zeroBudget = calculateAnnualBudgetProgress({
+				yearlySummary: { expense: 100000, income: 150000 },
+				budgetConfig: { expense_budget: 0, savings_target_amount: 0, savings_target_rate: 0 }
+			});
+			assert.equal(zeroBudget.expense_consumption_rate, 0);
+			assert.equal(zeroBudget.savings_achievement_rate, 0);
+
+			// Test direct flat arguments and target_savings_rate alias
+			const flatArgs = calculateAnnualBudgetProgress({
+				expenseBudget: 3600000,
+				expenseActual: 1800000,
+				savingsTargetAmount: 1200000,
+				savingsTargetRate: 25,
+				incomeActual: 3000000,
+				netSavingsActual: 1200000,
+				currentMonthIndex: 6
+			});
+			assert.equal(flatArgs.expense_budget, 3600000);
+			assert.equal(flatArgs.expense_consumption_rate, 50.0);
+			assert.equal(flatArgs.expected_pace_rate, 50.0);
+			assert.equal(flatArgs.pace_status, 'on_pace');
+			assert.equal(flatArgs.savings_achievement_rate, 100.0);
+			assert.equal(flatArgs.savings_actual_rate, 40.0);
+			assert.equal(flatArgs.savings_rate_achieved, true);
+
+			// Test target_savings_rate inside budgetConfig
+			const aliasConfig = calculateAnnualBudgetProgress({
+				yearlySummary: { expense: 100000, income: 200000, net: 100000 },
+				budgetConfig: { expense_budget: 1200000, savings_target_amount: 600000, target_savings_rate: 30 },
+				currentMonth: 1
+			});
+			assert.equal(aliasConfig.savings_target_rate, 30);
+			assert.equal(aliasConfig.savings_actual_rate, 50.0);
+			assert.equal(aliasConfig.savings_rate_achieved, true);
+		});
+
+		it('generates 12-month trajectory data for Chart.js', () => {
+			const monthlySummaries = {
+				'2026-01': { expense_total: 250000, income_total: 400000, net: 150000 },
+				'2026-02': { expense_total: 200000, income_total: 400000, net: 200000 },
+				'2026-03': { expense_total: 300000, income_total: 400000, net: 100000 }
+			};
+
+			const trajectory = generateAnnualTrajectory({
+				year: '2026',
+				monthlySummaries,
+				expenseBudget: 3600000,
+				savingsTarget: 1200000
+			});
+
+			assert.equal(trajectory.length, 12);
+			assert.equal(trajectory[0].month, '01');
+			assert.equal(trajectory[0].month_str, '2026-01');
+			assert.equal(trajectory[0].monthly_expense, 250000);
+			assert.equal(trajectory[0].monthly_budget_allowance, 300000); // 3600000 / 12
+			assert.equal(trajectory[0].cumulative_expense, 250000);
+			assert.equal(trajectory[0].cumulative_budget_pace, 300000);
+
+			assert.equal(trajectory[1].month, '02');
+			assert.equal(trajectory[1].cumulative_expense, 450000); // 250000 + 200000
+			assert.equal(trajectory[1].cumulative_budget_pace, 600000); // 300000 * 2
+			assert.equal(trajectory[1].cumulative_savings, 350000); // 150000 + 200000
+			assert.equal(trajectory[1].cumulative_savings_pace, 200000); // (1200000 / 12) * 2
+
+			// Omitted parameters default safely
+			const defTraj = generateAnnualTrajectory();
+			assert.equal(defTraj.length, 12);
+			assert.equal(defTraj[0].monthly_budget_allowance, 0);
 		});
 	});
 });
