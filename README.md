@@ -142,6 +142,8 @@ npm run test:system
 
 ```text
 yose/
+ ├── .github/
+ │    └── pull_request_template.md # プルリクエスト日本語テンプレート
  ├── index.html              # メイン画面（SPA：入力・集計・マスタ設定）
  ├── manifest.json           # PWAマニフェスト
  ├── sw.js                   # Service Worker（オフラインキャッシュ制御）
@@ -167,6 +169,7 @@ yose/
       ├── system_design.md       # システム設計書（DFD, シーケンス, ERD, 状態遷移）
       ├── development_process.md # 開発プロセス定義書（品質ゲート, Argonレビューフロー）
       └── reviews/               # 独立監査・レビュー記録ディレクトリ
-           └── review1.md        # 第1回独立設計・セキュリティ監査レポート
+           ├── review1.md        # 第1回独立設計・セキュリティ監査レポート
+           └── review2.md        # 第2回プロセス・PRテンプレート監査レポート
 ```
 
