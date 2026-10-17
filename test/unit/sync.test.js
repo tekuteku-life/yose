@@ -419,5 +419,61 @@ describe('js/sync.js - Unit Tests', () => {
       sync.isSyncing = false;
     });
   });
+
+  describe('registerInitialKey Workflow', () => {
+    it('successfully registers initial public key via sendRequest', async () => {
+      const sync = new SyncManager({
+        db,
+        privateKey: keyPair.privateKey,
+        gasUrl: 'http://gas.test',
+        customFetch: async (url, opts) => {
+          const body = JSON.parse(opts.body);
+          assert.equal(body.action, 'register_initial_key');
+          assert.equal(body.payload.publicKey, 'test-pub-key-b64');
+          return {
+            ok: true,
+            text: async () => JSON.stringify({ success: true, message: 'Public key successfully registered on GAS' })
+          };
+        }
+      });
+
+      const res = await sync.registerInitialKey('test-pub-key-b64');
+      assert.equal(res.success, true);
+      assert.match(res.message, /successfully registered/i);
+    });
+
+    it('handles server rejection when public keys are already configured', async () => {
+      const sync = new SyncManager({
+        db,
+        privateKey: keyPair.privateKey,
+        gasUrl: 'http://gas.test',
+        customFetch: async () => ({
+          ok: true,
+          text: async () => JSON.stringify({ success: false, error: 'Public keys already configured' })
+        })
+      });
+
+      await assert.rejects(
+        async () => sync.registerInitialKey('test-pub-key-b64'),
+        /Public keys already configured/
+      );
+      assert.equal(sync.lastError, 'Public keys already configured');
+    });
+
+    it('handles network failure during registerInitialKey', async () => {
+      const sync = new SyncManager({
+        db,
+        privateKey: keyPair.privateKey,
+        gasUrl: 'http://gas.test',
+        customFetch: async () => { throw new Error('Failed to fetch endpoint'); }
+      });
+
+      await assert.rejects(
+        async () => sync.registerInitialKey('test-pub-key-b64'),
+        /Failed to fetch endpoint/
+      );
+      assert.equal(sync.lastError, 'Failed to fetch endpoint');
+    });
+  });
 });
 

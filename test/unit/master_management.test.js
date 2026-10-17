@@ -191,38 +191,87 @@ describe('js/db.js & Master Management - Unit Tests', () => {
     });
   });
 
-  describe('External Assets Master Operations', () => {
-    it('adds, edits, and deletes external assets in snapshot', async () => {
-      const snapshot = await db.getSnapshot();
-      snapshot.external_assets = snapshot.external_assets || [];
-
-      // Add
-      const newAsset = {
-        id: 'sec_test_btc',
-        name: 'Bitcoin',
-        market_value: 1000000,
-        updated_at: '2026-10-17'
+  describe('Investment Account Master Operations (Integrated Asset Accounts)', () => {
+    it('manages investment/asset accounts with market valuation in account balances', async () => {
+      const config = await db.getMasterConfig();
+      const nisaAcc = {
+        id: 'acc_nisa_sp500',
+        name: 'つみたてNISA (S&P500)',
+        type: 'investment',
+        initial_balance: 500000,
+        is_asset: true,
+        sort_order: 15,
+        is_archived: false
       };
-      snapshot.external_assets.push(newAsset);
+      config.accounts.push(nisaAcc);
+      await db.saveMasterConfig(config);
+
+      const updated = await db.getMasterConfig();
+      const found = updated.accounts.find(a => a.id === 'acc_nisa_sp500');
+      assert.ok(found);
+      assert.equal(found.type, 'investment');
+      assert.equal(found.initial_balance, 500000);
+
+      // Verify updating valuation balance
+      const snapshot = await db.getSnapshot();
+      snapshot.account_balances['acc_nisa_sp500'] = 650000;
       await db.saveSnapshot(snapshot);
 
-      let updated = await db.getSnapshot();
-      assert.ok(updated.external_assets.some(a => a.id === 'sec_test_btc'));
-      let found = updated.external_assets.find(a => a.id === 'sec_test_btc');
-      assert.equal(found.market_value, 1000000);
+      const updatedSnapshot = await db.getSnapshot();
+      assert.equal(updatedSnapshot.account_balances['acc_nisa_sp500'], 650000);
+    });
+  });
 
-      // Edit
-      found.market_value = 1200000;
-      await db.saveSnapshot(updated);
-      updated = await db.getSnapshot();
-      found = updated.external_assets.find(a => a.id === 'sec_test_btc');
-      assert.equal(found.market_value, 1200000);
+  describe('Encrypted Database Operations (AES-GCM-256 At-Rest)', () => {
+    it('encrypts records when encryption key is active and decrypts transparently', async () => {
+      const { generateDatabaseMasterKey } = await import('../../js/crypto.js');
+      const dmk = await generateDatabaseMasterKey();
 
-      // Delete
-      updated.external_assets = updated.external_assets.filter(a => a.id !== 'sec_test_btc');
-      await db.saveSnapshot(updated);
-      updated = await db.getSnapshot();
-      assert.equal(updated.external_assets.some(a => a.id === 'sec_test_btc'), false);
+      // Enable encryption on db
+      db.setEncryptionKey(dmk);
+      assert.equal(db.isEncrypted(), true);
+
+      // Save transaction
+      const tx = {
+        id: 'tx_enc_1',
+        target_month: '2026-10',
+        date: '2026-10-17',
+        amount: 15000,
+        type: 'expense',
+        memo: 'Secret transaction'
+      };
+      await db.saveTransaction(tx);
+
+      // Fetch transaction with key active -> transparently decrypted
+      const retrieved = await db.getTransaction('tx_enc_1');
+      assert.ok(retrieved);
+      assert.equal(retrieved.memo, 'Secret transaction');
+      assert.equal(retrieved.amount, 15000);
+
+      // Lock database (clear key)
+      db.clearEncryptionKey();
+      assert.equal(db.isEncrypted(), false);
+
+      // Attempting to read encrypted transaction without key throws error
+      await assert.rejects(async () => {
+        await db.getTransaction('tx_enc_1');
+      }, /locked/i);
+
+      // Verify master_config and summary_snapshot also require active key when encrypted
+      db.setEncryptionKey(dmk);
+      const cfg = await db.getMasterConfig();
+      await db.saveMasterConfig(cfg);
+      const snap = await db.getSnapshot();
+      await db.saveSnapshot(snap);
+
+      // Clear key -> lock
+      db.clearEncryptionKey();
+      await assert.rejects(async () => {
+        await db.getMasterConfig();
+      }, /locked/i);
+      await assert.rejects(async () => {
+        await db.getSnapshot();
+      }, /locked/i);
     });
   });
 });

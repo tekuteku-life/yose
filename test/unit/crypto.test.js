@@ -229,5 +229,187 @@ describe('js/crypto.js - Unit Tests', () => {
       assert.throws(() => getRandomValues(new Uint8Array(4), {}), /Web Crypto getRandomValues is not available/);
     });
   });
+
+  describe('Database Master Key (DMK) and At-Rest AES-GCM-256 Encryption', () => {
+    it('generates 256-bit AES-GCM Database Master Key', async () => {
+      const { generateDatabaseMasterKey, exportKeyRaw, importAesKeyRaw } = await import('../../js/crypto.js');
+      const dmk = await generateDatabaseMasterKey();
+      assert.ok(dmk);
+      assert.equal(dmk.algorithm.name, 'AES-GCM');
+      assert.equal(dmk.algorithm.length, 256);
+
+      const raw = await exportKeyRaw(dmk);
+      assert.equal(raw.length, 32);
+
+      const imported = await importAesKeyRaw(raw);
+      assert.equal(imported.algorithm.name, 'AES-GCM');
+    });
+
+    it('encrypts and decrypts arbitrary JS objects at-rest with AES-GCM-256', async () => {
+      const { generateDatabaseMasterKey, encryptObject, decryptObject } = await import('../../js/crypto.js');
+      const dmk = await generateDatabaseMasterKey();
+      const sensitiveData = {
+        transactions: [{ id: 'tx_1', amount: 50000, memo: 'Confidential bonus' }],
+        balances: { acc_bank: 5000000 }
+      };
+
+      const encrypted = await encryptObject(sensitiveData, dmk);
+      assert.ok(encrypted.ciphertext);
+      assert.ok(encrypted.iv);
+      assert.notEqual(encrypted.ciphertext, JSON.stringify(sensitiveData));
+
+      const decrypted = await decryptObject(encrypted, dmk);
+      assert.deepEqual(decrypted, sensitiveData);
+    });
+
+    it('fails decryption of at-rest object if ciphertext or iv is tampered or wrong key is used', async () => {
+      const { generateDatabaseMasterKey, encryptObject, decryptObject } = await import('../../js/crypto.js');
+      const dmk = await generateDatabaseMasterKey();
+      const encrypted = await encryptObject({ test: 'integrity' }, dmk);
+
+      // 1. Corrupted ciphertext (Auth tag mismatch)
+      const tamperedCipher = { ...encrypted, ciphertext: encrypted.ciphertext.slice(0, -4) + 'AAAA' };
+      await assert.rejects(async () => await decryptObject(tamperedCipher, dmk), /decryption failed/i);
+
+      // 2. Tampered IV
+      const tamperedIv = { ...encrypted, iv: 'AAAA' + encrypted.iv.slice(4) };
+      await assert.rejects(async () => await decryptObject(tamperedIv, dmk), /decryption failed/i);
+
+      // 3. Wrong key
+      const otherDmk = await generateDatabaseMasterKey();
+      await assert.rejects(async () => {
+        await decryptObject(encrypted, otherDmk);
+      }, /decryption failed/i);
+    });
+  });
+
+  describe('Hybrid Master Keys Packaging (DMK + Ed25519) with PIN', () => {
+    it('wraps and unwraps both DMK and Ed25519 private key using user PIN', async () => {
+      const {
+        generateDatabaseMasterKey,
+        exportKeyRaw,
+        importAesKeyRaw,
+        encryptMasterKeysWithPin,
+        decryptMasterKeysWithPin
+      } = await import('../../js/crypto.js');
+
+      const kp = await generateEd25519KeyPair();
+      const dmk = await generateDatabaseMasterKey();
+      const pin = '987654';
+
+      const dmkRaw = await exportKeyRaw(dmk);
+      const privPkcs8 = await exportPrivateKeyPkcs8(kp.privateKey);
+
+      const wrapped = await encryptMasterKeysWithPin({ dmkRaw, privateKeyPkcs8: privPkcs8 }, pin);
+      assert.ok(wrapped.ciphertext);
+      assert.ok(wrapped.iv);
+      assert.ok(wrapped.salt);
+
+      // Unpack with correct PIN
+      const unpacked = await decryptMasterKeysWithPin(wrapped, pin);
+      assert.deepEqual(unpacked.dmkRaw, dmkRaw);
+      assert.deepEqual(unpacked.privateKeyPkcs8, privPkcs8);
+
+      // Re-import keys and verify they work
+      const restoredDmk = await importAesKeyRaw(unpacked.dmkRaw);
+      const restoredPriv = await importPrivateKeyPkcs8(unpacked.privateKeyPkcs8);
+
+      const testSig = await signPayload(restoredPriv, 'test-msg');
+      const sigOk = await verifySignature(kp.publicKey, testSig, 'test-msg');
+      assert.equal(sigOk, true);
+
+      // Unpack with wrong PIN
+      await assert.rejects(async () => {
+        await decryptMasterKeysWithPin(wrapped, 'wrong_pin');
+      }, /PIN decryption failed/i);
+    });
+  });
+
+  describe('WebAuthn Credential Registration & Authentication', () => {
+    it('registers and authenticates WebAuthn credential in mock environment', async () => {
+      const {
+        registerWebAuthnCredential,
+        authenticateWithWebAuthn,
+        isWebAuthnSupported
+      } = await import('../../js/crypto.js');
+
+      // Mock navigator.credentials
+      const mockCredId = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+      const mockNav = {
+        credentials: {
+          create: async (opts) => ({
+            rawId: mockCredId.buffer,
+            id: 'mock_cred_id_base64',
+            type: 'public-key'
+          }),
+          get: async (opts) => ({
+            id: 'mock_cred_id_base64',
+            type: 'public-key'
+          })
+        }
+      };
+
+      assert.equal(isWebAuthnSupported(mockNav), true);
+      assert.equal(isWebAuthnSupported({}), false);
+
+      const regResult = await registerWebAuthnCredential('test-user', mockNav);
+      assert.ok(regResult.credentialId);
+
+      const authResult = await authenticateWithWebAuthn(regResult.credentialId, mockNav);
+      assert.equal(authResult.success, true);
+    });
+
+    it('handles WebAuthn creation or authentication errors gracefully', async () => {
+      const {
+        registerWebAuthnCredential,
+        authenticateWithWebAuthn
+      } = await import('../../js/crypto.js');
+
+      const failingNav = {
+        credentials: {
+          create: async () => { throw new Error('NotAllowedError: User cancelled'); },
+          get: async () => { throw new Error('SecurityError: Not allowed'); }
+        }
+      };
+
+      await assert.rejects(async () => {
+        await registerWebAuthnCredential('user', failingNav);
+      }, /User cancelled/);
+
+      await assert.rejects(async () => {
+        await authenticateWithWebAuthn('dummy_id', failingNav);
+      }, /Not allowed/);
+    });
+  });
+
+  describe('Zero-Trust Active Session Memory Management', () => {
+    it('manages active session, provides DMK and private key, and clears on lock', async () => {
+      const {
+        setActiveSession,
+        getActiveSession,
+        hasActiveSession,
+        clearActiveSession,
+        generateDatabaseMasterKey
+      } = await import('../../js/crypto.js');
+
+      const kp = await generateEd25519KeyPair();
+      const dmk = await generateDatabaseMasterKey();
+
+      clearActiveSession();
+      assert.equal(hasActiveSession(), false);
+      assert.equal(getActiveSession(), null);
+
+      setActiveSession(dmk, kp.privateKey);
+      assert.equal(hasActiveSession(), true);
+      const session = getActiveSession();
+      assert.equal(session.dmk, dmk);
+      assert.equal(session.privateKey, kp.privateKey);
+
+      clearActiveSession();
+      assert.equal(hasActiveSession(), false);
+      assert.equal(getActiveSession(), null);
+    });
+  });
 });
+
 

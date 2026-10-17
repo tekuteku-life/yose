@@ -19,6 +19,7 @@ import {
   aggregateYearlySummaries,
   JAPANESE_HOLIDAYS_PRESET,
   parseHolidayTextOrCsv,
+  groupHolidaysByYear,
   escapeHtml
 } from './logic.js';
 import {
@@ -28,7 +29,23 @@ import {
   exportPrivateKeyPkcs8,
   importPrivateKeyPkcs8,
   encryptPrivateKeyWithPin,
-  decryptPrivateKeyWithPin
+  decryptPrivateKeyWithPin,
+  generateDatabaseMasterKey,
+  exportKeyRaw,
+  importAesKeyRaw,
+  encryptObject,
+  decryptObject,
+  encryptMasterKeysWithPin,
+  decryptMasterKeysWithPin,
+  isWebAuthnSupported,
+  registerWebAuthnCredential,
+  authenticateWithWebAuthn,
+  setActiveSession,
+  getActiveSession,
+  hasActiveSession,
+  clearActiveSession,
+  bytesToBase64,
+  base64ToBytes
 } from './crypto.js';
 import { SyncManager } from './sync.js';
 
@@ -57,9 +74,196 @@ class AppController {
     // 1. Initialize Database
     await this.db.init();
 
-    // 2. Setup Security Keys
-    await this.initKeys();
+    // 2. Setup Security Keys & Auth Gate
+    await this.initSecurityAndAuthGate();
+  }
 
+  async initSecurityAndAuthGate() {
+    const authScreen = document.getElementById('auth-screen');
+    const authTitle = document.getElementById('auth-title');
+    const authDesc = document.getElementById('auth-description');
+    const webauthnContainer = document.getElementById('auth-webauthn-container');
+    const pinContainer = document.getElementById('auth-pin-container');
+    const setupContainer = document.getElementById('auth-setup-container');
+    const errorMsg = document.getElementById('auth-error-msg');
+
+    const masterPkg = await this.db.getSecurityKey('master_keys_package');
+    const webauthnId = await this.db.getSecurityKey('webauthn_credential_id');
+    const storedPub = await this.db.getSecurityKey('public_key_base64');
+    if (storedPub) {
+      this.publicKeyBase64 = storedPub;
+      try {
+        this.publicKey = await importPublicKeyBase64(storedPub);
+      } catch (e) {}
+    }
+
+    if (!masterPkg) {
+      // First Time Setup Mode
+      if (authScreen) authScreen.classList.remove('hidden');
+      if (authTitle) authTitle.textContent = 'よせあつめ家計簿 - 初期設定';
+      if (authDesc) authDesc.innerHTML = '安全のため、すべてのデータは端末内でAES-GCM-256暗号化されます。<br>保護用のPINコード（4桁以上）を設定してください。';
+      if (webauthnContainer) webauthnContainer.style.display = 'none';
+      if (pinContainer) pinContainer.style.display = 'none';
+      if (setupContainer) setupContainer.style.display = 'block';
+
+      document.getElementById('btn-auth-setup')?.addEventListener('click', async () => {
+        const pinInput = document.getElementById('auth-setup-pin');
+        const pin = pinInput?.value?.trim();
+        if (!pin || pin.length < 4) {
+          if (errorMsg) {
+            errorMsg.textContent = 'PINコードは4桁以上を入力してください';
+            errorMsg.style.display = 'block';
+          }
+          return;
+        }
+
+        try {
+          if (errorMsg) errorMsg.style.display = 'none';
+          // 1. Generate DMK
+          const dmk = await generateDatabaseMasterKey();
+          // 2. Generate Ed25519
+          const kp = await generateEd25519KeyPair();
+          this.publicKey = kp.publicKey;
+          this.publicKeyBase64 = await exportPublicKeyBase64(kp.publicKey);
+          await this.db.saveSecurityKey('public_key_base64', this.publicKeyBase64);
+
+          // 3. Register WebAuthn if supported
+          let credentialId = null;
+          if (isWebAuthnSupported()) {
+            try {
+              const cred = await registerWebAuthnCredential('よせあつめ家計簿 ユーザー');
+              credentialId = cred.credentialId;
+              await this.db.saveSecurityKey('webauthn_credential_id', credentialId);
+            } catch (wErr) {
+              console.warn('WebAuthn setup skipped or failed:', wErr);
+            }
+          }
+
+          // 4. Wrap with PIN
+          const dmkRaw = await exportKeyRaw(dmk);
+          const privPkcs8 = await exportPrivateKeyPkcs8(kp.privateKey);
+          const pkg = await encryptMasterKeysWithPin({ dmkRaw, privateKeyPkcs8: privPkcs8 }, pin);
+          await this.db.saveSecurityKey('master_keys_package', pkg);
+
+          if (credentialId) {
+            await this.db.saveSecurityKey('webauthn_vault', {
+              dmk: bytesToBase64(dmkRaw),
+              priv: bytesToBase64(privPkcs8)
+            });
+          }
+
+          // 5. Activate keys in memory & DB
+          this.db.setEncryptionKey(dmk);
+          this.privateKey = kp.privateKey;
+          this.isKeyProtectedWithPin = true;
+          this.isKeyLocked = false;
+          setActiveSession({ dmk, privateKey: kp.privateKey, publicKey: kp.publicKey, credentialId });
+
+          // Re-save initial master config and snapshot under encryption key
+          const currentConfig = await this.db.getMasterConfig();
+          await this.db.saveMasterConfig(currentConfig);
+          const currentSnapshot = await this.db.getSnapshot();
+          await this.db.saveSnapshot(currentSnapshot);
+
+          // 6. Complete initial setup
+          if (authScreen) authScreen.classList.add('hidden');
+          await this.finishAppInit();
+        } catch (setupErr) {
+          if (errorMsg) {
+            errorMsg.textContent = `初期化エラー: ${setupErr.message}`;
+            errorMsg.style.display = 'block';
+          }
+        }
+      });
+      return;
+    }
+
+    // Existing Key - Lock Screen Mode
+    this.isKeyProtectedWithPin = true;
+    this.isKeyLocked = true;
+    if (authScreen) authScreen.classList.remove('hidden');
+    if (authTitle) authTitle.textContent = '🔐 よせあつめ家計簿';
+    if (authDesc) authDesc.innerHTML = '安全のためデータは暗号化されています。<br>生体認証（Passkey）またはPINで解除してください。';
+    if (setupContainer) setupContainer.style.display = 'none';
+    if (pinContainer) pinContainer.style.display = 'block';
+
+    const hasWebAuthn = Boolean(webauthnId && isWebAuthnSupported());
+    if (webauthnContainer) {
+      webauthnContainer.style.display = hasWebAuthn ? 'block' : 'none';
+    }
+
+    const attemptWebAuthnUnlock = async () => {
+      if (!hasWebAuthn) return;
+      try {
+        if (errorMsg) errorMsg.style.display = 'none';
+        const res = await authenticateWithWebAuthn(webauthnId);
+        if (res.success) {
+          const vault = await this.db.getSecurityKey('webauthn_vault');
+          if (vault) {
+            const dmk = await importAesKeyRaw(base64ToBytes(vault.dmk));
+            const priv = await importPrivateKeyPkcs8(base64ToBytes(vault.priv));
+            this.db.setEncryptionKey(dmk);
+            this.privateKey = priv;
+            this.isKeyLocked = false;
+            setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: webauthnId });
+            if (authScreen) authScreen.classList.add('hidden');
+            await this.finishAppInit();
+            return;
+          }
+        }
+      } catch (authErr) {
+        console.warn('WebAuthn authentication failed or was cancelled:', authErr);
+        if (errorMsg) {
+          errorMsg.textContent = '生体認証がキャンセルされたか失敗しました。PINで解除してください。';
+          errorMsg.style.display = 'block';
+        }
+      }
+    };
+
+    document.getElementById('btn-auth-webauthn')?.addEventListener('click', attemptWebAuthnUnlock);
+
+    const attemptPinUnlock = async () => {
+      const pinInput = document.getElementById('auth-pin-input');
+      const pin = pinInput?.value?.trim();
+      if (!pin) {
+        if (errorMsg) {
+          errorMsg.textContent = 'PINコードを入力してください';
+          errorMsg.style.display = 'block';
+        }
+        return;
+      }
+
+      try {
+        if (errorMsg) errorMsg.style.display = 'none';
+        const { dmkRaw, privateKeyPkcs8 } = await decryptMasterKeysWithPin(masterPkg, pin);
+        const dmk = await importAesKeyRaw(dmkRaw);
+        const priv = await importPrivateKeyPkcs8(privateKeyPkcs8);
+        this.db.setEncryptionKey(dmk);
+        this.privateKey = priv;
+        this.isKeyLocked = false;
+        setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey });
+        if (pinInput) pinInput.value = '';
+        if (authScreen) authScreen.classList.add('hidden');
+        await this.finishAppInit();
+      } catch (err) {
+        if (errorMsg) {
+          errorMsg.textContent = 'PINコードが正しくありません';
+          errorMsg.style.display = 'block';
+        }
+      }
+    };
+
+    document.getElementById('btn-auth-pin')?.addEventListener('click', attemptPinUnlock);
+    document.getElementById('auth-pin-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') attemptPinUnlock();
+    });
+
+    if (hasWebAuthn) {
+      setTimeout(() => { attemptWebAuthnUnlock(); }, 300);
+    }
+  }
+
+  async finishAppInit() {
     // 3. Setup Sync Manager
     const gasUrl = await this.db.getSetting('gas_url', '');
     this.syncManager = new SyncManager({
@@ -86,55 +290,15 @@ class AppController {
     this.setupMasterTabs();
     this.updateNetworkBadge();
 
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', () => {
+        clearActiveSession();
+        this.db.clearEncryptionKey();
+      });
+    }
+
     // 6. Initial Render
     await this.refreshAllViews();
-  }
-
-  async initKeys() {
-    try {
-      const storedPub = await this.db.getSecurityKey('public_key_base64');
-      const storedPrivPkcs8 = await this.db.getSecurityKey('private_key_pkcs8');
-      const encPriv = await this.db.getSecurityKey('encrypted_private_key');
-
-      if (storedPub) {
-        this.publicKeyBase64 = storedPub;
-        try {
-          this.publicKey = await importPublicKeyBase64(storedPub);
-        } catch (e) {}
-      }
-
-      if (encPriv) {
-        // Protected by PIN! Private key is initially locked on load.
-        this.isKeyProtectedWithPin = true;
-        this.isKeyLocked = true;
-        this.privateKey = null;
-        if (this.syncManager) {
-          this.syncManager.setPrivateKey(null);
-        }
-        this.updateKeyDisplay();
-        return;
-      }
-
-      if (storedPub && storedPrivPkcs8) {
-        try {
-          this.privateKey = await importPrivateKeyPkcs8(new Uint8Array(storedPrivPkcs8));
-          this.isKeyProtectedWithPin = false;
-          this.isKeyLocked = false;
-          if (this.syncManager) {
-            this.syncManager.setPrivateKey(this.privateKey);
-          }
-          this.updateKeyDisplay();
-          return;
-        } catch (err) {
-          console.warn('Failed to import stored keys, generating fresh:', err);
-        }
-      }
-
-      // Auto-generate initial Ed25519 key pair
-      await this.generateNewKeyPair();
-    } catch (err) {
-      console.warn('Ed25519 key initialization failed (operating in offline/local mode):', err);
-    }
   }
 
   async generateNewKeyPair() {
@@ -144,11 +308,7 @@ class AppController {
       this.publicKey = kp.publicKey;
       this.publicKeyBase64 = await exportPublicKeyBase64(kp.publicKey);
 
-      const pkcs8 = await exportPrivateKeyPkcs8(kp.privateKey);
       await this.db.saveSecurityKey('public_key_base64', this.publicKeyBase64);
-      await this.db.saveSecurityKey('private_key_pkcs8', Array.from(pkcs8));
-      await this.db.deleteSecurityKey('encrypted_private_key');
-      this.isKeyProtectedWithPin = false;
       this.isKeyLocked = false;
 
       if (this.syncManager) {
@@ -229,11 +389,23 @@ class AppController {
           return;
         }
         try {
-          const enc = await this.db.getSecurityKey('encrypted_private_key');
-          if (!enc) throw new Error('暗号化された秘密鍵が見つかりません');
-          const privKey = await decryptPrivateKeyWithPin(enc, pin);
-          this.privateKey = privKey;
-          this.isKeyLocked = false;
+          const masterPkg = await this.db.getSecurityKey('master_keys_package');
+          if (masterPkg) {
+            const { dmkRaw, privateKeyPkcs8 } = await decryptMasterKeysWithPin(masterPkg, pin);
+            const dmk = await importAesKeyRaw(dmkRaw);
+            const privKey = await importPrivateKeyPkcs8(privateKeyPkcs8);
+            this.db.setEncryptionKey(dmk);
+            this.privateKey = privKey;
+            this.isKeyLocked = false;
+            setActiveSession({ dmk, privateKey: privKey, publicKey: this.publicKey });
+          } else {
+            const enc = await this.db.getSecurityKey('encrypted_private_key');
+            if (!enc) throw new Error('暗号化された秘密鍵が見つかりません');
+            const privKey = await decryptPrivateKeyWithPin(enc, pin);
+            this.privateKey = privKey;
+            this.isKeyLocked = false;
+          }
+
           if (this.syncManager) {
             this.syncManager.setPrivateKey(this.privateKey);
           }
@@ -275,14 +447,16 @@ class AppController {
   }
 
   async lockPrivateKey() {
-    if (!this.isKeyProtectedWithPin) return;
     this.privateKey = null;
     this.isKeyLocked = true;
+    this.db.clearEncryptionKey();
+    clearActiveSession();
     if (this.syncManager) {
       this.syncManager.setPrivateKey(null);
     }
     this.updateKeyDisplay();
-    alert('秘密鍵を再ロックしました');
+    document.getElementById('auth-screen')?.classList.remove('hidden');
+    alert('秘密鍵およびDB暗号化セッションをロックしました');
   }
 
   async removePinProtection() {
@@ -2015,6 +2189,63 @@ class AppController {
       }
     });
 
+    // One-click register key to GAS
+    const registerInitialKeyHandler = async () => {
+      try {
+        await this.ensureKeyUnlocked();
+        const gasUrl = await this.db.getSetting('gas_url', '');
+        if (!gasUrl) {
+          alert('先にGAS Web App URLを設定・保存してください');
+          return;
+        }
+        if (!this.publicKeyBase64) {
+          alert('公開鍵が生成されていません');
+          return;
+        }
+        const res = await this.syncManager.registerInitialKey(this.publicKeyBase64);
+        alert(`GASへ公開鍵を登録しました！\n${res.message || '登録成功'}`);
+        await this.renderSettings();
+      } catch (err) {
+        alert(`公開鍵登録エラー: ${err.message}`);
+      }
+    };
+    document.getElementById('btn-register-initial-key-gas')?.addEventListener('click', registerInitialKeyHandler);
+    document.getElementById('btn-register-key-gas-direct')?.addEventListener('click', registerInitialKeyHandler);
+
+    // Toggle key details
+    document.getElementById('btn-toggle-key-details')?.addEventListener('click', () => {
+      const details = document.getElementById('key-mgmt-details');
+      if (details) {
+        details.style.display = details.style.display === 'none' ? 'block' : 'none';
+      }
+    });
+
+    // WebAuthn Passkey re-register
+    document.getElementById('btn-register-webauthn')?.addEventListener('click', async () => {
+      if (!isWebAuthnSupported()) {
+        alert('お使いの環境はWebAuthn (Passkey) に対応していません');
+        return;
+      }
+      try {
+        const cred = await registerWebAuthnCredential('よせあつめ家計簿 ユーザー');
+        await this.db.saveSecurityKey('webauthn_credential_id', cred.credentialId);
+        if (this.privateKey) {
+          const dmk = this.db.encryptionKey;
+          if (dmk) {
+            const dmkRaw = await exportKeyRaw(dmk);
+            const privPkcs8 = await exportPrivateKeyPkcs8(this.privateKey);
+            await this.db.saveSecurityKey('webauthn_vault', {
+              dmk: bytesToBase64(dmkRaw),
+              priv: bytesToBase64(privPkcs8)
+            });
+          }
+        }
+        alert('WebAuthn (Passkey) の登録に成功しました！');
+      } catch (err) {
+        alert(`WebAuthn登録エラー: ${err.message}`);
+      }
+    });
+
     // View / Edit Master JSON
     const btnViewMaster = document.getElementById('btn-view-master-json');
     const editor = document.getElementById('master-json-editor');
@@ -2048,6 +2279,30 @@ class AppController {
     const gasUrl = await this.db.getSetting('gas_url', '');
     const urlInput = document.getElementById('input-gas-url');
     if (urlInput) urlInput.value = gasUrl;
+
+    const detailsGasUrl = document.getElementById('details-gas-url');
+    const badgeGasUrl = document.getElementById('gas-url-status-badge');
+    if (gasUrl) {
+      if (badgeGasUrl) badgeGasUrl.textContent = '設定済';
+      if (detailsGasUrl && !detailsGasUrl.dataset.userOpened) detailsGasUrl.removeAttribute('open');
+    } else {
+      if (badgeGasUrl) badgeGasUrl.textContent = '未設定';
+      if (detailsGasUrl) detailsGasUrl.setAttribute('open', '');
+    }
+
+    const keyConfiguredBadge = document.getElementById('key-configured-badge');
+    const keyConfiguredSummary = document.getElementById('key-configured-summary');
+    const keyMgmtDetails = document.getElementById('key-mgmt-details');
+
+    if (this.publicKeyBase64) {
+      if (keyConfiguredBadge) keyConfiguredBadge.style.display = 'inline-block';
+      if (keyConfiguredSummary) keyConfiguredSummary.style.display = 'block';
+      if (keyMgmtDetails && !keyMgmtDetails.dataset.userOpened) keyMgmtDetails.style.display = 'none';
+    } else {
+      if (keyConfiguredBadge) keyConfiguredBadge.style.display = 'none';
+      if (keyConfiguredSummary) keyConfiguredSummary.style.display = 'none';
+      if (keyMgmtDetails) keyMgmtDetails.style.display = 'block';
+    }
 
     const config = await this.db.getMasterConfig();
     const info = document.getElementById('master-summary-info');
@@ -2388,64 +2643,40 @@ class AppController {
     const holList = document.getElementById('master-holidays-list');
     if (holList) {
       const holidays = config.holidays || [];
-      holList.innerHTML = holidays.map(h => `
-        <span class="subcat-pill">
-          ${h}
-          <span class="btn-icon-del btn-del-holiday" data-date="${h}" title="削除">&times;</span>
-        </span>
-      `).join('') || '<div style="color: var(--text-muted); padding: 8px;">祝日が登録されていません</div>';
+      const grouped = groupHolidaysByYear(holidays);
+      const years = Object.keys(grouped).sort();
 
-      holList.querySelectorAll('.btn-del-holiday').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const dt = btn.dataset.date;
-          config.holidays = config.holidays.filter(h => h !== dt);
-          await this.saveMasterConfigAndSync(config);
-        });
-      });
-    }
-
-    // 5. External Assets
-    const astList = document.getElementById('master-assets-list');
-    if (astList) {
-      const snapshot = await this.db.getSnapshot();
-      const assets = snapshot?.external_assets || [];
-      astList.innerHTML = assets.map(a => {
-        const val = a.market_value ?? a.current_value ?? 0;
-        return `
-          <div class="master-item-row">
-            <div>
-              <div style="font-weight: 600;">
-                ${a.name}
-                <span style="font-size: 0.8rem; color: var(--text-muted); margin-left: 6px;">(${a.id})</span>
+      if (years.length === 0) {
+        holList.innerHTML = '<div style="color: var(--text-muted); padding: 8px;">祝日が登録されていません</div>';
+      } else {
+        holList.innerHTML = years.map(year => {
+          const list = grouped[year];
+          return `
+            <details class="holiday-year-group">
+              <summary>
+                <span>📅 <strong>${year}年</strong> (${list.length}日)</span>
+                <span style="font-size: 0.8rem; color: var(--text-muted);">開閉 ▼</span>
+              </summary>
+              <div class="holiday-year-content subcat-list">
+                ${list.map(h => `
+                  <span class="subcat-pill">
+                    ${h}
+                    <span class="btn-icon-del btn-del-holiday" data-date="${h}" title="削除">&times;</span>
+                  </span>
+                `).join('')}
               </div>
-              <div style="font-size: 0.8rem; color: var(--text-muted);">
-                評価額: ¥${val.toLocaleString()} | 更新日: ${(a.updated_at || '-').slice(0, 10)}
-              </div>
-            </div>
-            <div style="display: flex; gap: 6px;">
-              <button class="btn btn-secondary btn-sm btn-edit-asset" data-id="${a.id}">編集</button>
-              <button class="btn btn-danger btn-sm btn-delete-asset" data-id="${a.id}">削除</button>
-            </div>
-          </div>
-        `;
-      }).join('') || '<div style="color: var(--text-muted); padding: 8px;">外部資産が登録されていません</div>';
+            </details>
+          `;
+        }).join('');
 
-      astList.querySelectorAll('.btn-edit-asset').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const ast = assets.find(a => a.id === btn.dataset.id);
-          if (ast) this.openMasterModal('asset', ast);
+        holList.querySelectorAll('.btn-del-holiday').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const dt = btn.dataset.date;
+            config.holidays = config.holidays.filter(h => h !== dt);
+            await this.saveMasterConfigAndSync(config);
+          });
         });
-      });
-
-      astList.querySelectorAll('.btn-delete-asset').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          if (confirm('この外部資産を削除しますか？')) {
-            const updatedAssets = assets.filter(a => a.id !== btn.dataset.id);
-            await this.saveExternalAssetsAndSync(updatedAssets);
-          }
-        });
-      });
-    }
+      }
   }
 
   async openMasterModal(type, item, parentItem = null) {
@@ -2474,10 +2705,13 @@ class AppController {
               <label class="form-label" for="m-acc-type">口座種別</label>
               <select id="m-acc-type" class="form-control">
                 <option value="bank" ${item?.type === 'bank' ? 'selected' : ''}>銀行預金 (bank)</option>
-                <option value="cash" ${item?.type === 'cash' ? 'selected' : ''}>現金・電子マネー (cash)</option>
+                <option value="cash" ${item?.type === 'cash' ? 'selected' : ''}>現金 (cash)</option>
+                <option value="investment" ${item?.type === 'investment' ? 'selected' : ''}>証券・投資信託・積立NISA (investment)</option>
                 <option value="credit_card" ${item?.type === 'credit_card' ? 'selected' : ''}>クレジットカード (credit_card)</option>
+                <option value="point" ${item?.type === 'point' ? 'selected' : ''}>ポイント・電子マネー (point)</option>
                 <option value="receivable" ${item?.type === 'receivable' ? 'selected' : ''}>立替債権 (receivable)</option>
                 <option value="prepaid" ${item?.type === 'prepaid' ? 'selected' : ''}>前払費用 (prepaid)</option>
+                <option value="asset" ${item?.type === 'asset' ? 'selected' : ''}>その他資産 (asset)</option>
               </select>
             </div>
             <div class="form-group">

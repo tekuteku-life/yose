@@ -2,6 +2,8 @@
  * Yoseatsume Kakeibo - IndexedDB & Local Storage Manager (Schema v2)
  */
 
+import { encryptObject, decryptObject } from './crypto.js';
+
 export const DB_NAME = 'yose_kakeibo_db';
 export const DB_VERSION = 1;
 
@@ -62,6 +64,15 @@ export const DEFAULT_MASTER_CONFIG = {
       initial_balance: 0,
       is_asset: true,
       sort_order: 6,
+      is_archived: false
+    },
+    {
+      id: 'acc_investment_main',
+      name: '証券口座（積立NISA・投資信託）',
+      type: 'investment',
+      initial_balance: 1225000,
+      is_asset: true,
+      sort_order: 7,
       is_archived: false
     }
   ],
@@ -162,18 +173,9 @@ export const DEFAULT_SUMMARY_SNAPSHOT = {
     acc_bank_main: 1000000,
     acc_card_a: 0,
     acc_receivable: 0,
-    acc_prepaid: 0
+    acc_prepaid: 0,
+    acc_investment_main: 1225000
   },
-  external_assets: [
-    {
-      id: 'asset_sec_1',
-      name: '全世界株式インデックス',
-      quantity: 500000,
-      unit_price: 2.45,
-      market_value: 1225000,
-      updated_at: new Date().toISOString()
-    }
-  ],
   monthly_summaries: {}
 };
 
@@ -220,6 +222,19 @@ export class YoseDB {
     this.idb = customIndexedDB || (typeof window !== 'undefined' ? window.indexedDB : null);
     this.db = null;
     this.memoryDb = null;
+    this.encryptionKey = null;
+  }
+
+  setEncryptionKey(key) {
+    this.encryptionKey = key;
+  }
+
+  clearEncryptionKey() {
+    this.encryptionKey = null;
+  }
+
+  isEncrypted() {
+    return this.encryptionKey !== null && this.encryptionKey !== undefined;
   }
 
   async init() {
@@ -304,15 +319,26 @@ export class YoseDB {
 
   // --- Master Config ---
   async getMasterConfig() {
+    let raw = null;
     if (this.memoryDb) {
-      return await this.memoryDb.get('master_config', 'current');
+      raw = await this.memoryDb.get('master_config', 'current');
+    } else {
+      raw = await new Promise((resolve, reject) => {
+        const tx = this.db.transaction(['master_config'], 'readonly');
+        const req = tx.objectStore('master_config').get('current');
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
     }
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(['master_config'], 'readonly');
-      const req = tx.objectStore('master_config').get('current');
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
-    });
+
+    if (!raw) return null;
+    if (raw.encrypted) {
+      if (!this.encryptionKey) {
+        throw new Error('Database is locked: encryption key not set');
+      }
+      return await decryptObject({ iv: raw.iv, ciphertext: raw.ciphertext }, this.encryptionKey);
+    }
+    return raw;
   }
 
   async saveMasterConfig(config) {
@@ -320,13 +346,24 @@ export class YoseDB {
       ...config,
       updated_at: new Date().toISOString()
     };
+
+    let toStore = updated;
+    if (this.encryptionKey) {
+      const encrypted = await encryptObject(updated, this.encryptionKey);
+      toStore = {
+        encrypted: true,
+        iv: encrypted.iv,
+        ciphertext: encrypted.ciphertext
+      };
+    }
+
     if (this.memoryDb) {
-      await this.memoryDb.put('master_config', 'current', updated);
+      await this.memoryDb.put('master_config', 'current', toStore);
       return updated;
     }
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction(['master_config'], 'readwrite');
-      const req = tx.objectStore('master_config').put(updated, 'current');
+      const req = tx.objectStore('master_config').put(toStore, 'current');
       req.onsuccess = () => resolve(updated);
       req.onerror = () => reject(req.error);
     });
@@ -334,25 +371,46 @@ export class YoseDB {
 
   // --- Summary Snapshot ---
   async getSnapshot() {
+    let raw = null;
     if (this.memoryDb) {
-      return await this.memoryDb.get('summary_snapshot', 'current');
+      raw = await this.memoryDb.get('summary_snapshot', 'current');
+    } else {
+      raw = await new Promise((resolve, reject) => {
+        const tx = this.db.transaction(['summary_snapshot'], 'readonly');
+        const req = tx.objectStore('summary_snapshot').get('current');
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
     }
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(['summary_snapshot'], 'readonly');
-      const req = tx.objectStore('summary_snapshot').get('current');
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
-    });
+
+    if (!raw) return null;
+    if (raw.encrypted) {
+      if (!this.encryptionKey) {
+        throw new Error('Database is locked: encryption key not set');
+      }
+      return await decryptObject({ iv: raw.iv, ciphertext: raw.ciphertext }, this.encryptionKey);
+    }
+    return raw;
   }
 
   async saveSnapshot(snapshot) {
+    let toStore = snapshot;
+    if (this.encryptionKey) {
+      const encrypted = await encryptObject(snapshot, this.encryptionKey);
+      toStore = {
+        encrypted: true,
+        iv: encrypted.iv,
+        ciphertext: encrypted.ciphertext
+      };
+    }
+
     if (this.memoryDb) {
-      await this.memoryDb.put('summary_snapshot', 'current', snapshot);
+      await this.memoryDb.put('summary_snapshot', 'current', toStore);
       return snapshot;
     }
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction(['summary_snapshot'], 'readwrite');
-      const req = tx.objectStore('summary_snapshot').put(snapshot, 'current');
+      const req = tx.objectStore('summary_snapshot').put(toStore, 'current');
       req.onsuccess = () => resolve(snapshot);
       req.onerror = () => reject(req.error);
     });
@@ -360,15 +418,30 @@ export class YoseDB {
 
   // --- Transactions ---
   async getTransaction(id) {
+    let raw = null;
     if (this.memoryDb) {
-      return await this.memoryDb.get('transactions', id);
+      raw = await this.memoryDb.get('transactions', id);
+    } else {
+      raw = await new Promise((resolve, reject) => {
+        const tx = this.db.transaction(['transactions'], 'readonly');
+        const req = tx.objectStore('transactions').get(id);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
     }
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(['transactions'], 'readonly');
-      const req = tx.objectStore('transactions').get(id);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
-    });
+
+    if (!raw) return null;
+    if (raw.encrypted) {
+      if (!this.encryptionKey) {
+        throw new Error('Database is locked: encryption key not set');
+      }
+      return await decryptObject({ iv: raw.iv, ciphertext: raw.ciphertext }, this.encryptionKey);
+    }
+    return raw;
+  }
+
+  async saveTransaction(transaction) {
+    return await this.putTransaction(transaction);
   }
 
   async putTransaction(transaction) {
@@ -381,14 +454,29 @@ export class YoseDB {
       record.created_at = record.updated_at;
     }
 
+    let toStore = record;
+    if (this.encryptionKey) {
+      const encrypted = await encryptObject(record, this.encryptionKey);
+      toStore = {
+        id: record.id,
+        encrypted: true,
+        iv: encrypted.iv,
+        ciphertext: encrypted.ciphertext,
+        target_month: record.target_month,
+        date: record.date,
+        sync_status: record.sync_status,
+        is_deleted: record.is_deleted || false
+      };
+    }
+
     if (this.memoryDb) {
-      await this.memoryDb.put('transactions', record.id, record);
+      await this.memoryDb.put('transactions', toStore.id, toStore);
       return record;
     }
 
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction(['transactions'], 'readwrite');
-      const req = tx.objectStore('transactions').put(record);
+      const req = tx.objectStore('transactions').put(toStore);
       req.onsuccess = () => resolve(record);
       req.onerror = () => reject(req.error);
     });
@@ -439,7 +527,20 @@ export class YoseDB {
       });
     }
 
-    return all.filter(t => {
+    const decrypted = [];
+    for (const item of all) {
+      if (item.encrypted) {
+        if (!this.encryptionKey) {
+          throw new Error('Database is locked: encryption key not set');
+        }
+        const dec = await decryptObject({ iv: item.iv, ciphertext: item.ciphertext }, this.encryptionKey);
+        decrypted.push(dec);
+      } else {
+        decrypted.push(item);
+      }
+    }
+
+    return decrypted.filter(t => {
       if (!filter.includeDeleted && t.is_deleted) return false;
       if (filter.target_month && t.target_month !== filter.target_month) return false;
       if (filter.status && t.status !== filter.status) return false;
