@@ -453,13 +453,17 @@ export function isWebAuthnSupported(nav = (typeof globalThis !== 'undefined' ? g
  * @param {object} [nav]
  * @returns {Promise<{ credentialId: string }>}
  */
-export async function registerWebAuthnCredential(username = 'よせあつめ家計簿', nav = (typeof globalThis !== 'undefined' ? globalThis.navigator : null)) {
+export const DEFAULT_WEBAUTHN_USER_ID = new Uint8Array([
+	0x79, 0x6f, 0x73, 0x65, 0x5f, 0x70, 0x61, 0x73, 0x73, 0x6b, 0x65, 0x79, 0x5f, 0x75, 0x73, 0x65, 0x72, 0x5f, 0x76, 0x31
+]); // "yose_passkey_user_v1"
+
+export async function registerWebAuthnCredential(username = 'よせあつめ家計簿', nav = (typeof globalThis !== 'undefined' ? globalThis.navigator : null), options = {}) {
 	if (!isWebAuthnSupported(nav)) {
 		throw new Error('WebAuthn is not supported in this environment');
 	}
 
 	const challenge = getRandomValues(new Uint8Array(32));
-	const userId = getRandomValues(new Uint8Array(16));
+	const userId = options.userId || DEFAULT_WEBAUTHN_USER_ID;
 
 	const cred = await nav.credentials.create({
 		publicKey: {
@@ -503,34 +507,42 @@ export async function authenticateWithWebAuthn(credentialIdBase64, nav = (typeof
 	}
 
 	const challenge = getRandomValues(new Uint8Array(32));
-	let credIdBytes;
-	try {
-		credIdBytes = base64ToBytes(credentialIdBase64);
-	} catch {
-		credIdBytes = new TextEncoder().encode(credentialIdBase64 || '');
-	}
-
-	const assertion = await nav.credentials.get({
+	const getOptions = {
 		publicKey: {
 			challenge,
-			allowCredentials: [
-				{
-					id: credIdBytes,
-					type: 'public-key'
-				}
-			],
 			userVerification: 'preferred',
 			timeout: 60000
 		}
-	});
+	};
+
+	if (credentialIdBase64) {
+		let credIdBytes;
+		try {
+			credIdBytes = base64ToBytes(credentialIdBase64);
+		} catch {
+			credIdBytes = new TextEncoder().encode(credentialIdBase64 || '');
+		}
+		getOptions.publicKey.allowCredentials = [
+			{
+				id: credIdBytes,
+				type: 'public-key'
+			}
+		];
+	}
+
+	const assertion = await nav.credentials.get(getOptions);
 
 	if (!assertion) {
 		throw new Error('WebAuthn authentication failed: No assertion returned');
 	}
 
+	const returnedId = assertion.rawId
+		? bytesToBase64(new Uint8Array(assertion.rawId))
+		: (assertion.id || credentialIdBase64 || '');
+
 	return {
 		success: true,
-		credentialId: credentialIdBase64
+		credentialId: returnedId
 	};
 }
 

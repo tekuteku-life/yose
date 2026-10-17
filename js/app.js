@@ -17,6 +17,8 @@ import {
 	aggregateDailySummaries,
 	aggregateMonthlySummaries,
 	aggregateYearlySummaries,
+	calculateAnnualBudgetProgress,
+	generateAnnualTrajectory,
 	JAPANESE_HOLIDAYS_PRESET,
 	parseHolidayTextOrCsv,
 	groupHolidaysByYear,
@@ -61,7 +63,7 @@ class AppController {
 		this.currentMonth = formatDate(new Date()).slice(0, 7);
 		this.selectedYear = String(new Date().getFullYear());
 		this.currentMode = 'normal';
-		this.analyticsTarget = 'cashflow'; // 'cashflow' | 'assets'
+		this.analyticsTarget = 'cashflow'; // 'cashflow' | 'budget' | 'assets'
 		this.analyticsGranularity = 'monthly'; // 'daily' | 'monthly' | 'yearly'
 		this.showPlanned = true;
 		this.useActualCategoryAxis = false;
@@ -1272,27 +1274,27 @@ class AppController {
 
 		// Period Navigator
 		document.getElementById('btn-period-prev')?.addEventListener('click', () => {
-			if (this.analyticsGranularity === 'daily') {
+			if (this.analyticsTarget === 'budget' || this.analyticsGranularity === 'yearly') {
+				this.selectedYear = String(Number(this.selectedYear) - 1);
+			} else if (this.analyticsGranularity === 'daily') {
 				this.currentMonth = addMonthsToMonthStr(this.currentMonth, -1);
 				this.selectedYear = this.currentMonth.slice(0, 4);
 			} else if (this.analyticsGranularity === 'monthly') {
 				this.selectedYear = String(Number(this.selectedYear) - 1);
 				this.currentMonth = `${this.selectedYear}-${this.currentMonth.slice(5, 7)}`;
-			} else {
-				this.selectedYear = String(Number(this.selectedYear) - 1);
 			}
 			this.renderSummary();
 		});
 
 		document.getElementById('btn-period-next')?.addEventListener('click', () => {
-			if (this.analyticsGranularity === 'daily') {
+			if (this.analyticsTarget === 'budget' || this.analyticsGranularity === 'yearly') {
+				this.selectedYear = String(Number(this.selectedYear) + 1);
+			} else if (this.analyticsGranularity === 'daily') {
 				this.currentMonth = addMonthsToMonthStr(this.currentMonth, 1);
 				this.selectedYear = this.currentMonth.slice(0, 4);
 			} else if (this.analyticsGranularity === 'monthly') {
 				this.selectedYear = String(Number(this.selectedYear) + 1);
 				this.currentMonth = `${this.selectedYear}-${this.currentMonth.slice(5, 7)}`;
-			} else {
-				this.selectedYear = String(Number(this.selectedYear) + 1);
 			}
 			this.renderSummary();
 		});
@@ -1380,7 +1382,9 @@ class AppController {
 	async renderSummary() {
 		const periodDisplay = document.getElementById('period-display');
 		if (periodDisplay) {
-			if (this.analyticsGranularity === 'daily') {
+			if (this.analyticsTarget === 'budget') {
+				periodDisplay.textContent = `${this.selectedYear}年 (年間予算・進捗)`;
+			} else if (this.analyticsGranularity === 'daily') {
 				periodDisplay.textContent = `${this.currentMonth} (日別)`;
 			} else if (this.analyticsGranularity === 'monthly') {
 				periodDisplay.textContent = `${this.selectedYear}年 (月別)`;
@@ -1417,13 +1421,22 @@ class AppController {
 		// Render Internal Account balances list
 		this.renderAccountBalances(summary);
 
-		// Branch on view target: Cashflow vs Assets
+		// Branch on view target: Cashflow vs Budget vs Assets
 		const cashflowGrid = document.getElementById('cashflow-stat-grid');
+		const budgetGrid = document.getElementById('budget-stat-grid');
 		const catCard = document.getElementById('card-category-breakdown');
 		const chartTitle = document.getElementById('chart-title');
 		const tableTitle = document.getElementById('table-title');
 
-		if (this.analyticsTarget === 'cashflow') {
+		if (this.analyticsTarget === 'budget') {
+			if (cashflowGrid) cashflowGrid.style.display = 'none';
+			if (budgetGrid) budgetGrid.style.display = 'grid';
+			if (catCard) catCard.style.display = 'none';
+			if (chartTitle) chartTitle.textContent = `${this.selectedYear}年 年間予算・貯蓄目標の進捗推移`;
+			if (tableTitle) tableTitle.textContent = `${this.selectedYear}年 月別予算消化・貯蓄実績一覧`;
+			this.renderBudgetAnalytics(transactions, snapshot, config);
+		} else if (this.analyticsTarget === 'cashflow') {
+			if (budgetGrid) budgetGrid.style.display = 'none';
 			if (cashflowGrid) cashflowGrid.style.display = 'grid';
 			if (catCard) catCard.style.display = 'block';
 
@@ -1442,6 +1455,7 @@ class AppController {
 			}
 		} else {
 			// Assets Target
+			if (budgetGrid) budgetGrid.style.display = 'none';
 			if (cashflowGrid) cashflowGrid.style.display = 'none';
 			if (catCard) catCard.style.display = 'none';
 			if (chartTitle) chartTitle.textContent = '資産構成比・内部口座/外部資産内訳';
@@ -1708,6 +1722,185 @@ class AppController {
 		this.renderChartForYearly(yearlyData);
 	}
 
+	renderBudgetAnalytics(transactions, snapshot, config) {
+		const currentYear = this.selectedYear || String(new Date().getFullYear());
+		const budgetConfig = config?.annual_budgets?.[currentYear] || {};
+		const expenseBudget = Number(budgetConfig.expense_budget) || 0;
+		const savingsTarget = Number(budgetConfig.savings_target_amount) || 0;
+		const targetRate = Number(budgetConfig.savings_target_rate ?? budgetConfig.target_savings_rate) || 0;
+
+		const monthlyData = aggregateMonthlySummaries(transactions, currentYear, snapshot?.monthly_summaries || {});
+		const expenseActual = monthlyData.total_expense;
+		const incomeActual = monthlyData.total_income;
+		const savingsActual = monthlyData.total_net;
+
+		const now = new Date();
+		const currentYearNum = Number(currentYear);
+		let currentMonthIndex = 12;
+		if (currentYearNum === now.getFullYear()) {
+			currentMonthIndex = now.getMonth() + 1;
+		} else if (currentYearNum > now.getFullYear()) {
+			currentMonthIndex = 1;
+		}
+
+		const progress = calculateAnnualBudgetProgress({
+			yearlySummary: {
+				expense: expenseActual,
+				income: incomeActual,
+				net: savingsActual
+			},
+			budgetConfig: {
+				expense_budget: expenseBudget,
+				savings_target_amount: savingsTarget,
+				savings_target_rate: targetRate
+			},
+			currentMonth: currentMonthIndex,
+			expenseBudget,
+			expenseActual,
+			savingsTargetAmount: savingsTarget,
+			savingsTargetRate: targetRate,
+			incomeActual,
+			netSavingsActual: savingsActual,
+			currentMonthIndex
+		});
+
+		// Update KPI cards
+		const statExp = document.getElementById('stat-budget-expense');
+		const barExp = document.getElementById('bar-budget-expense');
+		const lblExpPace = document.getElementById('label-budget-expense-pace');
+		const statSav = document.getElementById('stat-budget-savings');
+		const barSav = document.getElementById('bar-budget-savings');
+		const lblSavRate = document.getElementById('label-budget-savings-rate');
+		const statRate = document.getElementById('stat-budget-rate');
+		const lblRateEval = document.getElementById('label-budget-rate-eval');
+		const statPaceStatus = document.getElementById('stat-budget-pace-status');
+		const lblPaceDesc = document.getElementById('label-budget-pace-desc');
+
+		if (statExp) {
+			statExp.textContent = `¥${expenseBudget.toLocaleString()} / ¥${expenseActual.toLocaleString()}`;
+		}
+		if (barExp) {
+			barExp.style.width = `${Math.min(100, Math.max(0, progress.expense_consumption_rate))}%`;
+			if (progress.pace_status === 'over_budget') {
+				barExp.style.background = 'var(--danger)';
+			} else if (progress.pace_status === 'caution') {
+				barExp.style.background = '#f59e0b';
+			} else {
+				barExp.style.background = '#3b82f6';
+			}
+		}
+		if (lblExpPace) {
+			lblExpPace.textContent = `消化率: ${progress.expense_consumption_rate}% (基準ペース: ${progress.expected_pace_rate}%, 残: ¥${progress.expense_remaining.toLocaleString()})`;
+		}
+
+		if (statSav) {
+			statSav.textContent = `¥${savingsTarget.toLocaleString()} / ¥${savingsActual.toLocaleString()}`;
+		}
+		if (barSav) {
+			barSav.style.width = `${Math.min(100, Math.max(0, progress.savings_achievement_rate))}%`;
+			barSav.style.background = progress.is_deficit ? 'var(--danger)' : '#10b981';
+		}
+		if (lblSavRate) {
+			if (progress.is_deficit) {
+				lblSavRate.textContent = `達成率: 0% (年間収支赤字: ¥${Math.abs(savingsActual).toLocaleString()})`;
+			} else {
+				lblSavRate.textContent = `達成率: ${progress.savings_achievement_rate}% (目標残: ¥${progress.savings_remaining.toLocaleString()})`;
+			}
+		}
+
+		if (statRate) {
+			statRate.textContent = `${targetRate}% / ${progress.savings_actual_rate}%`;
+		}
+		if (lblRateEval) {
+			if (targetRate <= 0) {
+				lblRateEval.textContent = '目標貯蓄率: 未設定';
+			} else if (progress.savings_rate_achieved) {
+				lblRateEval.textContent = '✅ 目標貯蓄率を達成中';
+			} else {
+				const diff = Math.round((targetRate - progress.savings_actual_rate) * 10) / 10;
+				lblRateEval.textContent = `⏳ 目標貯蓄率まであと ${diff}%`;
+			}
+		}
+
+		if (statPaceStatus) {
+			let paceText = '順調';
+			let paceColor = '#10b981';
+			if (progress.pace_status === 'ahead') {
+				paceText = '⚡ 抑制中 (余裕あり)';
+				paceColor = '#3b82f6';
+			} else if (progress.pace_status === 'caution') {
+				paceText = '⚠️ ペース超過注意';
+				paceColor = '#f59e0b';
+			} else if (progress.pace_status === 'over_budget') {
+				paceText = '🚨 予算超過';
+				paceColor = 'var(--danger)';
+			}
+			statPaceStatus.textContent = paceText;
+			statPaceStatus.style.color = paceColor;
+		}
+		if (lblPaceDesc) {
+			lblPaceDesc.textContent = `経過${currentMonthIndex}ヶ月時点 (標準消化ペース: ${progress.expected_pace_rate}%)`;
+		}
+
+		// Trajectory for table and chart
+		const trajectory = generateAnnualTrajectory({
+			year: currentYear,
+			monthlySummaries: monthlyData.months,
+			expenseBudget,
+			savingsTarget
+		});
+
+		// Table
+		const tableContainer = document.getElementById('breakdown-table-container');
+		if (tableContainer) {
+			tableContainer.innerHTML = `
+				<table class="summary-table">
+					<thead>
+						<tr>
+							<th>月</th>
+							<th>支出実績</th>
+							<th>月割予算目安</th>
+							<th>累積支出</th>
+							<th>累積予算目安</th>
+							<th>当月純貯蓄</th>
+							<th>累積純貯蓄</th>
+							<th>累積目標目安</th>
+						</tr>
+					</thead>
+					<tbody>
+						${trajectory.map(t => {
+							const expExceeded = expenseBudget > 0 && t.cumulative_expense > t.cumulative_budget_pace;
+							const savOnTrack = savingsTarget > 0 && t.cumulative_savings >= t.cumulative_savings_pace;
+							return `
+								<tr>
+									<td><strong>${Number(t.month)}月</strong></td>
+									<td style="color: var(--danger);">¥${t.monthly_expense.toLocaleString()}</td>
+									<td style="color: var(--text-muted);">¥${t.monthly_budget_allowance.toLocaleString()}</td>
+									<td style="font-weight: 600; color: ${expExceeded ? 'var(--danger)' : 'var(--text-main)'};">
+										¥${t.cumulative_expense.toLocaleString()}
+									</td>
+									<td style="color: var(--text-muted);">¥${t.cumulative_budget_pace.toLocaleString()}</td>
+									<td style="color: ${t.monthly_savings >= 0 ? '#10b981' : 'var(--danger)'};">
+										${t.monthly_savings >= 0 ? '+' : ''}¥${t.monthly_savings.toLocaleString()}
+									</td>
+									<td style="font-weight: 600; color: ${t.cumulative_savings >= 0 ? '#10b981' : 'var(--danger)'};">
+										¥${t.cumulative_savings.toLocaleString()}
+									</td>
+									<td style="color: var(--text-muted); font-weight: ${savOnTrack ? '600' : 'normal'};">
+										¥${t.cumulative_savings_pace.toLocaleString()}
+									</td>
+								</tr>
+							`;
+						}).join('')}
+					</tbody>
+				</table>
+			`;
+		}
+
+		// Chart
+		this.renderChartForBudgetProgress(trajectory, currentYear, expenseBudget, savingsTarget);
+	}
+
 	renderAssetsAnalytics(totalAssetSummary, config, externalAssets) {
 		const tableContainer = document.getElementById('breakdown-table-container');
 		if (!tableContainer) return;
@@ -1952,6 +2145,82 @@ class AppController {
 			canvas.style.display = 'none';
 			fallback.style.display = 'block';
 			fallback.innerHTML = '<div>年次推移データ表示中</div>';
+		}
+	}
+
+	renderChartForBudgetProgress(trajectory, year, expenseBudget, savingsTarget) {
+		const canvas = document.getElementById('summary-chart');
+		const fallback = document.getElementById('chart-fallback');
+		if (!canvas) return;
+
+		const labels = trajectory.map(t => `${Number(t.month)}月`);
+		const cumExpenses = trajectory.map(t => t.cumulative_expense);
+		const cumBudgetPace = trajectory.map(t => t.cumulative_budget_pace);
+		const cumSavings = trajectory.map(t => t.cumulative_savings);
+		const cumSavingsPace = trajectory.map(t => t.cumulative_savings_pace);
+
+		if (typeof window !== 'undefined' && window.Chart) {
+			if (fallback) fallback.style.display = 'none';
+			canvas.style.display = 'block';
+
+			if (this.chart) this.chart.destroy();
+			this.chart = new window.Chart(canvas, {
+				type: 'line',
+				data: {
+					labels,
+					datasets: [
+						{
+							label: '累積支出実績',
+							data: cumExpenses,
+							borderColor: '#ef4444',
+							backgroundColor: 'rgba(239, 68, 68, 0.1)',
+							borderWidth: 2,
+							tension: 0.1,
+							fill: false
+						},
+						{
+							label: '予算消化ペース基準',
+							data: cumBudgetPace,
+							borderColor: '#f59e0b',
+							borderDash: [5, 5],
+							borderWidth: 2,
+							pointRadius: 0,
+							fill: false
+						},
+						{
+							label: '累積純貯蓄実績',
+							data: cumSavings,
+							borderColor: '#10b981',
+							backgroundColor: 'rgba(16, 185, 129, 0.1)',
+							borderWidth: 2,
+							tension: 0.1,
+							fill: false
+						},
+						{
+							label: '目標貯蓄ペース基準',
+							data: cumSavingsPace,
+							borderColor: '#3b82f6',
+							borderDash: [5, 5],
+							borderWidth: 2,
+							pointRadius: 0,
+							fill: false
+						}
+					]
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					scales: {
+						y: {
+							beginAtZero: true
+						}
+					}
+				}
+			});
+		} else if (fallback) {
+			canvas.style.display = 'none';
+			fallback.style.display = 'block';
+			fallback.innerHTML = `<div>${year}年 予算消化・貯蓄進捗データ表示中 (年間予算: ¥${expenseBudget.toLocaleString()} / 目標貯蓄: ¥${savingsTarget.toLocaleString()})</div>`;
 		}
 	}
 
@@ -2233,12 +2502,23 @@ class AppController {
 			if (!file) return;
 			try {
 				const text = await file.text();
-				const data = JSON.parse(text);
-				await this.db.importFullData(data);
-				alert('バックアップの復元が完了しました！');
+				const res = await this.db.importFullData(data);
+				const s = res?.stats || {};
+				const msg = [
+					'【バックアップ差分ORマージ完了】',
+					`・明細: 追加 ${s.addedTransactions || 0}件 / 更新 ${s.updatedTransactions || 0}件 / スキップ ${s.skippedTransactions || 0}件`,
+					`・口座マスタ: 追加 ${s.addedAccounts || 0}件`,
+					`・大項目マスタ: 追加 ${s.addedCategories || 0}件 (内訳中項目: 追加 ${s.addedSubcategories || 0}件)`,
+					`・定期ルール: 追加 ${s.addedRecurringRules || 0}件`,
+					`・祝日: 新規追加 ${s.addedHolidays || 0}件`,
+					`・年間予算: 追加/更新 ${s.addedBudgets || 0}件`
+				].join('\n');
+				alert(msg);
 				await this.refreshAllViews();
 			} catch (err) {
 				alert(`インポート失敗: ${err.message}`);
+			} finally {
+				if (fileInput) fileInput.value = '';
 			}
 		});
 
@@ -2273,7 +2553,7 @@ class AppController {
 			}
 		});
 
-		// WebAuthn Passkey re-register
+		// WebAuthn Passkey re-register / overwrite
 		document.getElementById('btn-register-webauthn')?.addEventListener('click', async () => {
 			if (!isWebAuthnSupported()) {
 				alert('お使いの環境はWebAuthn (Passkey) に対応していません');
@@ -2293,10 +2573,76 @@ class AppController {
 						});
 					}
 				}
-				alert('WebAuthn (Passkey) の登録に成功しました！');
+				alert('WebAuthn (Passkey) を上書き・再登録しました！\n（1Password等で既存パスキーの上書きが可能です）');
+				await this.renderSettings();
 			} catch (err) {
 				alert(`WebAuthn登録エラー: ${err.message}`);
 			}
+		});
+
+		// WebAuthn Passkey clear / unregister
+		document.getElementById('btn-clear-webauthn')?.addEventListener('click', async () => {
+			if (!confirm('登録済みのWebAuthn (Passkey) 連携を解除しますか？\n（解除後もPINコードによるロック解除は継続して利用可能です）')) {
+				return;
+			}
+			try {
+				await this.db.deleteSecurityKey('webauthn_credential_id');
+				await this.db.deleteSecurityKey('webauthn_vault');
+				alert('WebAuthn連携を解除しました');
+				await this.renderSettings();
+			} catch (err) {
+				alert(`WebAuthn解除エラー: ${err.message}`);
+			}
+		});
+
+		// Annual Budget settings
+		const inputBudgetYear = document.getElementById('setting-budget-year');
+		const inputExpBudget = document.getElementById('setting-expense-budget');
+		const inputSavTarget = document.getElementById('setting-savings-target-amount');
+		const inputSavRate = document.getElementById('setting-savings-target-rate');
+		const previewDiv = document.getElementById('budget-monthly-preview');
+
+		const updateMonthlyPreview = () => {
+			if (!previewDiv) return;
+			const exp = Number(inputExpBudget?.value) || 0;
+			const sav = Number(inputSavTarget?.value) || 0;
+			const mExp = Math.round(exp / 12);
+			const mSav = Math.round(sav / 12);
+			previewDiv.textContent = `月平均目安: 支出予算 ¥${mExp.toLocaleString()} / 目標貯蓄 ¥${mSav.toLocaleString()}`;
+		};
+
+		inputExpBudget?.addEventListener('input', updateMonthlyPreview);
+		inputSavTarget?.addEventListener('input', updateMonthlyPreview);
+
+		inputBudgetYear?.addEventListener('change', async () => {
+			const year = inputBudgetYear.value.trim();
+			if (year) {
+				const b = await this.db.getAnnualBudget(year);
+				if (inputExpBudget) inputExpBudget.value = b?.expense_budget || '';
+				if (inputSavTarget) inputSavTarget.value = b?.savings_target_amount || '';
+				if (inputSavRate) inputSavRate.value = b?.savings_target_rate ?? b?.target_savings_rate ?? '';
+				updateMonthlyPreview();
+			}
+		});
+
+		document.getElementById('btn-save-annual-budget')?.addEventListener('click', async () => {
+			const year = inputBudgetYear?.value.trim() || this.selectedYear;
+			if (!year || year.length !== 4) {
+				alert('有効な対象年（4桁）を入力してください');
+				return;
+			}
+			const exp = Number(inputExpBudget?.value) || 0;
+			const sav = Number(inputSavTarget?.value) || 0;
+			const rate = Number(inputSavRate?.value) || 0;
+
+			await this.db.saveAnnualBudget(year, {
+				expense_budget: exp,
+				savings_target_amount: sav,
+				savings_target_rate: rate,
+				target_savings_rate: rate
+			});
+			alert(`${year}年の年間予算・貯蓄目標を保存しました！`);
+			await this.refreshAllViews();
 		});
 
 		// View / Edit Master JSON
@@ -2471,7 +2817,39 @@ class AppController {
 			const holidayCount = (config.holidays || []).length;
 			info.textContent = `登録数: 口座 ${accCount}件 / 費目 ${catCount}件 / 定期ルール ${ruleCount}件 / 祝日 ${holidayCount}件`;
 		}
+
+		const hasWebAuthn = Boolean(await this.db.getSecurityKey('webauthn_credential_id'));
+		const btnClearWebauthn = document.getElementById('btn-clear-webauthn');
+		if (btnClearWebauthn) btnClearWebauthn.style.display = hasWebAuthn ? 'inline-block' : 'none';
+
+		await this.renderAnnualBudgetSettings();
 		await this.renderMasterManagement();
+	}
+
+	async renderAnnualBudgetSettings() {
+		const inputBudgetYear = document.getElementById('setting-budget-year');
+		const inputExpBudget = document.getElementById('setting-expense-budget');
+		const inputSavTarget = document.getElementById('setting-savings-target-amount');
+		const inputSavRate = document.getElementById('setting-savings-target-rate');
+		const previewDiv = document.getElementById('budget-monthly-preview');
+
+		if (!inputBudgetYear) return;
+
+		const currentYear = inputBudgetYear.value.trim() || this.selectedYear || String(new Date().getFullYear());
+		inputBudgetYear.value = currentYear;
+
+		const budget = await this.db.getAnnualBudget(currentYear);
+		if (inputExpBudget) inputExpBudget.value = budget?.expense_budget || '';
+		if (inputSavTarget) inputSavTarget.value = budget?.savings_target_amount || '';
+		if (inputSavRate) inputSavRate.value = budget?.savings_target_rate ?? budget?.target_savings_rate ?? '';
+
+		if (previewDiv) {
+			const exp = Number(budget?.expense_budget) || 0;
+			const sav = Number(budget?.savings_target_amount) || 0;
+			const mExp = Math.round(exp / 12);
+			const mSav = Math.round(sav / 12);
+			previewDiv.textContent = `月平均目安: 支出予算 ¥${mExp.toLocaleString()} / 目標貯蓄 ¥${mSav.toLocaleString()}`;
+		}
 	}
 
 	setupMasterTabs() {

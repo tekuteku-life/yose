@@ -261,6 +261,52 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * [🔄 更新を確認] ボタンにより手動でサーバー上の `version.json` をチェックし、結果（最新です / 新バージョン検出 / オフライン）を明示。
    * [⚡ 強制再読み込み (キャッシュクリア＆更新)] ボタンにより、Service WorkerキャッシュおよびブラウザCacheStorageを全削除した上で、サーバーから強制リロード（Hard Reload）を実行可能とする。
 
+### 3.14 年間予算・貯蓄目標および消化進捗の可視化要件
+
+1. **年間目標値の設定（設定画面 `#tab-settings`）**
+   * 対象年（`target_year`: `YYYY`、デフォルトは当期年）を選択・入力し、以下の3つの目標指標を設定・保存できる：
+     * **年間支出予算額 (`expense_budget`)**: 1年間の総支出予算の上限目標額（円）。
+     * **年間目標貯蓄額 (`savings_target_amount`)**: 1年間で純増させたい純貯蓄（収入−支出）の目標額（円）。
+     * **目標貯蓄率 (`savings_target_rate`)**: 年間収入に対する貯蓄の目標割合（パーセント: %）。
+   * 月割換算プレビュー（年間予算 $\div$ 12、目標貯蓄額 $\div$ 12）を自動算出して画面に表示し、月次の目安を把握しやすくする。
+   * データは `master_config.annual_budgets[year]` に格納され、端末内DMK暗号化・GAS通信署名・バックアップJSONに完全対応する。
+
+2. **進捗・消化具合の可視化（集計・グラフ画面 `#tab-summary`）**
+   * 表示対象セグメントに **`[🎯 予算・進捗]`** を新設（または年別収支分析とシームレスに統合）：
+     * **年間予算進捗カード**: 予算上限、年間確定支出（予定込み支出）、消化率（%）、残予算額、および年間経過月数に応じた基準ペース評価（順調・注意・超過）をカラーインジケーター（プログレスバー）付きで表示。
+     * **年間貯蓄目標カード**: 目標貯蓄額、現在確定純貯蓄（予定込み純貯蓄）、達成率（%）、残目標額をプログレスバー付きで表示。
+     * **貯蓄率目標カード**: 目標貯蓄率（%）と現在実績貯蓄率（%）を対比表示。
+   * **推移チャート（Chart.js）**:
+     * 1月〜12月の月別支出実績・予定の累積カーブと、予算均等消費ペースライン（基準点線）の対比ライングラフ。
+     * 各月の月間支出実績と月割予算目安バーの対比グラフを描画し、使いすぎている月と節約できた月を一目で把握可能とする。
+
+### 3.15 バックアップJSONインポート時の非破壊・差分マージ（ORマージ）要件
+
+1. **課題と設計方針**
+   * 従来のバックアップJSON復元は、既存のローカルマスタ設定やスナップショットを一括上書き（Overwrite）していたため、インポートファイルに含まれないローカル側の独自費目・追加口座・祝日設定が消失する問題があった。
+   * これを全面的に改善し、**ローカルデータを消去せず、インポートJSONとの差分のみを取り込んで重複なく統合する非破壊ORマージ方式（Deduplicated Union Merge）** を採用する。
+2. **各データセットの差分マージ仕様**
+   * **取引明細 (`transactions`)**:
+     * 取引ID（`id`）をキーとして重複排除。
+     * ローカルに存在しない新規取引はそのまま追加（Insert）。
+     * ローカルとインポート双方に同一 `id` が存在する場合、`updated_at` タイムスタンプを比較し、インポート側が新しい場合のみ更新（Update）。ローカルの方が新しい、または同時刻の場合はローカルを保護。
+     * ローカルにのみ存在する取引は決して削除しない。
+   * **口座マスタ (`accounts`)**:
+     * 口座ID（`id`）で重複排除。新規口座のみを追加し、既存口座は維持。
+   * **費目・中項目マスタ (`categories` / `subcategories`)**:
+     * 大項目ID（`id`）で重複排除。新規大項目を追加。
+     * 同一IDの大項目が存在する場合、配下の中項目（`subcategories`）を中項目ID（`id`）でユニオン統合（新規中項目のみを追加し、既存中項目は保護）。
+   * **定期支出ルール (`recurring_rules`)**:
+     * ルールID（`id`）で重複排除し、新規ルールのみを追加。
+   * **祝日リスト (`holidays`)**:
+     * 日付文字列の完全集合（Set Union: `Array.from(new Set([...localHolidays, ...importedHolidays]))`）を取り、昇順ソートして重複排除。
+   * **年間予算目標 (`annual_budgets`)**:
+     * 年キー（`YYYY`）単位でマージ（未設定の年を追加、既存年は尊重）。
+   * **集計スナップショット (`summary_snapshot`)**:
+     * 過去締め月の月次集計（`monthly_summaries`）を月キー（`YYYY-MM`）でマージ。
+3. **処理結果の通知**
+   * インポート完了時、追加された取引件数、更新された取引件数、追加された口座・費目・祝日数等の詳細なマージ統計をダイアログ表示し、ユーザーが差分取り込み結果を明確に確認できる設計とする。
+
 ---
 
 ## 4. 同期トリガー・通信・セキュリティ要件
@@ -319,6 +365,25 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 6. **署名検証と排他制御**
 * **署名検証**: `{ action, timestamp, payload }` をEd25519署名し、GAS側でタイムスタンプ乖離（±5分以内）と署名の有効性を検証。
 * **排他制御**: GASの `doPost(e)` 処理全体を `LockService.getScriptLock().waitLock(30000)` で排他制御し、`finally` で確実に解放する。
+
+### 4.4 決定論的User IDによるWebAuthn・Passkey（1Password等）上書き・更新および鍵管理設計
+
+1. **背景と課題（無限増殖・上書き不可の根本原因）**
+   * FIDO2 / WebAuthn仕様および1Password等のパスキーマネージャでは、同一ドメインにおけるアカウント資格情報を `(rp.id, user.id)` のタプルによって一意に識別・インデックスする。
+   * 従来実装では資格情報生成（`registerWebAuthnCredential`）の呼び出しごとにランダムな16バイト（`getRandomValues(new Uint8Array(16))`）を `user.id` として割り当てていた。
+   * その結果、1Password等のパスキーマネージャは再登録やアップデート後の鍵更新を「まったく別の新規ユーザーアカウント」と判定し、既存パスキーを上書き（更新）する選択肢を表示できず、再登録のたびに新規パスキーエントリが無限に増殖（累積）して管理が破綻する課題が生じていた。
+
+2. **決定論的・永続的User ID (`user.id`) の導入**
+   * 同一アプリ（同一インストール・ドメイン）において、常に固定・決定論的なUser ID（固定バイト列 `new TextEncoder().encode('yose_passkey_user_v1')` またはIndexedDB `security_keys` に永続化された `webauthn_user_id`）を `nav.credentials.create()` の `user.id` として提供する。
+   * これにより、1PasswordやiCloudキーチェーン、Googleパスワードマネージャー等の主要パスキー管理ツールが同一ユーザーであることを正確に検知し、再登録時に**「既存のよせあつめ家計簿パスキーを上書き・更新しますか？」という更新ダイアログを確実に提示**させる。
+
+3. **認証時（`authenticateWithWebAuthn`）の柔軟な照合**
+   * 保存された単一の `credentialId` のみに厳格拘束せず、パスキーマネージャ内の最新資格情報を柔軟に受け入れ可能な構造とし、ブラウザや1Passwordで再登録・更新されたパスキーからのスムーズな認証復帰を実現する。
+   * IndexedDBに保存される `webauthn_vault`（DMKおよびEd25519秘密鍵の暗号化ペイロード）はPWAキャッシュパージ時にも一切削除されず永続化されるため、アップデート後も同一パスキーで確実にアンラップ可能とする。
+
+4. **設定画面における鍵管理UIの改善**
+   * 設定画面（`#tab-settings`）の認証鍵管理セクションに、**[🔑 WebAuthn (Passkey) を上書き・再登録]** ボタンおよび **[🗑️ WebAuthn登録を解除]** ボタンを配備。
+   * パスキーの再登録時は1Password上で既存キーが上書き更新される旨を注記し、不要な鍵が溜まるストレスを完全に解消する。
 
 ---
 
@@ -430,7 +495,14 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
     "2026-04-29", "2026-05-03", "2026-05-04", "2026-05-05", "2026-05-06",
     "2026-07-20", "2026-08-11", "2026-09-21", "2026-09-22", "2026-09-23",
     "2026-10-12", "2026-11-03", "2026-11-23"
-  ]
+  ],
+  "annual_budgets": {
+    "2026": {
+      "expense_budget": 3600000,
+      "savings_target_amount": 1200000,
+      "savings_target_rate": 25.0
+    }
+  }
 }
 
 ```
@@ -1062,9 +1134,12 @@ flowchart TD
 | **3.11** | 設定マスタのGAS手動同期 | `js/sync.js`, `js/app.js`, `index.html` | `gas/Code.gs` (`update_master`) | `master_config` | `test/unit/sync.test.js`, `test/unit/gas.test.js` |
 | **3.12** | 取引種別の統合と入力モード双方向連動 | `js/app.js`, `index.html` | - | - | `test/system/e2e_scenario.test.js` |
 | **3.13** | PWA強制バージョンチェック＆自動・手動更新（キャッシュパージ） | `sw.js`, `version.json`, `js/app.js`, `index.html` | - | - | `test/unit/version.test.js` |
+| **3.14** | 年間予算・目標貯蓄率・貯蓄額設定＆消化進捗可視化（プログレス＆グラフ） | `js/logic.js`, `js/app.js`, `js/db.js`, `index.html` | `gas/Code.gs` (`update_master`) | `master_config` (`annual_budgets`) | `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
+| **3.15** | バックアップJSONインポート時の非破壊・差分マージ（ORマージ） | `js/db.js`, `js/app.js` | - | IndexedDB全ストア | `test/unit/db.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |
+| **4.4** | 決定論的User IDによるPasskey上書き・更新（1Password等重複防止） | `js/crypto.js`, `js/app.js`, `index.html` | - | `security_keys` (`webauthn_vault`) | `test/unit/crypto.test.js` |
 
 ### 8.2 設計整合性および仕様乖離監査結果
 1. **仕様乖離の有無**: 要件定義（第1章〜第5章）と設計図・開発注意点（第6章〜第7章）の間で用語、データスキーマ、フローの乖離がないことを確認済み。

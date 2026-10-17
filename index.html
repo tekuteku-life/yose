@@ -278,9 +278,10 @@
 			<!-- Analytics Target & Granularity Controls -->
 			<div class="card" style="padding: 12px 16px;">
 				<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-					<!-- View Target: Cashflow vs Assets -->
+					<!-- View Target: Cashflow vs Budget vs Assets -->
 					<div class="segmented-control" id="control-view-target">
 						<button type="button" class="segment-btn active" data-target="cashflow">💰 収支分析</button>
+						<button type="button" class="segment-btn" data-target="budget">🎯 予算・進捗</button>
 						<button type="button" class="segment-btn" data-target="assets">🏦 資産残高・推移</button>
 					</div>
 
@@ -317,6 +318,36 @@
 				<div class="stat-card">
 					<div class="stat-label" id="label-stat-savings-rate">現在確定残高 / 予測</div>
 					<div id="stat-confirmed-balance" class="stat-value projected">¥0</div>
+				</div>
+			</div>
+
+			<!-- Budget Progress KPI Container (Visible when target === 'budget') -->
+			<div id="budget-stat-grid" class="summary-grid" style="display: none;">
+				<div class="stat-card">
+					<div class="stat-label">年間支出予算 / 消化額</div>
+					<div id="stat-budget-expense" class="stat-value expense">¥0 / ¥0</div>
+					<div class="progress-bar-container" style="background: #e2e8f0; height: 8px; border-radius: 4px; margin-top: 6px; overflow: hidden;">
+						<div id="bar-budget-expense" style="background: var(--danger); height: 100%; width: 0%; transition: width 0.3s;"></div>
+					</div>
+					<div id="label-budget-expense-pace" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">消化率: 0% (残: ¥0)</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label">年間目標貯蓄額 / 純増</div>
+					<div id="stat-budget-savings" class="stat-value confirmed">¥0 / ¥0</div>
+					<div class="progress-bar-container" style="background: #e2e8f0; height: 8px; border-radius: 4px; margin-top: 6px; overflow: hidden;">
+						<div id="bar-budget-savings" style="background: #10b981; height: 100%; width: 0%; transition: width 0.3s;"></div>
+					</div>
+					<div id="label-budget-savings-rate" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">達成率: 0%</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label">目標貯蓄率 vs 実績</div>
+					<div id="stat-budget-rate" class="stat-value" style="color: var(--primary);">0% / 0%</div>
+					<div id="label-budget-rate-eval" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">目標達成状況</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label">年間消化ペース判定</div>
+					<div id="stat-budget-pace-status" class="stat-value" style="font-size: 1.15rem; color: #10b981;">順調</div>
+					<div id="label-budget-pace-desc" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">月割り基準ペースと連動</div>
 				</div>
 			</div>
 
@@ -442,11 +473,15 @@
 							</div>
 						</div>
 						<div id="pin-action-buttons" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
-							<button id="btn-register-webauthn" class="btn btn-secondary btn-sm">👆 WebAuthn (Passkey) を再登録</button>
+							<button id="btn-register-webauthn" class="btn btn-secondary btn-sm">👆 WebAuthn (Passkey) を上書き・再登録</button>
+							<button id="btn-clear-webauthn" class="btn btn-danger btn-sm" style="display: none;">🗑️ WebAuthn登録を解除</button>
 							<button id="btn-unlock-pin" class="btn btn-success btn-sm" style="display: none;">🔓 PINでロック解除</button>
 							<button id="btn-lock-now" class="btn btn-secondary btn-sm" style="display: none;">🔒 今すぐ再ロック</button>
 							<button id="btn-remove-pin" class="btn btn-danger btn-sm" style="display: none;">PIN保護を解除</button>
 						</div>
+						<p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px; margin-bottom: 0;">
+							※ 1Password等のパスキー管理ツールにおいて同一アカウントとして認識される固定User IDを採用しているため、再登録時に「既存パスキーの更新・上書き」が選択できます。
+						</p>
 					</div>
 				</div>
 			</div>
@@ -488,14 +523,53 @@
 				</div>
 			</div>
 
+			<!-- Annual Budget & Savings Target Setting -->
+			<div class="card" id="card-annual-budget-setting">
+				<div class="card-title">
+					<span>🎯 年間予算・貯蓄目標の設定</span>
+				</div>
+				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+					年間の支出予算・目標貯蓄額・目標貯蓄率を設定します。集計タブの「🎯 予算・進捗」にて消化ペースや年間推移グラフで進捗を確認できます。
+				</p>
+				<div class="form-row">
+					<div class="form-group" style="flex: 1; min-width: 120px;">
+						<label class="form-label" for="setting-budget-year">対象年</label>
+						<input type="number" id="setting-budget-year" class="form-control" min="2000" max="2099" step="1">
+					</div>
+					<div class="form-group" style="flex: 2; min-width: 180px;">
+						<label class="form-label" for="setting-expense-budget">年間支出予算 (円)</label>
+						<input type="number" id="setting-expense-budget" class="form-control" placeholder="例: 3000000" min="0" step="10000">
+					</div>
+				</div>
+				<div class="form-row">
+					<div class="form-group" style="flex: 2; min-width: 180px;">
+						<label class="form-label" for="setting-savings-target-amount">年間目標貯蓄額 (円)</label>
+						<input type="number" id="setting-savings-target-amount" class="form-control" placeholder="例: 1200000" min="0" step="10000">
+					</div>
+					<div class="form-group" style="flex: 1; min-width: 120px;">
+						<label class="form-label" for="setting-savings-target-rate">目標貯蓄率 (%)</label>
+						<input type="number" id="setting-savings-target-rate" class="form-control" placeholder="例: 25" min="0" max="100" step="1">
+					</div>
+				</div>
+				<div id="budget-monthly-preview" style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px; padding: 8px 12px; background: var(--bg-hover); border-radius: var(--radius-sm);">
+					月平均目安: 支出予算 - 円 / 目標貯蓄 - 円
+				</div>
+				<div style="display: flex; gap: 8px;">
+					<button id="btn-save-annual-budget" class="btn btn-primary btn-sm">💾 目標予算を保存</button>
+				</div>
+			</div>
+
 			<!-- Backup & Restore -->
 			<div class="card">
 				<div class="card-title">
-					<span>📦 バックアップ・リストア</span>
+					<span>📦 バックアップ・リストア (非破壊・差分ORマージ)</span>
 				</div>
+				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+					JSONインポート時は、ローカルの既存データを削除せず重複なく差分のみを取り込みます（ローカル限定データは保持され、同一IDの明細は更新日時が新しい方を優先マージ）。
+				</p>
 				<div style="display: flex; gap: 12px; flex-wrap: wrap;">
 					<button id="btn-export-backup" class="btn btn-secondary">💾 全データJSONエクスポート</button>
-					<button id="btn-import-trigger" class="btn btn-secondary">📂 JSONインポート</button>
+					<button id="btn-import-trigger" class="btn btn-secondary">📂 JSONインポート (差分ORマージ)</button>
 					<input type="file" id="file-import-input" accept=".json" style="display: none;">
 				</div>
 			</div>
