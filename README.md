@@ -164,6 +164,9 @@ yose/
  │    ├── integration/       # 結合テスト（sync_flow, recurrent_and_amortization）
  │    └── system/            # システムテスト（e2e_scenario）
  └── docs/
-      └── Req.md             # 要件定義・基本設計書
+      ├── system_design.md       # システム設計書（DFD, シーケンス, ERD, 状態遷移）
+      ├── development_process.md # 開発プロセス定義書（品質ゲート, Argonレビューフロー）
+      └── reviews/               # 独立監査・レビュー記録ディレクトリ
+           └── review1.md        # 第1回独立設計・セキュリティ監査レポート
 ```
 
