@@ -2677,6 +2677,7 @@ class AppController {
           });
         });
       }
+    }
   }
 
   async openMasterModal(type, item, parentItem = null) {
