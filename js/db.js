@@ -294,22 +294,36 @@ export class YoseDB {
         }
       };
 
-      request.onsuccess = async () => {
+      request.onsuccess = () => {
         this.db = request.result;
 
         try {
-          // Initialize defaults if not present
-          const currentConfig = await this.getMasterConfig();
-          if (!currentConfig || !currentConfig.accounts || currentConfig.accounts.length === 0) {
-            await this.saveMasterConfig(DEFAULT_MASTER_CONFIG);
-          }
+          // Initialize defaults if completely empty, without triggering decrypt on locked DB
+          const tx = this.db.transaction(['master_config', 'summary_snapshot'], 'readwrite');
+          const configStore = tx.objectStore('master_config');
+          const snapshotStore = tx.objectStore('summary_snapshot');
 
-          const currentSnapshot = await this.getSnapshot();
-          if (!currentSnapshot || !currentSnapshot.account_balances) {
-            await this.saveSnapshot(DEFAULT_SUMMARY_SNAPSHOT);
-          }
+          const configReq = configStore.get('current');
+          configReq.onsuccess = () => {
+            if (!configReq.result) {
+              configStore.put(DEFAULT_MASTER_CONFIG, 'current');
+            }
+          };
 
-          resolve(this);
+          const snapshotReq = snapshotStore.get('current');
+          snapshotReq.onsuccess = () => {
+            if (!snapshotReq.result) {
+              snapshotStore.put(DEFAULT_SUMMARY_SNAPSHOT, 'current');
+            }
+          };
+
+          tx.oncomplete = () => {
+            resolve(this);
+          };
+
+          tx.onerror = () => {
+            reject(tx.error);
+          };
         } catch (err) {
           reject(err);
         }

@@ -273,5 +273,126 @@ describe('js/db.js & Master Management - Unit Tests', () => {
         await db.getSnapshot();
       }, /locked/i);
     });
+
+    it('initializes cleanly without throwing locked error even when DB has encrypted records at rest', async () => {
+      const storage = {
+        master_config: new Map([['current', { encrypted: true, iv: 'abc', ciphertext: 'xyz' }]]),
+        summary_snapshot: new Map([['current', { encrypted: true, iv: 'def', ciphertext: 'uvw' }]]),
+        security_keys: new Map(),
+        settings: new Map(),
+        transactions: new Map()
+      };
+
+      const mockDb = {
+        objectStoreNames: {
+          contains: (name) => name in storage
+        },
+        createObjectStore: () => ({ createIndex: () => {} }),
+        transaction: (storeNames, mode) => {
+          const tx = {
+            oncomplete: null,
+            onerror: null,
+            objectStore: (name) => ({
+              get: (key) => {
+                const req = { onsuccess: null, onerror: null, result: storage[name]?.get(key) };
+                queueMicrotask(() => req.onsuccess && req.onsuccess());
+                return req;
+              },
+              put: (val, key) => {
+                storage[name]?.set(key, val);
+                const req = { onsuccess: null, onerror: null, result: key };
+                queueMicrotask(() => req.onsuccess && req.onsuccess());
+                return req;
+              }
+            })
+          };
+          queueMicrotask(() => tx.oncomplete && tx.oncomplete());
+          return tx;
+        }
+      };
+
+      const mockIdb = {
+        open: () => {
+          const req = {
+            onupgradeneeded: null,
+            onsuccess: null,
+            onerror: null,
+            result: mockDb
+          };
+          queueMicrotask(() => req.onsuccess && req.onsuccess());
+          return req;
+        }
+      };
+
+      const encDb = new YoseDB(mockIdb);
+      // DB has not been unlocked yet (encDb.encryptionKey is null)
+      await encDb.init();
+      assert.ok(encDb.db);
+      // Data remains intact in encrypted state, not overwritten by defaults
+      assert.equal(storage.master_config.get('current').encrypted, true);
+    });
+
+    it('initializes default master config and snapshot on fresh IndexedDB setup', async () => {
+      const storage = {
+        master_config: new Map(),
+        summary_snapshot: new Map(),
+        security_keys: new Map(),
+        settings: new Map(),
+        transactions: new Map()
+      };
+
+      const mockDb = {
+        objectStoreNames: {
+          contains: (name) => false
+        },
+        createObjectStore: (name) => ({
+          createIndex: () => {}
+        }),
+        transaction: (storeNames, mode) => {
+          const tx = {
+            oncomplete: null,
+            onerror: null,
+            objectStore: (name) => ({
+              get: (key) => {
+                const req = { onsuccess: null, onerror: null, result: storage[name]?.get(key) };
+                queueMicrotask(() => req.onsuccess && req.onsuccess());
+                return req;
+              },
+              put: (val, key) => {
+                storage[name]?.set(key, val);
+                const req = { onsuccess: null, onerror: null, result: key };
+                queueMicrotask(() => req.onsuccess && req.onsuccess());
+                return req;
+              }
+            })
+          };
+          queueMicrotask(() => tx.oncomplete && tx.oncomplete());
+          return tx;
+        }
+      };
+
+      const mockIdb = {
+        open: () => {
+          const req = {
+            onupgradeneeded: null,
+            onsuccess: null,
+            onerror: null,
+            result: mockDb
+          };
+          queueMicrotask(() => {
+            if (req.onupgradeneeded) req.onupgradeneeded({ target: { result: mockDb } });
+            if (req.onsuccess) req.onsuccess();
+          });
+          return req;
+        }
+      };
+
+      const freshDb = new YoseDB(mockIdb);
+      await freshDb.init();
+      assert.ok(freshDb.db);
+      assert.ok(storage.master_config.has('current'));
+      assert.ok(storage.summary_snapshot.has('current'));
+    });
   });
 });
+
