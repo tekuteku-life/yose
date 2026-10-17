@@ -1,8 +1,8 @@
 /**
- * Yoseatsume Kakeibo - Service Worker (Offline Cache Control)
+ * Yoseatsume Kakeibo - Service Worker (Offline Cache Control & Forced Update)
  */
 
-const CACHE_NAME = 'yose-cache-v1';
+const CACHE_NAME = 'yose-cache-v1.1.0';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -12,6 +12,7 @@ const ASSETS_TO_CACHE = [
   './js/logic.js',
   './js/crypto.js',
   './js/sync.js',
+  './js/version.js',
   './manifest.json'
 ];
 
@@ -33,9 +34,28 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+self.addEventListener('message', (event) => {
+  if (event.data === 'SKIP_WAITING') {
+    self.skipWaiting();
+  } else if (event.data === 'CLEAR_ALL_CACHES') {
+    event.waitUntil(
+      caches.keys().then((keys) => {
+        return Promise.all(keys.map((key) => caches.delete(key)));
+      })
+    );
+  }
+});
+
 self.addEventListener('fetch', (event) => {
   // Only handle GET requests for offline caching
   if (event.request.method !== 'GET') {
+    return;
+  }
+
+  const url = new URL(event.request.url);
+
+  // Network-Only: version.json (must always be live) and GAS API endpoints
+  if (url.pathname.endsWith('version.json') || url.hostname === 'script.google.com') {
     return;
   }
 
@@ -62,4 +82,3 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
-

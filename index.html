@@ -562,6 +562,22 @@
           </div>
         </div>
       </div>
+
+      <!-- App Version & Update Management -->
+      <div class="card" id="card-app-update">
+        <div class="card-title">
+          <span>🔄 アプリのバージョンと更新</span>
+          <span class="badge badge-info" id="badge-current-version">v1.1.0</span>
+        </div>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+          PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
+        </p>
+        <div id="update-status-msg" style="display: none; font-size: 0.85rem; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px;"></div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button type="button" id="btn-check-app-update" class="btn btn-secondary btn-sm">🔄 更新を確認</button>
+          <button type="button" id="btn-force-cache-clear" class="btn btn-danger btn-sm">⚡ 強制再読み込み (キャッシュクリア＆更新)</button>
+        </div>
+      </div>
     </section>
 
   </main>
@@ -752,6 +768,24 @@
       </div>
       <div style="display: flex; gap: 8px; margin-top: 16px;">
         <button type="button" id="btn-confirm-import-holidays" class="btn btn-primary btn-block">インポート実行</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL: APP UPDATE CONFIRMATION ==================== -->
+  <div id="modal-app-update" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title">🚀 新しいバージョンが利用可能です</h3>
+        <button type="button" class="close-btn" id="btn-close-app-update-modal">&times;</button>
+      </div>
+      <p style="font-size: 0.9rem; line-height: 1.5; margin-bottom: 12px;">
+        新しいバージョン (<span id="modal-new-version-text" style="font-weight: bold; color: var(--primary);"></span>) が公開されています。<br>
+        最新の機能や修正を反映するため、アップデートして再読み込みしますか？
+      </p>
+      <div style="display: flex; gap: 8px; margin-top: 16px;">
+        <button type="button" id="btn-dismiss-app-update" class="btn btn-secondary btn-block">後で</button>
+        <button type="button" id="btn-confirm-app-update" class="btn btn-primary btn-block">⚡ 今すぐアップデート</button>
       </div>
     </div>
   </div>

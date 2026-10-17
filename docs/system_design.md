@@ -34,11 +34,12 @@ HTML/JS、GitHub Pages、Google Apps Script (GAS)、Google Driveといった個�
 yose/
  ├── index.html          # メイン画面（SPA構成：入力・集計グラフ・設定をタブ切替）
  ├── manifest.json       # PWAマニフェスト
- ├── sw.js               # Service Worker（オフラインキャッシュ制御）
+ ├── sw.js               # Service Worker（オフラインキャッシュ制御・強制更新）
+ ├── version.json        # アプリバージョン定義（キャッシュバイパスによる更新検知）
  ├── css/
  │    └── style.css      # スタイルシート
  ├── js/
- │    ├── app.js         # UIイベント制御・画面初期化
+ │    ├── app.js         # UIイベント制御・画面初期化・バージョン更新管理
  │    ├── db.js          # IndexedDB管理（トランザクション・マスタ・鍵の保存）
  │    ├── logic.js       # 休日補正・定期予定生成・前払費用の分割計算・税抜計算
  │    ├── crypto.js      # Web Crypto API（Ed25519鍵生成・署名・PIN暗号化）
@@ -242,6 +243,23 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 1. **入力種別とモードタブの相互連動**
    * 取引種別ドロップダウン（支出、収入、口座振替、立替払い、立替返済、前払分割、ポイント併用）と、画面上部の入力モードタブを完全に双方向同期。どちらの操作からでも適切な入力フィールドが動的に展開される。
+
+### 3.13 PWA強制バージョンチェックおよび自動・手動アップデート要件
+
+1. **背景と課題**
+   * GitHub Pages等の静的ホスティングやPWAホーム画面インストール環境において、ブラウザのHTTPキャッシュおよびService Workerのキャッシュ戦略（Cache-First）により、開発者が新バージョンをデプロイしてもクライアント側が旧版アセットを保持し続け、即時更新されない問題が発生する。
+2. **バージョンメタデータ（`version.json`）による検知**
+   * オリジン直下に最新バージョン番号およびビルド日時を記した `version.json` を配置。
+   * クライアントは `version.json?_t=${Date.now()}` を `cache: 'no-store'` オプションでフェッチし、ブラウザキャッシュ・プロキシキャッシュを完全バイパスしてサーバー最新版を検知する。
+3. **起動時オンライン自動バージョンチェック**
+   * アプリ起動時（`AppController.init()`）、端末がオンラインであれば自動的にバージョンチェックを実行。
+   * 新バージョンが検知された場合、確認ダイアログ（「新しいバージョン（vX.Y.Z）が利用可能です。アップデートして最新版を読み込みますか？」）を提示。
+   * ユーザーが「今すぐアップデート」を選択した場合、Service Workerのキャッシュを完全パージし、サーバーから最新版を強制再読み込み（Force Reload）する。
+4. **設定画面からの手動確認＆強制更新UI**
+   * 設定画面（`#tab-settings`）の最下部に「🔄 アプリのバージョンと更新」カードを配置。
+   * 現在のアプリバージョン（例: `v1.1.0`）を表示。
+   * [🔄 更新を確認] ボタンにより手動でサーバー上の `version.json` をチェックし、結果（最新です / 新バージョン検出 / オフライン）を明示。
+   * [⚡ 強制再読み込み (キャッシュクリア＆更新)] ボタンにより、Service WorkerキャッシュおよびブラウザCacheStorageを全削除した上で、サーバーから強制リロード（Hard Reload）を実行可能とする。
 
 ---
 
@@ -1009,9 +1027,14 @@ flowchart TD
 * **競合防止**: 複数端末からの同時同期や、手動同期・自動同期が並行して実行された場合のスプレッドシートデータ破損を防ぐため、GASの `doPost(e)` 処理全体を `LockService.getScriptLock().waitLock(30000)` で排他制御します。
 * **例外処理**: 処理完了後、`finally` ブロックで確実に `lock.releaseLock()` を呼び出し、デッドロックを防止します。
 
-### 7.7 PWA・Service Workerのキャッシュ設計とネットワーク分離
+### 7.7 PWA・Service Workerのキャッシュ設計とネットワーク分離・強制更新機構
 * **キャッシュ戦略**: Service Worker（`sw.js`）は、UI表示に必要な静的アセット（HTML, CSS, JS, アイコン）のみをキャッシュします（Cache-First戦略）。
 * **API通信の分離**: GAS Web AppへのAPIリクエスト（`script.google.com`）はService Workerのキャッシュ対象から完全に除外し、常にネットワークへ直接送信（Network-Only）させます。
+* **HTTPキャッシュバイパス**: Service Worker登録時に `{ updateViaCache: 'none' }` を指定し、ブラウザによる `sw.js` のHTTPキャッシュを完全抑止します。
+* **バージョン検知と即時パージ**:
+  * オリジン直下の `version.json` は Service Worker のキャッシュ対象から除外し、常に `cache: 'no-store'` かつタイムスタンプクエリ（`?_t=${Date.now()}`）でフェッチします。
+  * `sw.js` はクライアントからの `SKIP_WAITING` および `CLEAR_ALL_CACHES` メッセージを受信した際、全CacheStorageインスタンスを破棄して最新版のダウンロードと即時アクティベーションを保証します。
+  * クライアント側（`AppController`）は起動時自動チェックおよび設定画面の手動更新ボタンからキャッシュクリアと強制リロード（Hard Reload）を実行します。
 
 ### 7.8 浮動小数点誤差の完全排除と整数計算（日本円・税計算・端数按分）
 * **金額の整数原則**: 通貨金額（`amount`, `initial_balance` 等）はすべて日本円の整数値（`Integer`）として保持・計算し、JavaScriptの浮動小数点演算誤差（例: `0.1 + 0.2 !== 0.3`）を完全に排除します。
@@ -1038,6 +1061,7 @@ flowchart TD
 | **3.10** | 多粒度集計（日・月・年）＆純資産・投資資産推移・KPI | `js/logic.js`, `js/app.js`, `index.html` | `gas/Code.gs` | `summary_snapshot` | `test/unit/logic.test.js` |
 | **3.11** | 設定マスタのGAS手動同期 | `js/sync.js`, `js/app.js`, `index.html` | `gas/Code.gs` (`update_master`) | `master_config` | `test/unit/sync.test.js`, `test/unit/gas.test.js` |
 | **3.12** | 取引種別の統合と入力モード双方向連動 | `js/app.js`, `index.html` | - | - | `test/system/e2e_scenario.test.js` |
+| **3.13** | PWA強制バージョンチェック＆自動・手動更新（キャッシュパージ） | `sw.js`, `version.json`, `js/app.js`, `index.html` | - | - | `test/unit/version.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |
