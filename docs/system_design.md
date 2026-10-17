@@ -24,8 +24,8 @@ HTML/JS、GitHub Pages、Google Apps Script (GAS)、Google Driveといった個�
 
 | レイヤー | 採用技術・環境 | 主な役割・担当処理 |
 | --- | --- | --- |
-| **フロントエンド** | PWA (GitHub Pages)<br><br>HTML5, Vanilla JS (ES Modules), CSS<br><br>IndexedDB, Web Crypto API, Chart.js | ・日常の収支入力（税抜計算補助、立替、分割計上）<br><br>・月初における定期支出（予定）の一括生成と休日補正<br><br>・月途中のリアルタイム集計（前月スナップショット＋当月差分の合算）<br><br>・確定／予定の積み上げグラフ描画と表示切替<br><br>・Ed25519秘密鍵の保護とリクエスト署名 |
-| **バックエンド** | Google Apps Script (Web App)<br><br>V8 Runtime, LockService, PropertiesService | ・Ed25519公開鍵によるリクエスト署名検証・リプレイ攻撃防止<br><br>・未締め差分データのマージ保存<br><br>・月締め処理（月別アーカイブ生成、スナップショット再計算）<br><br>・過去月データ修正時の遡及再計算<br><br>・外部資産価格（株価・投信・為替等）の取得や通知メール解析バッチ |
+| **フロントエンド** | PWA (GitHub Pages)<br><br>HTML5, Vanilla JS (ES Modules), CSS<br><br>IndexedDB, Web Crypto API, WebAuthn (FIDO2), Chart.js | ・日常の収支入力（税抜計算補助、立替、分割計上）<br><br>・月初における定期支出（予定）の一括生成と休日補正<br><br>・月途中のリアルタイム集計（前月スナップショット＋当月差分の合算）<br><br>・確定／予定の積み上げグラフ描画と表示切替<br><br>・WebAuthn（生体認証／Passkey）＋PINによる起動時ロック解除<br><br>・全データ（明細・スナップショット・マスタ）のAES-GCM-256暗号化保存<br><br>・Ed25519秘密鍵によるリクエスト署名 |
+| **バックエンド** | Google Apps Script (Web App)<br><br>V8 Runtime, LockService, PropertiesService | ・Ed25519公開鍵によるリクエスト署名検証・リプレイ攻撃防止<br><br>・初回公開鍵ワンクリック自動登録 (`register_initial_key`)<br><br>・未締め差分データのマージ保存<br><br>・月締め処理（月別アーカイブ生成、スナップショット再計算）<br><br>・過去月データ修正時の遡及再計算 |
 | **ストレージ** | Google スプレッドシート<br><br>(コンテナバインド / JSON形式保管) | ・マスタ設定、集計スナップショット、未締め差分、月別アーカイブのシート単位保管<br><br>・Google ドライブ全体の機密アクセス制限（This app is blocked）を完全回避（`@OnlyCurrentDoc`） |
 
 ### 2.2 ディレクトリ構成（フロントエンド＆GAS管理用）
@@ -168,10 +168,11 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 * 締め終わった過去月のデータを後から追加・修正・論理削除（`is_deleted: true`）した場合は、GASが該当月のアーカイブファイルを再マージし、その月から最新締め月までのスナップショットを連鎖的に再計算する。
 
 
-### 3.5 外部資産情報の収集要件
+### 3.5 資産口座の統合要件（投資・有価証券口座の一本化）
 
-* 証券口座や暗号資産などの外部資産は、保有銘柄コードと数量（株数・口数）をマスタとして保持し、GASの定期実行トリガー（`GOOGLEFINANCE` 関数や外部価格API）で現在値を取得して `summary_snapshot.json` の `external_assets` を更新する。
-* クレジットカードの利用通知メール等をGmailから自動取り込みする場合も、GAS側の時間主導型トリガーでパースして `pending_diffs.json` に追記する拡張性を持たせる。
+* 従来の独立した「外部資産（`external_assets`）」という特殊な並行管理を廃止し、証券口座、積立NISA、投資信託、暗号資産などの金融資産を、すべて通常の口座マスタ（`accounts`）の種別 `investment`（または `asset`）として完全統合する。
+* 投資口座の残高（`account_balances`）がそのまま評価額・資産価値を表し、銀行口座からの積立拠出は通常の口座間振替（`transfer`）として一元的に記録・管理される。
+* これにより、複式簿記ライクな資金移動の整合性が保たれ、二重管理や概念の重複による混乱を排除する（あるべき姿の実現）。
 
 
 ### 3.6 設定マスタ編集UI要件
@@ -179,17 +180,16 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 ユーザーがJSONを直接触ることなく、GUI上で各種マスタ設定を自由に追加・変更・論理削除できるようにする。
 
 1. **口座マスタ管理**
-   * 口座の追加・編集（名称、種別、初期残高、資産/負債フラグ、ソート順）。
+   * 口座の追加・編集（名称、種別: 現金/銀行/クレカ/立替金/前払費用/ポイント/投資資産、初期残高、資産/負債フラグ、ソート順）。
    * 使わなくなった口座の論理削除（`is_archived: true`）および復元。
 2. **費目・内訳マスタ管理**
    * 支出・収入の大項目の追加・編集・論理削除。
    * 各大項目に紐づく中項目（内訳）の追加・編集・論理削除。
 3. **定期支出ルール管理**
    * ルールの追加・編集（ルール名、金額、決済口座、計上/実態費目、発生日、周期、休日補正ルール、有効/無効フラグ）。
-4. **祝日リスト管理**
+4. **祝日リスト管理（年別グループ化・アコーディオン表示）**
    * 休日補正判定に使用する祝日日付（YYYY-MM-DD）の個別追加および削除。
-5. **外部資産マスタ管理**
-   * 保有銘柄の追加・編集（銘柄コード、名称、保有数量、単価、評価額）。
+   * 年ごとにグループ化した折りたたみアコーディオン（`<details class="holiday-year-group">`）としてレンダリングし、**デフォルトは非表示（折りたたみ）** とすることで、10年以上の大量の祝日データが存在しても画面スペースを圧迫しない設計とする。
 
 
 ### 3.7 取引明細のタッチ編集・遡及更新要件
@@ -207,7 +207,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 ### 3.8 祝日データの一括インポート要件
 
 1. **プリセットインポート (内閣府データ)**
-   * 内閣府公表の「国民の祝日」データに基づく、2024年〜2028年の公式祝日プリセット（`JAPANESE_HOLIDAYS_PRESET`）を内蔵し、オフライン環境でもワンクリックで一括インポート可能とする。
+   * 内閣府公表の「国民の祝日」データに基づく、2014年〜2028年の公式祝日プリセット（`JAPANESE_HOLIDAYS_PRESET`）を内蔵し、オフライン環境でもワンクリックで一括インポート可能とする。
 2. **外部テキスト・CSV・JSONインポート**
    * 内閣府の祝日CSVや日付一覧テキスト、外部APIのJSON形式をパース（`parseHolidayTextOrCsv`）し、日付形式（`YYYY-MM-DD` / `YYYY/MM/DD`）を自動正規化してマスタにマージ登録する。
 3. **オンライン祝日API連携**
@@ -221,11 +221,11 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 2. **関連付けとリスト表示**
    * 連動レコード間に `related_tx_id` および `is_point_split: true` を付与し、明細リスト上で「ポイント」バッジを付加して直感的に識別可能とする。
 
-### 3.10 多粒度集計（日別・月別・年別）および保有外部資産表示要件
+### 3.10 多粒度集計（日別・月別・年別）および資産残高・推移表示要件
 
-1. **外部資産の集計・KPI表示**
-   * `summary_snapshot.json` に定義された外部資産（`external_assets`）の最新評価額を集計。
-   * 流動資産（内部預貯金等）＋ 保有外部資産（株式・投信等）− 負債（クレカ等）＝ **総資産・純資産** のKPIカードを常時リアルタイム表示する。
+1. **資産構成の集計・KPI表示**
+   * 口座マスタの定義に基づき、流動資産（現金・普通預金・ポイント等）、投資資産（積立NISA・証券口座等）、負債（クレジットカード等）を明確に区分集計。
+   * **流動資産 ＋ 投資資産 − 負債 ＝ 総資産・純資産** のKPIカードを常時リアルタイム表示する。
 2. **表示対象（`cashflow` 収支分析 vs `assets` 資産残高・推移）の切替**
    * セグメントコントロールにより、月次・年次のキャッシュフロー分析と、資産構成比（ポートフォリオ）分析を瞬時に切り替え可能とする。
 3. **集計粒度（日別・月別・年別）の多次元分析**
@@ -259,29 +259,48 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 * GitHub PagesからGAS Web App（アクセス権限：「全員」）へのPOSTリクエストにおいて、ブラウザのプリフライトリクエスト（OPTIONS）によるCORSエラーを回避するため、HTTPヘッダには `Content-Type: text/plain;charset=utf-8` を指定してJSON文字列を送信する。
 
-### 4.3 EdDSA (Ed25519) 公開鍵暗号方式による認証と鍵保護
+### 4.3 WebAuthn生体認証・全データAES-GCM暗号化・Ed25519署名認証
 
-ソースコードが公開されるGitHub Pagesの特性上、コード内にURLやシークレットを一切記述せず、公開鍵暗号方式によって通信の真正性と完全性を担保する。
+ソースコードが公開されるGitHub Pagesの特性上、コード内にURLやシークレットを一切記述せず、暗号技術により端末内データの秘匿性と通信の真正性を完全担保する。
 
-1. **鍵ペアの生成と保管（PWA側）**
-* 初回セットアップ時、ブラウザの Web Crypto API (`window.crypto.subtle`) を用いて **Ed25519** の鍵ペア（秘密鍵・公開鍵）を生成する。
-* 秘密鍵はIndexedDBに保存する際、ユーザーのPINコード／マスターパスワード（`PBKDF2` + `AES-GCM`）またはWebAuthn（生体認証のPRF拡張）を用いて暗号化保護する（または `extractable: false` のCryptoKeyオブジェクトとして保持する）。
+1. **初回鍵生成（Ed25519通信鍵 ＋ データ暗号化キーDMKの同時生成）**
+* 初回起動時、以下の2系統の暗号鍵を同時に生成する：
+  * **Ed25519署名鍵ペア**: GASとの通信認証用（リクエスト改ざん・なりすまし防止）。
+  * **データベースマスタ鍵 (DMK: Database Master Key)**: `crypto.getRandomValues(new Uint8Array(32))` による256ビットの高エントロピー対称暗号鍵。
+* **WebAuthn（生体認証／Passkey）連携**:
+  * ブラウザの `navigator.credentials.create()` を用いて端末の生体認証（Touch ID, Face ID, Windows Hello, 指紋センサー等）を登録。
+  * DMKおよびEd25519秘密鍵は、WebAuthn認証資格情報にバインドされて保護される。
+  * さらにバックアップ・復旧手段として、ユーザー指定のPINコード（`PBKDF2` 100,000回ストレッチング ＋ `AES-GCM-256`）による多重暗号化ラップ（`wrapped_keys_pin`）を保持する。
 
+2. **データ全体のAES-GCM-256暗号化（At-Rest暗号化）**
+* ローカルストレージ（IndexedDB）に格納されるすべての機微データ：
+  * **`transactions`**（取引明細全件）
+  * **`master_config`**（口座・費目・定期ルール・祝日マスタ）
+  * **`summary_snapshot`**（資産残高・月次集計スナップショット）
+  を、DMKを用いて `AES-GCM-256`（12バイト乱数IV）で暗号化して永続化する。
+* 端末のストレージを物理的にダンプされたり、ブラウザの開発者ツールでIndexedDBを直接閲覧されても、平文の金融データや個人情報は一切読み取れない。
 
-2. **公開鍵の登録（GAS側）**
-* 生成された公開鍵（Base64文字列）のみを、GASの `PropertiesService`（スクリプトプロパティ `USER_PUBLIC_KEYS`）に登録する。複数端末（スマホ・PC）を使う場合は端末ごとの公開鍵を登録可能とする。
+3. **起動時画面遷移（WebAuthn認証 → メモリ復号 → アプリ本編表示）**
+* ページ読み込み時は、全画面の「セキュリティロック画面（Auth Screen）」を最前面に表示し、家計データやナビゲーションは一切レンダリングしない。
+* 利用者が「生体認証で解除 (WebAuthn)」を実行（またはPIN入力）すると、認証成功によりメモリ上にDMKがアンラップ展開される。
+* DMKを用いてIndexedDBからデータをメモリ上に復号・ロードし、ロック画面を解除してアプリ本編（入力・集計・設定画面）へ遷移する。
+* ページ更新（F5）やタブクローズ時は、メモリ上のDMKおよびEd25519平文秘密鍵は完全に破棄され、ゼロトラストの安全状態（自動ロック）に復帰する。
 
+4. **公開鍵のワンクリック自動登録 (`register_initial_key`)**
+* GASのスクリプトプロパティ（`USER_PUBLIC_KEYS`）が未設定（初回セットアップ時）の場合：
+  * PWAクライアントは生成したEd25519公開鍵をペイロードに含め、自身の秘密鍵で自己署名した `register_initial_key` アクションをGASへ送信する。
+  * GASは署名がペイロード内の公開鍵と一致することを検証し、正当であれば `PropertiesService` の `USER_PUBLIC_KEYS` に自動保存する。
+  * これにより、ユーザーがGASエディタの「スクリプトプロパティ」を開いて公開鍵を手動コピー＆ペーストする煩雑な作業を完全に撤廃し、**ボタン一発でGAS連携を完結** させる。
 
-3. **署名と検証のフロー**
-* **PWA側**: `{ action, timestamp, payload }` のJSON文字列に対してEd25519秘密鍵でデジタル署名（`signature`）を生成し、リクエストに添えて送信する。
-* **GAS側**:
-1. `timestamp` を確認し、現在時刻から一定時間（例：5分）以上乖離している場合はリプレイ攻撃とみなして拒否する。
-2. 登録されたEd25519公開鍵を用いて `signature` を検証し、正当な署名である場合のみ後続のファイル操作を実行する。
+5. **設定画面におけるGAS連携UIの整理・分離**
+* **初回設定領域のトグル化**: 初回セットアップ完了後（URL登録・公開鍵設定済み）、URL入力欄等の初回用UIは非表示とし、「接続設定を変更」ボタンによるトグル展開とする。
+* **通常同期と手動メンテナンスの視覚的境界分離**:
+  * **通常同期**: 日常利用する「未同期差分の同期 (`push_diff`)」をプライマリボタンとして配置。
+  * **手動メンテナンス操作**: 「設定マスタのGAS強制上書き送信 (`update_master`)」および「スプレッドシートからの全データ強制再取得 (`fetch_remote`)」は、境界線（Visual Divider）および注意書きで明確に区画を分け、誤操作を防止する。
 
-
-
-4. **排他制御**
-* GASの `doPost(e)` 処理全体は `LockService.getScriptLock()` でロックを取得してから実行し、複数リクエストの同時書き込みによるJSONファイルの破損を防止する。
+6. **署名検証と排他制御**
+* **署名検証**: `{ action, timestamp, payload }` をEd25519署名し、GAS側でタイムスタンプ乖離（±5分以内）と署名の有効性を検証。
+* **排他制御**: GASの `doPost(e)` 処理全体を `LockService.getScriptLock().waitLock(30000)` で排他制御し、`finally` で確実に解放する。
 
 ---
 
@@ -450,20 +469,13 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
   "account_balances": {
     "acc_wallet": 12500,
     "acc_bank_main": 1240000,
+    "acc_nisa_katsu": 800000,
+    "acc_nisa_momo": 700000,
     "acc_card_a": -85000,
     "acc_receivable": 5000,
-    "acc_prepaid": 6666
+    "acc_prepaid": 6666,
+    "acc_point": 1200
   },
-  "external_assets": [
-    {
-      "id": "asset_sec_1",
-      "name": "全世界株式インデックス",
-      "quantity": 500000,
-      "unit_price": 2.45,
-      "market_value": 1225000,
-      "updated_at": "2026-10-16T06:00:00Z"
-    }
-  ],
   "monthly_summaries": {
     "2026-09": {
       "income_total": 350000,
@@ -472,21 +484,24 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
       "by_category": {
         "cat_social": {
           "total": 15000,
-          "by_subcategory": { "sub_drinking": 15000 }
+          "by_subcategory": { "sub_social_present": 15000 }
         }
       },
       "by_actual_category": {
         "cat_food": {
           "total": 15000,
-          "by_subcategory": { "sub_dining_out": 15000 }
+          "by_subcategory": { "sub_food_out": 15000 }
         }
       },
       "closing_balances": {
         "acc_wallet": 12500,
         "acc_bank_main": 1240000,
+        "acc_nisa_katsu": 800000,
+        "acc_nisa_momo": 700000,
         "acc_card_a": -85000,
         "acc_receivable": 5000,
-        "acc_prepaid": 6666
+        "acc_prepaid": 6666,
+        "acc_point": 1200
       }
     }
   }
@@ -509,24 +524,24 @@ flowchart TD
     GAS["GAS Web App (バックエンドAPI)"]
     SS["Google スプレッドシート (コンテナバインドDB)"]
 
-    User -- "収支入力・マスタ設定・月締め・PIN解除" --> PWA
+    User -- "収支入力・マスタ設定・月締め・WebAuthn/PIN解除" --> PWA
     PWA -- "リアルタイム集計・グラフ・KPI表示" --> User
-    PWA -- "Ed25519署名付き差分データ送信 (push_diff, update_master, close_month)" --> GAS
+    PWA -- "Ed25519署名付き差分データ送信 (push_diff, update_master, close_month, register_initial_key)" --> GAS
     GAS -- "確定状態・更新スナップショット返却" --> PWA
     GAS -- "40,000文字分割JSONの読み書き" --> SS
     SS -- "永続化データ読み込み" --> GAS
 ```
 
 #### 6.1.2 DFD Level 1（詳細データフロー）
-PWA内部の各モジュール（UI、業務ロジック、IndexedDB、Web Crypto API、同期マネージャ）と、クラウド側（GAS、PropertiesService、LockService、スプレッドシート）の詳細なデータの流れを示します。
+PWA内部の各モジュール（UI、業務ロジック、IndexedDB、Web Crypto API、WebAuthn、同期マネージャ）と、クラウド側（GAS、PropertiesService、LockService、スプレッドシート）の詳細なデータの流れを示します。
 
 ```mermaid
 flowchart LR
     subgraph Client["クライアント端末 (PWA)"]
         UI["UIコントローラ (app.js)"]
         Logic["業務ロジック (logic.js)"]
-        IDB[("IndexedDB (db.js)")]
-        Crypto["暗号化モジュール (crypto.js)"]
+        IDB[("暗号化IndexedDB (db.js: AES-GCM At-Rest)")]
+        Crypto["暗号・認証モジュール (crypto.js: WebAuthn / AES-GCM / Ed25519)"]
         SyncMgr["同期マネージャ (sync.js)"]
     end
 
@@ -556,12 +571,11 @@ flowchart LR
 
 ### 6.2 ユースケース図（Use Case Diagram）
 
-システムが提供するすべての機能を、利用者（User）およびGAS自動トリガーの観点から整理したユースケース図です。
+システムが提供するすべての機能を、利用者（User）の観点から整理したユースケース図です。
 
 ```mermaid
 flowchart LR
     User["利用者 (User)"]
-    GASTimer["GAS時間主導型トリガー (Timer)"]
 
     subgraph UC_Input["入力・仕訳管理"]
         UC1["日常の収支・口座振替を入力する"]
@@ -573,22 +587,22 @@ flowchart LR
 
     subgraph UC_Analytics["集計・分析"]
         UC6["多粒度（日別・月別・年別）集計を確認する"]
-        UC7["資産残高・外部資産（株式等）を確認する"]
+        UC7["資産残高・投資資産（NISA・証券等）を確認する"]
         UC8["予定（planned）のON/OFFを切替表示する"]
     end
 
     subgraph UC_Sync["同期・セキュリティ"]
-        UC9["PINコードで秘密鍵を保護・ロック解除する"]
+        UC9["WebAuthn（生体認証）またはPINでデータを復号・ロック解除する"]
         UC10["未同期差分をGASへ自動/手動同期する"]
         UC11["当月締め処理を実行する"]
         UC12["過去締め月データを遡及更新する"]
         UC13["マスタ設定を手動同期する"]
+        UC14["GASへ公開鍵をワンクリック自動登録する"]
     end
 
     subgraph UC_External["外部連携・管理"]
-        UC14["日本の祝日データを一括インポートする"]
-        UC15["外部資産の時価を自動更新する"]
-        UC16["設定マスタ（口座・費目・定期ルール）を保守する"]
+        UC15["日本の祝日データを一括インポートする"]
+        UC16["設定マスタ（口座・費目・定期ルール・祝日）を保守する"]
     end
 
     User --> UC1
@@ -605,8 +619,8 @@ flowchart LR
     User --> UC12
     User --> UC13
     User --> UC14
+    User --> UC15
     User --> UC16
-    GASTimer --> UC15
 ```
 
 ---
@@ -730,42 +744,80 @@ sequenceDiagram
     UI->>UI: 過去月および現在の確定残高・グラフを即時再描画
 ```
 
-#### 6.3.5 PIN暗号化・起動時自動ロックおよびロック解除ライフサイクルフロー
-秘密鍵をPBKDF2+AES-GCMで暗号化し、ページリロード時に自動ロックしてゼロトラストを維持するライフサイクルフローです。
+#### 6.3.5 WebAuthn生体認証・全データAES-GCM復号および起動画面遷移フロー
+ページアクセス時に全画面ロック画面を表示し、WebAuthn生体認証（またはPIN入力）によってデータベースマスタ鍵（DMK）を取得、IndexedDBの全データを復号してアプリ本編へ遷移するライフサイクルフローです。
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User as ユーザー
-    participant UI as アプリUI / ロック画面 (app.js)
+    participant UI as ロック画面 / アプリUI (app.js)
+    participant Auth as 認証モジュール (crypto.js)
+    participant DB as 暗号化IndexedDB (db.js)
+
+    Note over User, UI: 【ページ起動 (F5 / リロード)】
+    User->>UI: アプリURLアクセス
+    UI->>DB: getSecurityMetadata()
+    DB-->>UI: { hasKeys: true, authMethod: "webauthn_pin", ... }
+    UI->>UI: アプリ本編を非表示、全画面ロック画面（#auth-screen）を表示
+    UI->>UI: 「🔒 生体認証 / WebAuthnでロック解除」ボタン表示
+
+    Note over User, UI: 【WebAuthn生体認証によるロック解除】
+    User->>UI: 「生体認証でロック解除」押下 (または自動トリガー)
+    UI->>Auth: authenticateWithWebAuthn(credentialId)
+    Auth->>User: 端末の生体認証プロンプト (TouchID / FaceID / Windows Hello)
+    User-->>Auth: 指紋 / 顔認証OK
+    Auth->>Auth: 生体認証資格情報から DMK (256-bit) をアンラップ
+    Auth-->>UI: DMK & activePrivateKey (メモリ上に展開)
+    UI->>DB: setDatabaseMasterKey(DMK)
+    UI->>DB: getAllTransactions(), getMasterConfig(), getSnapshot()
+    DB->>DB: AES-GCM-256で各暗号化レコードを復号
+    DB-->>UI: 平文データセット
+    UI->>UI: ロック画面を非表示化、メイン画面を描画・活性化
+
+    Note over User, UI: 【バックアップPINコードによる解除】
+    alt 生体認証が利用できない / 失敗時
+        User->>UI: 「PINコードで解除」へ切替入力
+        UI->>Auth: decryptMasterKeyWithPin(wrappedKey, pin, salt, iv)
+        Auth-->>UI: DMK & activePrivateKey
+        UI->>DB: setDatabaseMasterKey(DMK)
+        UI->>UI: メイン画面へ遷移
+    end
+```
+
+#### 6.3.6 GAS公開鍵のワンクリック自動登録フロー (`register_initial_key`)
+ユーザーがGASエディタでスクリプトプロパティを手動設定することなく、PWAのボタン押下により公開鍵を自動登録するシーケンスです。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as ユーザー
+    participant UI as 設定画面 (app.js)
+    participant Sync as 同期マネージャ (sync.js)
     participant Crypto as 暗号モジュール (crypto.js)
-    participant DB as IndexedDB (db.js)
+    participant GAS as GAS Web App (Code.gs)
+    participant Prop as PropertiesService
 
-    Note over User, UI: 【初回PIN設定】
-    User->>UI: 設定画面でPINコードを入力 (例: "1234")
-    UI->>Crypto: encryptPrivateKeyWithPin(rawPrivateKey, "1234")
-    Crypto->>Crypto: PBKDF2 (100,000回 stretch) で鍵導出 + AES-GCM 暗号化
-    Crypto-->>UI: { encryptedData, salt, iv }
-    UI->>DB: saveSecurityKey({ id: "ed25519_key", encryptedData, salt, iv, pinProtected: true })
-    UI->>Crypto: setActivePrivateKey(rawPrivateKey) (メモリ上に保持)
-
-    Note over User, UI: 【ページ再読込 / アプリ再起動】
-    User->>UI: ページアクセス (F5 / リロード)
-    UI->>DB: getSecurityKey("ed25519_key")
-    DB-->>UI: { encryptedData, salt, iv, pinProtected: true }
-    UI->>Crypto: hasActivePrivateKey() => false (メモリ未保持)
-    UI->>UI: ロック画面バナー・モーダルを表示（同期・署名操作をブロック）
-
-    Note over User, UI: 【PINロック解除】
-    User->>UI: ロック解除モーダルでPINコード入力
-    UI->>Crypto: decryptPrivateKeyWithPin(encryptedData, pin, salt, iv)
-    alt PIN不一致
-        Crypto-->>UI: 復号エラー (OperationError)
-        UI-->>User: 「PINコードが正しくありません」表示
-    else PIN一致
-        Crypto-->>UI: rawPrivateKey (JWK)
-        UI->>Crypto: setActivePrivateKey(rawPrivateKey)
-        UI->>UI: ロック解除、安全バナー表示、同期機能活性化
+    User->>UI: 「GASへ公開鍵を自動登録」ボタン押下
+    UI->>Crypto: getPublicKeyBase64()
+    Crypto-->>UI: pubKeyBase64
+    UI->>Sync: registerInitialKey(pubKeyBase64)
+    Sync->>Crypto: signMessage({ action: "register_initial_key", timestamp, payload: { publicKey: pubKeyBase64 } })
+    Crypto-->>Sync: signature (自己署名)
+    Sync->>GAS: POST /exec (action: "register_initial_key", payload: { publicKey }, signature)
+    GAS->>Prop: getProperty("USER_PUBLIC_KEYS")
+    alt すでに公開鍵が登録済み
+        GAS-->>Sync: 400 Bad Request / { success: false, error: "Public keys already configured" }
+    else 未登録状態 (初回)
+        GAS->>GAS: payload.publicKey で署名を自己検証
+        alt 署名一致
+            GAS->>Prop: setProperty("USER_PUBLIC_KEYS", JSON.stringify([payload.publicKey]))
+            GAS-->>Sync: 200 OK { success: true, message: "Public key successfully registered" }
+            Sync-->>UI: 登録完了通知
+            UI->>UI: ステータス「✅ 連携設定完了」表示、URL入力欄を非表示化
+        else 署名不一致
+            GAS-->>Sync: 401 Unauthorized { success: false, error: "Invalid self-signature" }
+        end
     end
 ```
 
@@ -784,7 +836,6 @@ erDiagram
     MASTER_CONFIG ||--o{ HOLIDAY : contains
 
     SUMMARY_SNAPSHOT ||--o{ ACCOUNT_BALANCE : records
-    SUMMARY_SNAPSHOT ||--o{ EXTERNAL_ASSET : tracks
     SUMMARY_SNAPSHOT ||--o{ MONTHLY_SUMMARY : summarizes
 
     PENDING_DIFFS ||--o{ TRANSACTION : holds
@@ -796,7 +847,7 @@ erDiagram
     ACCOUNT {
         string id PK
         string name
-        string type "cash|bank|credit_card|receivable|prepaid|point"
+        string type "cash|bank|credit_card|receivable|prepaid|point|investment|asset"
         int initial_balance
         boolean is_asset
         string settlement_account_id FK
@@ -875,15 +926,6 @@ erDiagram
         string parent_tx_id FK
     }
 
-    EXTERNAL_ASSET {
-        string id PK
-        string name
-        float quantity
-        float unit_price
-        int market_value
-        string updated_at
-    }
-
     ACCOUNT_BALANCE {
         string account_id PK, FK
         int balance
@@ -901,35 +943,35 @@ erDiagram
 
 ### 6.5 画面遷移・状態遷移図（Screen & State Transition Diagram）
 
-シングルページアプリケーション（SPA）における画面タブ遷移と、暗号化キーのロック状態遷移を示します。
+シングルページアプリケーション（SPA）における画面遷移と、暗号化キーのロック状態遷移を示します。
 
 ```mermaid
 flowchart TD
-    subgraph Screens["画面タブ遷移"]
+    subgraph Screens["画面遷移"]
+        ScreenAuth["🔒 セキュリティロック画面 (#auth-screen)"]
         TabInput["収支入力画面 (#tab-input)"]
         TabAnalytics["集計・分析画面 (#tab-analytics)"]
         TabMaster["マスタ管理画面 (#tab-master)"]
         TabConfig["システム設定画面 (#tab-config)"]
 
+        ScreenAuth -- "WebAuthn生体認証 / PIN成功 (メモリ復号)" --> TabInput
         TabInput <--> TabAnalytics
         TabInput <--> TabMaster
         TabInput <--> TabConfig
         TabAnalytics <--> TabMaster
         TabAnalytics <--> TabConfig
         TabMaster <--> TabConfig
+        TabConfig -- "再ロック実行" --> ScreenAuth
     end
 
     subgraph SecurityStates["暗号鍵セキュリティ状態遷移"]
         StateNoKey["未初期化 (鍵未生成)"]
-        StateUnlockedPlain["平文鍵保持 (未暗号化)"]
-        StateLocked["PIN保護ロック中 (メモリ空)"]
-        StateUnlockedProtected["PIN保護解除済み (メモリ保持)"]
+        StateLocked["暗号化ロック中 (メモリ空・At-Rest保護)"]
+        StateUnlocked["復号稼働中 (DMK & 署名鍵保持)"]
 
-        StateNoKey -- "初回鍵生成" --> StateUnlockedPlain
-        StateUnlockedPlain -- "PINコード設定" --> StateUnlockedProtected
-        StateUnlockedProtected -- "再読込 / ロックボタン押下" --> StateLocked
-        StateLocked -- "正しいPIN入力" --> StateUnlockedProtected
-        StateUnlockedProtected -- "PIN保護解除" --> StateUnlockedPlain
+        StateNoKey -- "初回起動時: WebAuthn登録 + 鍵生成" --> StateUnlocked
+        StateUnlocked -- "ページ再読込 / ロックボタン押下" --> StateLocked
+        StateLocked -- "WebAuthn認証 / PIN入力成功" --> StateUnlocked
     end
 ```
 
@@ -955,10 +997,13 @@ flowchart TD
 * **リプレイ攻撃防止**: GAS側で `Math.abs(currentTimestamp - requestTimestamp) > 300` 秒（5分）の乖離がある場合はリクエストを拒否します。
 * **フォールバック**: 標準Web Crypto APIがEd25519を直接サポートしていない一部環境では、互換署名生成・検証アルゴリズムへ安全にフォールバックします。
 
-### 7.5 PIN保護（PBKDF2 + AES-GCM）と起動時ゼロトラスト・自動ロック設計
-* **セキュリティ方針**: 端末紛失やブラウザDevToolsからの秘密鍵盗難を防止するため、Ed25519秘密鍵はユーザーの暗証番号（PIN）で暗号化してIndexedDBに保存します。
-* **暗号化方式**: `PBKDF2`（HMAC-SHA-256、100,000回ストレッチング、16バイトランダムソルト）によりAES鍵を導出し、`AES-GCM`（12バイトランダムIV）で暗号化します。
-* **自動ロック（ゼロトラスト）**: ページ更新（F5）やブラウザ再起動時、メモリ上の平文鍵（`activePrivateKey`）は破棄されます。PINが入力されて復号されるまで、同期・署名操作は完全にロックされます。
+### 7.5 WebAuthn生体認証・全データAES-GCM暗号化（At-Rest）および起動時ゼロトラスト設計
+* **セキュリティ方針**: 端末紛失やブラウザDevToolsからの秘密鍵および家計データの漏洩を防止するため、Ed25519秘密鍵およびデータベース全体を暗号化してIndexedDBに保存します。
+* **暗号化方式**: 初回起動時に256ビットの高エントロピー対称鍵（DMK: Database Master Key）を生成し、全データ（明細・マスタ・スナップショット）を `AES-GCM-256`（12バイトランダムIV）で暗号化して保存します。
+* **鍵の二重保護（WebAuthn + PIN）**:
+  * 第一経路: `WebAuthn`（FIDO2 / Passkey / 生体認証）により、デバイスハードウェアにバインドされた安全な認証資格情報でDMKを保護します。
+  * 第二経路（バックアップ）: 万一の生体認証利用不可に備え、ユーザー設定のPINコード（`PBKDF2` HMAC-SHA-256、100,000回ストレッチング、16バイトランダムソルト）によりAES暗号化ラップして保持します。
+* **自動ロック（ゼロトラスト）**: ページ更新（F5）やブラウザ再起動時、メモリ上の平文鍵（DMKおよび`activePrivateKey`）は即座に破棄されます。WebAuthnまたはPINで復号されるまで、家計データの閲覧および同期・署名操作は完全にロックされます。
 
 ### 7.6 GAS排他制御（`LockService`）と同時書き込み整合性保証
 * **競合防止**: 複数端末からの同時同期や、手動同期・自動同期が並行して実行された場合のスプレッドシートデータ破損を防ぐため、GASの `doPost(e)` 処理全体を `LockService.getScriptLock().waitLock(30000)` で排他制御します。
@@ -985,19 +1030,19 @@ flowchart TD
 | **3.2** | 定期支出・休日補正（none/before/after） | `js/logic.js`, `index.html` | - | `master_config` (`recurring_rules`, `holidays`) | `test/unit/logic.test.js` |
 | **3.3** | 前払費用の月次分割償却（1支払+N償却） | `js/logic.js`, `js/app.js` | `gas/Code.gs` | `pending_diffs`, `summary_snapshot` | `test/integration/recurrent_and_amortization.test.js` |
 | **3.4** | リアルタイム集計・予定ON/OFF・月締め | `js/logic.js`, `js/app.js`, `js/sync.js` | `gas/Code.gs` (`close_month`) | `arch_YYYY-MM`, `summary_snapshot` | `test/unit/sync.test.js`, `test/unit/gas.test.js` |
-| **3.5** | 外部資産情報の収集・評価額管理 | `js/app.js`, `index.html` | `gas/Code.gs` | `summary_snapshot` (`external_assets`) | `test/unit/master_management.test.js` |
-| **3.6** | 設定マスタ編集UI（口座・費目・ルール） | `js/app.js`, `js/db.js`, `index.html` | `gas/Code.gs` (`update_master`) | `master_config` | `test/unit/master_management.test.js` |
+| **3.5** | 資産口座の統合（投資・有価証券口座の一本化） | `js/app.js`, `js/logic.js`, `index.html` | `gas/Code.gs` | `summary_snapshot`, `master_config` | `test/unit/master_management.test.js`, `test/unit/logic.test.js` |
+| **3.6** | 設定マスタ編集UI（口座・費目・ルール・祝日年別アコーディオン） | `js/app.js`, `js/db.js`, `index.html` | `gas/Code.gs` (`update_master`) | `master_config` | `test/unit/master_management.test.js` |
 | **3.7** | 取引明細タッチ編集・過去締め月遡及更新 | `js/app.js`, `js/sync.js`, `index.html` | `gas/Code.gs` (`retroactive_update`) | `arch_YYYY-MM`, `summary_snapshot` | `test/unit/tx_edit.test.js`, `test/unit/gas.test.js` |
-| **3.8** | 日本の祝日一括インポート（内閣府・CSV・API） | `js/logic.js`, `js/app.js`, `index.html` | - | `master_config` (`holidays`) | `test/unit/logic.test.js` |
+| **3.8** | 日本の祝日一括インポート（内閣府2014〜2028・CSV・API） | `js/logic.js`, `js/app.js`, `index.html` | - | `master_config` (`holidays`) | `test/unit/logic.test.js` |
 | **3.9** | ポイント払い連動（専用口座/相殺インカム） | `js/logic.js`, `js/app.js`, `index.html` | `gas/Code.gs` | `pending_diffs` | `test/unit/logic.test.js`, `test/integration/recurrent_and_amortization.test.js` |
-| **3.10** | 多粒度集計（日・月・年）＆総資産推移・KPI | `js/logic.js`, `js/app.js`, `index.html` | `gas/Code.gs` | `summary_snapshot` | `test/unit/logic.test.js` |
+| **3.10** | 多粒度集計（日・月・年）＆純資産・投資資産推移・KPI | `js/logic.js`, `js/app.js`, `index.html` | `gas/Code.gs` | `summary_snapshot` | `test/unit/logic.test.js` |
 | **3.11** | 設定マスタのGAS手動同期 | `js/sync.js`, `js/app.js`, `index.html` | `gas/Code.gs` (`update_master`) | `master_config` | `test/unit/sync.test.js`, `test/unit/gas.test.js` |
 | **3.12** | 取引種別の統合と入力モード双方向連動 | `js/app.js`, `index.html` | - | - | `test/system/e2e_scenario.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
-| **4.3** | Ed25519公開鍵署名・リプレイ防止・PIN暗号化 | `js/crypto.js`, `js/sync.js` | `gas/Code.gs` | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |
+| **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |
 
 ### 8.2 設計整合性および仕様乖離監査結果
 1. **仕様乖離の有無**: 要件定義（第1章〜第5章）と設計図・開発注意点（第6章〜第7章）の間で用語、データスキーマ、フローの乖離がないことを確認済み。
-2. **アカウント体系**: 6つの口座タイプ（`cash`, `bank`, `credit_card`, `receivable`, `prepaid`, `point`）がUI・DB初期マスタ・ロジック・設計図で完全に合致している。
-3. **セキュリティモデル**: PIN保護、Ed25519署名、タイムスタンプ検証、LockService排他制御、40,000字チャンク化がコードベースと設計書で1対1に対応している。
+2. **アカウント体系**: 口座タイプ（`cash`, `bank`, `credit_card`, `receivable`, `prepaid`, `point`, `investment`, `asset`）がUI・DB初期マスタ・ロジック・設計図で完全に合致し、外部資産が通常口座へ美しく統合されている。
+3. **セキュリティモデル**: WebAuthn生体認証、全データAES-GCM暗号化（At-Rest）、Ed25519署名、タイムスタンプ検証、LockService排他制御、40,000字チャンク化がコードベースと設計書で1対1に対応している。

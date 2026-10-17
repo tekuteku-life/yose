@@ -1042,8 +1042,30 @@ export function aggregateYearlySummaries(transactions = [], historicalSummaries 
 /**
  * Calculate total assets including internal accounts and external assets
  */
+/**
+ * Groups a list of holiday date strings by year in ascending order.
+ * @param {string[]} holidays
+ * @returns {Record<string, string[]>}
+ */
+export function groupHolidaysByYear(holidays) {
+  if (!Array.isArray(holidays)) return {};
+  const groups = {};
+  for (const h of holidays) {
+    if (typeof h === 'string' && /^\d{4}-\d{2}-\d{2}/.test(h)) {
+      const year = h.slice(0, 4);
+      if (!groups[year]) groups[year] = [];
+      groups[year].push(h);
+    }
+  }
+  for (const y of Object.keys(groups)) {
+    groups[y].sort();
+  }
+  return groups;
+}
+
 export function calculateTotalAssetSummary(accountBalances = {}, accountsMaster = [], externalAssets = []) {
   let liquidAssets = 0;
+  let investmentAssets = 0;
   let liabilities = 0;
   const byType = {
     cash: 0,
@@ -1052,6 +1074,8 @@ export function calculateTotalAssetSummary(accountBalances = {}, accountsMaster 
     point: 0,
     receivable: 0,
     prepaid: 0,
+    investment: 0,
+    asset: 0,
     stock: 0,
     mutual_fund: 0,
     crypto: 0,
@@ -1062,6 +1086,8 @@ export function calculateTotalAssetSummary(accountBalances = {}, accountsMaster 
   for (const acc of accountsMaster) {
     accountMap.set(acc.id, acc);
   }
+
+  const investmentTypeSet = new Set(['investment', 'asset', 'stock', 'mutual_fund', 'crypto']);
 
   for (const [accId, balance] of Object.entries(accountBalances)) {
     const acc = accountMap.get(accId);
@@ -1075,7 +1101,11 @@ export function calculateTotalAssetSummary(accountBalances = {}, accountsMaster 
         liquidAssets += balance;
       }
     } else if (isAsset && balance >= 0) {
-      liquidAssets += balance;
+      if (investmentTypeSet.has(type)) {
+        investmentAssets += balance;
+      } else {
+        liquidAssets += balance;
+      }
     } else if (balance < 0) {
       liabilities += Math.abs(balance);
     }
@@ -1099,17 +1129,20 @@ export function calculateTotalAssetSummary(accountBalances = {}, accountsMaster 
     }
   }
 
-  const totalAssets = liquidAssets + externalTotal;
+  const totalInvestmentAssets = investmentAssets + externalTotal;
+  const totalAssets = liquidAssets + totalInvestmentAssets;
   const netAssets = totalAssets - liabilities;
 
   return {
     liquid_assets: liquidAssets,
+    investment_assets: totalInvestmentAssets,
     liabilities,
     external_assets_total: externalTotal,
     total_assets: totalAssets,
     net_assets: netAssets,
     total_liquid_assets: liquidAssets,
     total_external_assets: externalTotal,
+    total_investment_assets: totalInvestmentAssets,
     total_liabilities: liabilities,
     total_net_assets: netAssets,
     by_type: byType
