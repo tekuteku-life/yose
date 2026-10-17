@@ -15,7 +15,7 @@ describe('js/db.js - Unit Tests', () => {
       const config = await db.getMasterConfig();
       assert.ok(config);
       assert.equal(config.schema_version, 2);
-      assert.equal(config.accounts.length, 6); // Includes acc_point
+      assert.equal(config.accounts.length, 7); // Includes acc_point and acc_investment_main
 
       const snapshot = await db.getSnapshot();
       assert.ok(snapshot);
@@ -31,13 +31,13 @@ describe('js/db.js - Unit Tests', () => {
         type: 'electronic_money',
         initial_balance: 5000,
         is_asset: true,
-        sort_order: 7,
+        sort_order: 8,
         is_archived: false
       });
       await db.saveMasterConfig(config);
 
       const retrieved = await db.getMasterConfig();
-      assert.equal(retrieved.accounts.length, 7);
+      assert.equal(retrieved.accounts.length, 8);
       assert.ok(retrieved.accounts.some(a => a.id === 'acc_paypay'));
     });
 

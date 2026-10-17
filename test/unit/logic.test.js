@@ -499,6 +499,19 @@ describe('js/logic.js - Unit Tests', () => {
       assert.deepEqual(parseHolidayTextOrCsv(null), []);
       assert.deepEqual(parseHolidayTextOrCsv('no dates here at all'), []);
     });
+
+    it('groupHolidaysByYear groups dates by year in sorted order', async () => {
+      const { groupHolidaysByYear } = await import('../../js/logic.js');
+      const holidays = [
+        '2024-01-01', '2024-05-03', '2025-01-01', '2025-11-23', '2026-01-01', 'invalid'
+      ];
+      const groups = groupHolidaysByYear(holidays);
+      assert.deepEqual(Object.keys(groups).sort(), ['2024', '2025', '2026']);
+      assert.deepEqual(groups['2024'], ['2024-01-01', '2024-05-03']);
+      assert.deepEqual(groups['2025'], ['2025-01-01', '2025-11-23']);
+      assert.deepEqual(groups['2026'], ['2026-01-01']);
+      assert.deepEqual(groupHolidaysByYear(null), {});
+    });
   });
 
   describe('createPointPaymentTransactions', () => {
@@ -759,6 +772,37 @@ describe('js/logic.js - Unit Tests', () => {
       assert.equal(res.net_assets, 215000);
       // by_type.other has acc_custom_type (100,000) + ext_unknown_type (50,000) = 150,000
       assert.equal(res.by_type.other, 150000);
+    });
+
+    it('accurately computes summary when investment/asset accounts are integrated in master accounts', () => {
+      const balances = {
+        acc_wallet: 15000,
+        acc_bank_main: 1000000,
+        acc_nisa_katsu: 800000,
+        acc_nisa_momo: 700000,
+        acc_card_main: -30000
+      };
+      const accounts = [
+        { id: 'acc_wallet', type: 'cash', is_asset: true },
+        { id: 'acc_bank_main', type: 'bank', is_asset: true },
+        { id: 'acc_nisa_katsu', type: 'investment', is_asset: true },
+        { id: 'acc_nisa_momo', type: 'asset', is_asset: true },
+        { id: 'acc_card_main', type: 'credit_card', is_asset: false }
+      ];
+
+      // No externalAssets needed!
+      const res = calculateTotalAssetSummary(balances, accounts);
+
+      // Liquid: 1,015,000
+      assert.equal(res.liquid_assets, 1015000);
+      // Investment / asset: 800,000 + 700,000 = 1,500,000
+      assert.equal(res.investment_assets, 1500000);
+      // Liabilities: 30,000
+      assert.equal(res.liabilities, 30000);
+      // Total assets: 1,015,000 + 1,500,000 = 2,515,000
+      assert.equal(res.total_assets, 2515000);
+      // Net assets: 2,515,000 - 30,000 = 2,485,000
+      assert.equal(res.net_assets, 2485000);
     });
   });
 

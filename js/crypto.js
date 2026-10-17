@@ -293,3 +293,270 @@ export async function verifySignedRequest(
   return { valid: true };
 }
 
+/**
+ * Generate 256-bit AES-GCM Database Master Key (DMK)
+ * @returns {Promise<CryptoKey>}
+ */
+export async function generateDatabaseMasterKey() {
+  const subtle = getSubtle();
+  return await subtle.generateKey(
+    { name: 'AES-GCM', length: 256 },
+    true,
+    ['encrypt', 'decrypt']
+  );
+}
+
+/**
+ * Export raw symmetric key bytes
+ */
+export async function exportKeyRaw(key) {
+  const subtle = getSubtle();
+  const raw = await subtle.exportKey('raw', key);
+  return new Uint8Array(raw);
+}
+
+/**
+ * Import raw symmetric key bytes as AES-GCM CryptoKey
+ */
+export async function importAesKeyRaw(rawBytes) {
+  const subtle = getSubtle();
+  return await subtle.importKey(
+    'raw',
+    rawBytes,
+    { name: 'AES-GCM' },
+    true,
+    ['encrypt', 'decrypt']
+  );
+}
+
+/**
+ * Encrypt arbitrary JS object at-rest with AES-GCM-256
+ * @param {object} obj
+ * @param {CryptoKey} aesKey
+ * @returns {Promise<{ ciphertext: string, iv: string }>}
+ */
+export async function encryptObject(obj, aesKey) {
+  const subtle = getSubtle();
+  const iv = getRandomValues(new Uint8Array(12));
+  const plaintextBytes = new TextEncoder().encode(JSON.stringify(obj));
+  const encryptedBuffer = await subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    aesKey,
+    plaintextBytes
+  );
+
+  return {
+    ciphertext: bytesToBase64(encryptedBuffer),
+    iv: bytesToBase64(iv)
+  };
+}
+
+/**
+ * Decrypt at-rest AES-GCM-256 object
+ * @param {{ ciphertext: string, iv: string }} encryptedData
+ * @param {CryptoKey} aesKey
+ * @returns {Promise<any>}
+ */
+export async function decryptObject(encryptedData, aesKey) {
+  if (!encryptedData || !encryptedData.ciphertext || !encryptedData.iv) {
+    throw new Error('Invalid encrypted object payload');
+  }
+  const subtle = getSubtle();
+  const ivBytes = base64ToBytes(encryptedData.iv);
+  const cipherBytes = base64ToBytes(encryptedData.ciphertext);
+
+  try {
+    const decryptedBuffer = await subtle.decrypt(
+      { name: 'AES-GCM', iv: ivBytes },
+      aesKey,
+      cipherBytes
+    );
+    const jsonStr = new TextDecoder().decode(decryptedBuffer);
+    return JSON.parse(jsonStr);
+  } catch (err) {
+    throw new Error('At-rest decryption failed: Authentication tag mismatch or corrupted data');
+  }
+}
+
+/**
+ * Wrap both DMK and Ed25519 Private Key using user PIN
+ * @param {{ dmkRaw: Uint8Array, privateKeyPkcs8: Uint8Array }} keys
+ * @param {string} pin
+ * @returns {Promise<{ ciphertext: string, iv: string, salt: string }>}
+ */
+export async function encryptMasterKeysWithPin({ dmkRaw, privateKeyPkcs8 }, pin) {
+  const salt = getRandomValues(new Uint8Array(16));
+  const iv = getRandomValues(new Uint8Array(12));
+  const pinKey = await deriveKeyFromPin(pin, salt);
+
+  const payload = JSON.stringify({
+    dmk: bytesToBase64(dmkRaw),
+    privateKey: bytesToBase64(privateKeyPkcs8)
+  });
+
+  const subtle = getSubtle();
+  const encryptedBuffer = await subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    pinKey,
+    new TextEncoder().encode(payload)
+  );
+
+  return {
+    ciphertext: bytesToBase64(encryptedBuffer),
+    iv: bytesToBase64(iv),
+    salt: bytesToBase64(salt)
+  };
+}
+
+/**
+ * Unwrap DMK and Ed25519 Private Key using user PIN
+ * @param {{ ciphertext: string, iv: string, salt: string }} wrappedKeys
+ * @param {string} pin
+ * @returns {Promise<{ dmkRaw: Uint8Array, privateKeyPkcs8: Uint8Array }>}
+ */
+export async function decryptMasterKeysWithPin(wrappedKeys, pin) {
+  const { ciphertext, iv, salt } = wrappedKeys;
+  const saltBytes = base64ToBytes(salt);
+  const ivBytes = base64ToBytes(iv);
+  const cipherBytes = base64ToBytes(ciphertext);
+
+  const pinKey = await deriveKeyFromPin(pin, saltBytes);
+  const subtle = getSubtle();
+
+  try {
+    const decryptedBuffer = await subtle.decrypt(
+      { name: 'AES-GCM', iv: ivBytes },
+      pinKey,
+      cipherBytes
+    );
+    const jsonStr = new TextDecoder().decode(decryptedBuffer);
+    const parsed = JSON.parse(jsonStr);
+    return {
+      dmkRaw: base64ToBytes(parsed.dmk),
+      privateKeyPkcs8: base64ToBytes(parsed.privateKey)
+    };
+  } catch (err) {
+    throw new Error('PIN decryption failed: Invalid PIN or corrupted key data');
+  }
+}
+
+/**
+ * Check if WebAuthn is supported in environment
+ */
+export function isWebAuthnSupported(nav = (typeof globalThis !== 'undefined' ? globalThis.navigator : null)) {
+  return typeof nav?.credentials?.create === 'function' && typeof nav?.credentials?.get === 'function';
+}
+
+/**
+ * Register WebAuthn Credential
+ * @param {string} [username]
+ * @param {object} [nav]
+ * @returns {Promise<{ credentialId: string }>}
+ */
+export async function registerWebAuthnCredential(username = 'よせあつめ家計簿', nav = (typeof globalThis !== 'undefined' ? globalThis.navigator : null)) {
+  if (!isWebAuthnSupported(nav)) {
+    throw new Error('WebAuthn is not supported in this environment');
+  }
+
+  const challenge = getRandomValues(new Uint8Array(32));
+  const userId = getRandomValues(new Uint8Array(16));
+
+  const cred = await nav.credentials.create({
+    publicKey: {
+      challenge,
+      rp: { name: 'よせあつめ家計簿' },
+      user: {
+        id: userId,
+        name: username,
+        displayName: username
+      },
+      pubKeyCredParams: [
+        { type: 'public-key', alg: -7 },   // ES256
+        { type: 'public-key', alg: -257 }  // RS256
+      ],
+      authenticatorSelection: {
+        userVerification: 'preferred',
+        residentKey: 'preferred'
+      },
+      timeout: 60000
+    }
+  });
+
+  if (!cred || !cred.rawId) {
+    throw new Error('Failed to create WebAuthn credential');
+  }
+
+  return {
+    credentialId: bytesToBase64(new Uint8Array(cred.rawId))
+  };
+}
+
+/**
+ * Authenticate with existing WebAuthn Credential
+ * @param {string} credentialIdBase64
+ * @param {object} [nav]
+ * @returns {Promise<{ success: boolean, credentialId: string }>}
+ */
+export async function authenticateWithWebAuthn(credentialIdBase64, nav = (typeof globalThis !== 'undefined' ? globalThis.navigator : null)) {
+  if (!isWebAuthnSupported(nav)) {
+    throw new Error('WebAuthn is not supported in this environment');
+  }
+
+  const challenge = getRandomValues(new Uint8Array(32));
+  let credIdBytes;
+  try {
+    credIdBytes = base64ToBytes(credentialIdBase64);
+  } catch {
+    credIdBytes = new TextEncoder().encode(credentialIdBase64 || '');
+  }
+
+  const assertion = await nav.credentials.get({
+    publicKey: {
+      challenge,
+      allowCredentials: [
+        {
+          id: credIdBytes,
+          type: 'public-key'
+        }
+      ],
+      userVerification: 'preferred',
+      timeout: 60000
+    }
+  });
+
+  if (!assertion) {
+    throw new Error('WebAuthn authentication failed: No assertion returned');
+  }
+
+  return {
+    success: true,
+    credentialId: credentialIdBase64
+  };
+}
+
+/**
+ * In-Memory Zero-Trust Active Session
+ */
+let activeSession = null;
+
+export function setActiveSession(dmk, privateKey) {
+  activeSession = {
+    dmk,
+    privateKey,
+    unlockedAt: Date.now()
+  };
+}
+
+export function getActiveSession() {
+  return activeSession;
+}
+
+export function hasActiveSession() {
+  return activeSession !== null && !!activeSession.dmk;
+}
+
+export function clearActiveSession() {
+  activeSession = null;
+}
+
+

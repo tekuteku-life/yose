@@ -135,7 +135,7 @@ describe('gas/Code.gs - Unit Tests', () => {
       assert.match(res.error, /replay attack/);
     });
 
-    it('rejects when no public keys are registered on server', async () => {
+    it('rejects when no public keys are registered on server for normal actions', async () => {
       // No USER_PUBLIC_KEYS set
       const now = Date.now();
       const envelope = await createSignedRequest('push_diff', {}, keyPair.privateKey, now);
@@ -143,6 +143,47 @@ describe('gas/Code.gs - Unit Tests', () => {
       const res = gas.doPost({ postData: { contents: JSON.stringify(envelope) } });
       assert.equal(res.success, false);
       assert.match(res.error, /No public keys registered/);
+    });
+
+    it('successfully registers initial public key on unconfigured server with valid self-signature', async () => {
+      // Ensure no USER_PUBLIC_KEYS is set
+      globalThis.PropertiesService.getScriptProperties().deleteProperty('USER_PUBLIC_KEYS');
+
+      const now = Date.now();
+      const envelope = await createSignedRequest('register_initial_key', { publicKey: pubKeyBase64 }, keyPair.privateKey, now);
+
+      const res = gas.doPost({ postData: { contents: JSON.stringify(envelope) } });
+      assert.equal(res.success, true);
+      assert.match(res.message, /successfully registered/i);
+
+      // Verify it was saved to script properties
+      const saved = globalThis.PropertiesService.getScriptProperties().getProperty('USER_PUBLIC_KEYS');
+      assert.ok(saved);
+      assert.ok(saved.includes(pubKeyBase64));
+
+      // Attempting to register again should be rejected (write-once)
+      const resAgain = gas.doPost({ postData: { contents: JSON.stringify(envelope) } });
+      assert.equal(resAgain.success, false);
+      assert.match(resAgain.error, /already configured/i);
+    });
+
+    it('rejects register_initial_key if self-signature does not match or payload is invalid', async () => {
+      globalThis.PropertiesService.getScriptProperties().deleteProperty('USER_PUBLIC_KEYS');
+
+      const otherKp = await generateEd25519KeyPair();
+      const otherPub = await exportPublicKeyBase64(otherKp.publicKey);
+
+      // Sign with our key, but claim publicKey is otherKp's
+      const envelope = await createSignedRequest('register_initial_key', { publicKey: otherPub }, keyPair.privateKey, Date.now());
+      const res = gas.doPost({ postData: { contents: JSON.stringify(envelope) } });
+      assert.equal(res.success, false);
+      assert.match(res.error, /verification failed/i);
+
+      // Missing publicKey in payload
+      const noKeyEnv = await createSignedRequest('register_initial_key', {}, keyPair.privateKey, Date.now());
+      const resMissing = gas.doPost({ postData: { contents: JSON.stringify(noKeyEnv) } });
+      assert.equal(resMissing.success, false);
+      assert.match(resMissing.error, /Missing publicKey/i);
     });
 
     it('rejects request with signature from unregistered key', async () => {

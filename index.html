@@ -13,6 +13,45 @@
 </head>
 <body>
 
+  <!-- ==================== AUTH & UNLOCK SCREEN ==================== -->
+  <div id="auth-screen" class="auth-screen-overlay">
+    <div class="auth-card">
+      <div style="font-size: 2.5rem; margin-bottom: 8px;">🔐</div>
+      <h2 id="auth-title">よせあつめ家計簿</h2>
+      <p id="auth-description">安全のためデータは暗号化されています。<br>生体認証（Passkey）またはPINで解除してください。</p>
+
+      <div id="auth-webauthn-container">
+        <button type="button" id="btn-auth-webauthn" class="btn-webauthn">
+          <span>👆 生体認証 / Passkeyで解除</span>
+        </button>
+      </div>
+
+      <div id="auth-pin-container" style="margin-top: 16px;">
+        <div class="form-group">
+          <label class="form-label" for="auth-pin-input" style="text-align: left;">PINコードで解除 (バックアップ)</label>
+          <input type="password" id="auth-pin-input" class="form-control" placeholder="PINコードを入力">
+        </div>
+        <button type="button" id="btn-auth-pin" class="btn btn-primary btn-block" style="margin-top: 8px;">
+          🔓 ロック解除
+        </button>
+      </div>
+
+      <div id="auth-setup-container" style="display: none; margin-top: 16px;">
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px;">
+          初回セットアップ: データ保護用のPINコード（4桁以上）を設定してください。同時にWebAuthnおよびEd25519通信鍵が生成されます。
+        </p>
+        <div class="form-group">
+          <input type="password" id="auth-setup-pin" class="form-control" placeholder="新しいPINコード (4桁以上)">
+        </div>
+        <button type="button" id="btn-auth-setup" class="btn btn-primary btn-block" style="margin-top: 8px;">
+          🚀 暗号化鍵の初期生成と開始
+        </button>
+      </div>
+
+      <div id="auth-error-msg" style="color: var(--danger); font-size: 0.85rem; margin-top: 12px; display: none;"></div>
+    </div>
+  </div>
+
   <!-- App Header -->
   <header>
     <div class="brand">
@@ -363,35 +402,51 @@
       <div class="card">
         <div class="card-title">
           <span>🔐 認証・Ed25519鍵管理</span>
-        </div>
-        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-          ブラウザ内でEd25519鍵ペアを生成し、公開鍵のみをGASの <code>USER_PUBLIC_KEYS</code> に登録します。秘密鍵は端末内に保護されます。
-        </p>
-        <div class="form-group">
-          <label class="form-label">登録用 Ed25519 公開鍵 (Base64)</label>
-          <textarea id="txt-public-key" class="form-control" rows="2" readonly></textarea>
-        </div>
-        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
-          <button id="btn-generate-key" class="btn btn-secondary btn-sm">新しい鍵ペアを生成</button>
-          <button id="btn-copy-public-key" class="btn btn-secondary btn-sm">公開鍵をコピー</button>
+          <span id="key-configured-badge" class="badge badge-success" style="display: none;">初期設定済み</span>
         </div>
 
-        <!-- PIN Protection -->
-        <div style="border-top: 1px solid var(--border); padding-top: 12px;">
-          <div id="pin-status-banner" style="margin-bottom: 12px;"></div>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label" for="input-pin">秘密鍵保護 PIN (4桁以上)</label>
-              <input type="password" id="input-pin" class="form-control" placeholder="PINコード">
-            </div>
-            <div class="form-group" style="display: flex; align-items: flex-end;">
-              <button id="btn-save-pin" class="btn btn-primary btn-block">PINで秘密鍵を保護</button>
-            </div>
+        <div id="key-configured-summary" style="display: none; margin-bottom: 12px;">
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px;">
+            認証鍵（Ed25519 + WebAuthn + At-Rest AES-GCM）は正常に設定されています。
+          </p>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button id="btn-register-initial-key-gas" class="btn btn-primary btn-sm">⚡ GASへ公開鍵を一発自動登録</button>
+            <button id="btn-toggle-key-details" class="btn btn-secondary btn-sm">⚙️ 鍵管理の詳細を表示</button>
           </div>
-          <div id="pin-action-buttons" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
-            <button id="btn-unlock-pin" class="btn btn-success btn-sm" style="display: none;">🔓 PINでロック解除</button>
-            <button id="btn-lock-now" class="btn btn-secondary btn-sm" style="display: none;">🔒 今すぐ再ロック</button>
-            <button id="btn-remove-pin" class="btn btn-danger btn-sm" style="display: none;">PIN保護を解除</button>
+        </div>
+
+        <div id="key-mgmt-details">
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+            ブラウザ内でEd25519鍵ペアを生成し、公開鍵のみをGASの <code>USER_PUBLIC_KEYS</code> に登録します。秘密鍵は端末内に保護されます。
+          </p>
+          <div class="form-group">
+            <label class="form-label">登録用 Ed25519 公開鍵 (Base64)</label>
+            <textarea id="txt-public-key" class="form-control" rows="2" readonly></textarea>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+            <button id="btn-generate-key" class="btn btn-secondary btn-sm">新しい鍵ペアを生成</button>
+            <button id="btn-copy-public-key" class="btn btn-secondary btn-sm">公開鍵をコピー</button>
+            <button id="btn-register-key-gas-direct" class="btn btn-primary btn-sm">⚡ GASへワンクリック登録</button>
+          </div>
+
+          <!-- PIN Protection -->
+          <div style="border-top: 1px solid var(--border); padding-top: 12px;">
+            <div id="pin-status-banner" style="margin-bottom: 12px;"></div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="input-pin">秘密鍵保護 PIN (4桁以上)</label>
+                <input type="password" id="input-pin" class="form-control" placeholder="PINコード">
+              </div>
+              <div class="form-group" style="display: flex; align-items: flex-end;">
+                <button id="btn-save-pin" class="btn btn-primary btn-block">PINで秘密鍵を保護</button>
+              </div>
+            </div>
+            <div id="pin-action-buttons" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
+              <button id="btn-register-webauthn" class="btn btn-secondary btn-sm">👆 WebAuthn (Passkey) を再登録</button>
+              <button id="btn-unlock-pin" class="btn btn-success btn-sm" style="display: none;">🔓 PINでロック解除</button>
+              <button id="btn-lock-now" class="btn btn-secondary btn-sm" style="display: none;">🔒 今すぐ再ロック</button>
+              <button id="btn-remove-pin" class="btn btn-danger btn-sm" style="display: none;">PIN保護を解除</button>
+            </div>
           </div>
         </div>
       </div>
@@ -401,15 +456,35 @@
         <div class="card-title">
           <span>☁️ Google Apps Script (GAS) 連携</span>
         </div>
-        <div class="form-group">
-          <label class="form-label" for="input-gas-url">GAS Web App URL</label>
-          <input type="url" id="input-gas-url" class="form-control" placeholder="https://script.google.com/macros/s/.../exec">
+
+        <details id="details-gas-url" class="holiday-year-group" style="margin-bottom: 16px;">
+          <summary><span>⚙️ GAS Web App URL 設定</span><span id="gas-url-status-badge" class="badge badge-success">設定済</span></summary>
+          <div class="holiday-year-content">
+            <div class="form-group" style="margin-bottom: 8px;">
+              <input type="url" id="input-gas-url" class="form-control" placeholder="https://script.google.com/macros/s/.../exec">
+            </div>
+            <button id="btn-save-gas-url" class="btn btn-secondary btn-sm">URLを保存</button>
+          </div>
+        </details>
+
+        <!-- Daily Normal Operations -->
+        <div style="margin-bottom: 12px;">
+          <button id="btn-manual-sync" class="btn btn-primary btn-block" style="padding: 12px; font-weight: 700;">
+            🔄 今すぐ差分同期 (push_diff)
+          </button>
         </div>
-        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <button id="btn-save-gas-url" class="btn btn-secondary">URLを保存</button>
-          <button id="btn-manual-sync" class="btn btn-primary">🔄 今すぐ差分同期 (push_diff)</button>
-          <button id="btn-sync-master" class="btn btn-secondary">📤 設定マスタをGASへ送信 (update_master)</button>
-          <button id="btn-fetch-remote" class="btn btn-secondary">📥 リモート最新状態を取得 (fetch_state)</button>
+
+        <hr class="divider">
+
+        <!-- Maintenance Operations -->
+        <div>
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;">
+            ⚠️ 手動メンテナンス操作（通常は上記の差分同期をご利用ください）
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button id="btn-sync-master" class="btn btn-secondary btn-sm">📤 設定マスタをGASへ送信 (update_master)</button>
+            <button id="btn-fetch-remote" class="btn btn-secondary btn-sm">📥 リモート最新状態を取得 (fetch_state)</button>
+          </div>
         </div>
       </div>
 
@@ -438,13 +513,12 @@
           <button type="button" class="master-tab-btn" data-master="categories">📁 費目・内訳</button>
           <button type="button" class="master-tab-btn" data-master="recurring">📅 定期予定</button>
           <button type="button" class="master-tab-btn" data-master="holidays">🎌 祝日</button>
-          <button type="button" class="master-tab-btn" data-master="assets">📈 外部資産</button>
         </div>
 
         <!-- Panel: Accounts -->
         <div id="panel-master-accounts" class="master-panel active">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="font-weight: 600; font-size: 0.9rem;">登録口座一覧</span>
+            <span style="font-weight: 600; font-size: 0.9rem;">登録口座一覧 (現金・銀行・証券・クレカ)</span>
             <button id="btn-add-account" class="btn btn-primary btn-sm">+ 新規口座を追加</button>
           </div>
           <div id="master-accounts-list"></div>
@@ -476,16 +550,7 @@
             <button id="btn-import-holidays-preset" class="btn btn-secondary btn-sm">🎌 日本の祝日を一括インポート (内閣府データ)</button>
             <button id="btn-open-holiday-modal" class="btn btn-secondary btn-sm">📂 CSV/テキストからインポート</button>
           </div>
-          <div id="master-holidays-list" class="subcat-list"></div>
-        </div>
-
-        <!-- Panel: External Assets -->
-        <div id="panel-master-assets" class="master-panel">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="font-weight: 600; font-size: 0.9rem;">保有外部資産一覧</span>
-            <button id="btn-add-asset" class="btn btn-primary btn-sm">+ 資産を追加</button>
-          </div>
-          <div id="master-assets-list"></div>
+          <div id="master-holidays-list"></div>
         </div>
 
         <!-- JSON View / Edit Accordion -->

@@ -381,6 +381,17 @@ function doPost(e) {
       });
     }
 
+    // Fast path: Write-once protection for register_initial_key
+    if (action === 'register_initial_key') {
+      const existingKeys = getRegisteredPublicKeys();
+      if (existingKeys.length > 0) {
+        return createResponse({
+          success: false,
+          error: 'Public keys already configured on server'
+        });
+      }
+    }
+
     if (typeof CacheService !== 'undefined' && signature) {
       try {
         const cache = CacheService.getScriptCache();
@@ -398,6 +409,43 @@ function doPost(e) {
 
     // 2. Ed25519 Signature Verification
     const publicKeys = getRegisteredPublicKeys();
+
+    if (action === 'register_initial_key') {
+      if (publicKeys.length > 0) {
+        return createResponse({
+          success: false,
+          error: 'Public keys already configured on server'
+        });
+      }
+      if (!payload || !payload.publicKey) {
+        return createResponse({
+          success: false,
+          error: 'Missing publicKey in payload'
+        });
+      }
+
+      const signString = JSON.stringify({ action, timestamp, payload });
+      const msgBytes = (typeof Utilities !== 'undefined' && Utilities.newBlob)
+        ? new Uint8Array(Utilities.newBlob(signString).getBytes().map(b => (b < 0 ? b + 256 : b)))
+        : new TextEncoder().encode(signString);
+
+      const sigBytes = base64ToUint8Array(signature);
+      const candidateKeyBytes = base64ToUint8Array(payload.publicKey);
+
+      if (!verifyEd25519(candidateKeyBytes, sigBytes, msgBytes)) {
+        return createResponse({
+          success: false,
+          error: 'Signature verification failed: Self-signature does not match candidate key'
+        });
+      }
+
+      setScriptProp('USER_PUBLIC_KEYS', JSON.stringify([payload.publicKey]));
+      return createResponse({
+        success: true,
+        message: 'Public key successfully registered on GAS'
+      });
+    }
+
     if (publicKeys.length === 0) {
       return createResponse({
         success: false,
