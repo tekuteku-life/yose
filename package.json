@@ -1,22 +1,24 @@
 {
-  "name": "yose",
-  "version": "1.0.0",
-  "description": "よせあつめ家計簿 - 脱ベンダーロックイン・複式簿記ライクなPWA家計・資産管理システム",
-  "type": "module",
-  "scripts": {
-    "test": "node --test --experimental-test-coverage test/unit/*.test.js test/integration/*.test.js test/system/*.test.js",
-    "test:unit": "node --test test/unit/*.test.js",
-    "test:integration": "node --test test/integration/*.test.js",
-    "test:system": "node --test test/system/*.test.js",
-    "setup:gas": "node scripts/setup_gas.js"
-  },
-  "keywords": [
-    "kakeibo",
-    "pwa",
-    "gas",
-    "ed25519"
-  ],
-  "author": "",
-  "license": "MIT"
+	"name": "yose",
+	"version": "1.0.0",
+	"description": "よせあつめ家計簿 - 脱ベンダーロックイン・複式簿記ライクなPWA家計・資産管理システム",
+	"type": "module",
+	"scripts": {
+		"lint:indent": "node scripts/check_indent.js",
+		"lint": "npm run lint:indent",
+		"test": "npm run lint:indent && node --test --experimental-test-coverage test/unit/*.test.js test/integration/*.test.js test/system/*.test.js",
+		"test:unit": "node --test test/unit/*.test.js",
+		"test:integration": "node --test test/integration/*.test.js",
+		"test:system": "node --test test/system/*.test.js",
+		"setup:gas": "node scripts/setup_gas.js"
+	},
+	"keywords": [
+		"kakeibo",
+		"pwa",
+		"gas",
+		"ed25519"
+	],
+	"author": "",
+	"license": "MIT"
 }
 

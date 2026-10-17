@@ -1,797 +1,797 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#2563eb">
-  <title>よせあつめ家計簿</title>
-  <link rel="manifest" href="manifest.json">
-  <link rel="icon" type="image/svg+xml" href="icon.svg">
-  <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="css/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+	<meta name="theme-color" content="#2563eb">
+	<title>よせあつめ家計簿</title>
+	<link rel="manifest" href="manifest.json">
+	<link rel="icon" type="image/svg+xml" href="icon.svg">
+	<link rel="apple-touch-icon" href="icon-192.png">
+	<link rel="stylesheet" href="css/style.css">
+	<script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
 </head>
 <body>
 
-  <!-- ==================== AUTH & UNLOCK SCREEN ==================== -->
-  <div id="auth-screen" class="auth-screen-overlay">
-    <div class="auth-card">
-      <div style="font-size: 2.5rem; margin-bottom: 8px;">🔐</div>
-      <h2 id="auth-title">よせあつめ家計簿</h2>
-      <p id="auth-description">安全のためデータは暗号化されています。<br>生体認証（Passkey）またはPINで解除してください。</p>
-
-      <div id="auth-webauthn-container">
-        <button type="button" id="btn-auth-webauthn" class="btn-webauthn">
-          <span>👆 生体認証 / Passkeyで解除</span>
-        </button>
-      </div>
-
-      <div id="auth-pin-container" style="margin-top: 16px;">
-        <div class="form-group">
-          <label class="form-label" for="auth-pin-input" style="text-align: left;">PINコードで解除 (バックアップ)</label>
-          <input type="password" id="auth-pin-input" class="form-control" placeholder="PINコードを入力">
-        </div>
-        <button type="button" id="btn-auth-pin" class="btn btn-primary btn-block" style="margin-top: 8px;">
-          🔓 ロック解除
-        </button>
-      </div>
-
-      <div id="auth-setup-container" style="display: none; margin-top: 16px;">
-        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px;">
-          初回セットアップ: データ保護用のPINコード（4桁以上）を設定してください。同時にWebAuthnおよびEd25519通信鍵が生成されます。
-        </p>
-        <div class="form-group">
-          <input type="password" id="auth-setup-pin" class="form-control" placeholder="新しいPINコード (4桁以上)">
-        </div>
-        <button type="button" id="btn-auth-setup" class="btn btn-primary btn-block" style="margin-top: 8px;">
-          🚀 暗号化鍵の初期生成と開始
-        </button>
-      </div>
-
-      <div id="auth-error-msg" style="color: var(--danger); font-size: 0.85rem; margin-top: 12px; display: none;"></div>
-    </div>
-  </div>
-
-  <!-- App Header -->
-  <header>
-    <div class="brand">
-      <h1>よせあつめ家計簿</h1>
-    </div>
-    <div class="header-status">
-      <span id="network-badge" class="badge badge-success">Online</span>
-      <span id="sync-badge" class="badge badge-info">未同期: 0件</span>
-      <button id="btn-header-sync" class="btn btn-secondary btn-sm" title="今すぐ同期">🔄</button>
-    </div>
-  </header>
-
-  <!-- Top Navigation Tabs -->
-  <nav class="nav-tabs">
-    <button class="tab-btn active" data-tab="tab-input">📝 入力</button>
-    <button class="tab-btn" data-tab="tab-summary">📊 集計・グラフ</button>
-    <button class="tab-btn" data-tab="tab-settings">⚙️ 設定・マスタ</button>
-  </nav>
-
-  <main class="container">
-
-    <!-- ==================== TAB 1: INPUT ==================== -->
-    <section id="tab-input" class="tab-panel active">
-      <div class="card">
-        <!-- Input Mode Switcher -->
-        <div class="mode-tabs">
-          <button type="button" class="mode-tab-btn active" data-mode="normal">通常入力</button>
-          <button type="button" class="mode-tab-btn" data-mode="advance">立替払い</button>
-          <button type="button" class="mode-tab-btn" data-mode="repay">立替返済・回収</button>
-          <button type="button" class="mode-tab-btn" data-mode="prepaid">前払分割</button>
-          <button type="button" class="mode-tab-btn" data-mode="point">ポイント併用</button>
-        </div>
-
-        <form id="tx-form">
-          <!-- Common Date Field -->
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label" for="input-date">日付</label>
-              <input type="date" id="input-date" class="form-control" required>
-            </div>
-            <!-- Type Selector -->
-            <div class="form-group" id="group-type">
-              <label class="form-label" for="input-type">取引種別</label>
-              <select id="input-type" class="form-control">
-                <option value="expense">支出</option>
-                <option value="income">収入</option>
-                <option value="transfer">口座振替</option>
-                <option value="advance">立替払い</option>
-                <option value="repay">立替返済・回収</option>
-                <option value="prepaid">前払費用・年払い分割</option>
-                <option value="point">ポイント払い・相殺</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Normal / Single Amount Field with Tax Calc Trigger -->
-          <div class="form-group" id="group-normal-amount">
-            <label class="form-label" for="input-amount">
-              金額 (円)
-              <button type="button" id="btn-open-tax-calc" class="btn btn-secondary btn-sm" style="float: right;">🧮 税抜計算</button>
-            </label>
-            <input type="number" id="input-amount" class="form-control" placeholder="例: 1500" min="0" step="1">
-          </div>
-
-          <!-- Advance Split Fields (For Advance Mode) -->
-          <div id="advance-fields" style="display: none;">
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label" for="input-self-amount">自己負担額 (支出)</label>
-                <input type="number" id="input-self-amount" class="form-control" placeholder="例: 3000" min="0" step="1">
-              </div>
-              <div class="form-group">
-                <label class="form-label" for="input-adv-amount">相手立替額 (立替金振替)</label>
-                <input type="number" id="input-adv-amount" class="form-control" placeholder="例: 3000" min="0" step="1">
-              </div>
-            </div>
-          </div>
-
-          <!-- Prepaid Amortization Fields (For Prepaid Mode) -->
-          <div id="prepaid-fields" style="display: none;">
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label" for="input-prepaid-total">一括支払総額 (円)</label>
-                <input type="number" id="input-prepaid-total" class="form-control" placeholder="例: 12000" min="1" step="1">
-              </div>
-              <div class="form-group">
-                <label class="form-label" for="input-prepaid-months">分割月数</label>
-                <input type="number" id="input-prepaid-months" class="form-control" value="12" min="1" max="60" step="1">
-              </div>
-            </div>
-          </div>
-
-          <!-- Repay Amount Field (For Repay Mode) -->
-          <div id="repay-fields" style="display: none;">
-            <div class="form-group">
-              <label class="form-label" for="input-repay-amount">回収額 (円)</label>
-              <input type="number" id="input-repay-amount" class="form-control" placeholder="例: 3000" min="1" step="1">
-            </div>
-          </div>
-
-          <!-- Point Payment Fields (For Point Mode) -->
-          <div id="point-fields" style="display: none;">
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label" for="input-point-total">購入総額 (円)</label>
-                <input type="number" id="input-point-total" class="form-control" placeholder="例: 5000" min="0" step="1">
-              </div>
-              <div class="form-group">
-                <label class="form-label" for="input-point-used">ポイント利用額 (pt)</label>
-                <input type="number" id="input-point-used" class="form-control" placeholder="例: 1000" min="0" step="1">
-              </div>
-            </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label" for="select-point-account">充当元ポイント口座 (任意)</label>
-                <select id="select-point-account" class="form-control">
-                  <option value="">ポイント相殺として計上（口座指定なし）</option>
-                </select>
-              </div>
-              <div class="form-group" style="display: flex; flex-direction: column; justify-content: flex-end;">
-                <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 4px;">実質決済額 (自己負担):</div>
-                <div id="display-point-self-amount" style="font-size: 1.15rem; font-weight: 700; color: var(--primary);">¥0</div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Account Selectors -->
-          <div class="form-row">
-            <div class="form-group" id="group-account">
-              <label class="form-label" id="label-account" for="select-account">決済口座</label>
-              <select id="select-account" class="form-control" required></select>
-            </div>
-            <div class="form-group" id="group-to-account" style="display: none;">
-              <label class="form-label" for="select-to-account">振替先口座</label>
-              <select id="select-to-account" class="form-control"></select>
-            </div>
-          </div>
-
-          <!-- Category Selectors (Accounting vs Actual) -->
-          <div id="category-selection-container">
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label" for="select-category">計上大項目（予算・集計用）</label>
-                <select id="select-category" class="form-control"></select>
-              </div>
-              <div class="form-group">
-                <label class="form-label" for="select-subcategory">計中項目</label>
-                <select id="select-subcategory" class="form-control"></select>
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label style="font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
-                <input type="checkbox" id="chk-sync-actual-category" checked>
-                <span>実態分類（モノの性質）を計上分類と同じにする</span>
-              </label>
-            </div>
-
-            <div id="actual-category-container" style="display: none;">
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label" for="select-actual-category">実態大項目</label>
-                  <select id="select-actual-category" class="form-control"></select>
-                </div>
-                <div class="form-group">
-                  <label class="form-label" for="select-actual-subcategory">実態中項目</label>
-                  <select id="select-actual-subcategory" class="form-control"></select>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Memo & Tags -->
-          <div class="form-row">
-            <div class="form-group" style="flex: 2;">
-              <label class="form-label" for="input-memo">メモ</label>
-              <input type="text" id="input-memo" class="form-control" placeholder="例: スーパーで食材購入">
-            </div>
-            <div class="form-group" style="flex: 1;">
-              <label class="form-label" for="input-tags">タグ (カンマ区切り)</label>
-              <input type="text" id="input-tags" class="form-control" placeholder="例: 友人, 外食">
-            </div>
-          </div>
-
-          <button type="submit" id="btn-save-tx" class="btn btn-primary btn-block">
-            💾 登録する
-          </button>
-        </form>
-      </div>
-
-      <!-- Recent Transactions in Current Session -->
-      <div class="card">
-        <div class="card-title">
-          <span>最近の入力</span>
-        </div>
-        <div id="recent-tx-list" class="tx-list">
-          <!-- Populated by JS -->
-        </div>
-      </div>
-    </section>
-
-    <!-- ==================== TAB 2: SUMMARY & GRAPHS ==================== -->
-    <section id="tab-summary" class="tab-panel">
-      <!-- Total Assets & External Assets Summary Cards -->
-      <div class="summary-grid">
-        <div class="stat-card">
-          <div class="stat-label">総資産 (流動 + 外部)</div>
-          <div id="stat-total-assets" class="stat-value" style="color: var(--primary);">¥0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">内部流動資産 (預貯金等)</div>
-          <div id="stat-liquid-assets" class="stat-value confirmed">¥0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">保有外部資産 (株式・投信等)</div>
-          <div id="stat-external-assets" class="stat-value" style="color: #10b981;">¥0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">負債・立替金枠</div>
-          <div id="stat-liabilities" class="stat-value" style="color: var(--danger);">¥0</div>
-        </div>
-      </div>
-
-      <!-- Analytics Target & Granularity Controls -->
-      <div class="card" style="padding: 12px 16px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-          <!-- View Target: Cashflow vs Assets -->
-          <div class="segmented-control" id="control-view-target">
-            <button type="button" class="segment-btn active" data-target="cashflow">💰 収支分析</button>
-            <button type="button" class="segment-btn" data-target="assets">🏦 資産残高・推移</button>
-          </div>
-
-          <!-- Granularity: Daily vs Monthly vs Yearly -->
-          <div class="segmented-control" id="control-granularity">
-            <button type="button" class="segment-btn" data-granularity="daily">📅 日別</button>
-            <button type="button" class="segment-btn active" data-granularity="monthly">📊 月別</button>
-            <button type="button" class="segment-btn" data-granularity="yearly">📈 年別</button>
-          </div>
-        </div>
-
-        <!-- Period Navigator -->
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
-          <button id="btn-period-prev" class="btn btn-secondary btn-sm">◀ 前へ</button>
-          <span id="period-display" style="font-weight: 700; font-size: 1.15rem;">2026-10</span>
-          <button id="btn-period-next" class="btn btn-secondary btn-sm">次へ ▶</button>
-        </div>
-      </div>
-
-      <!-- Realtime Cashflow Stats (Target-dependent) -->
-      <div id="cashflow-stat-grid" class="summary-grid">
-        <div class="stat-card">
-          <div class="stat-label" id="label-stat-income">確定収入 / 予定込</div>
-          <div id="stat-income" class="stat-value income">¥0 / ¥0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label" id="label-stat-expense">確定支出 / 予定込</div>
-          <div id="stat-expense" class="stat-value expense">¥0 / ¥0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label" id="label-stat-net">収支差額 (貯蓄)</div>
-          <div id="stat-net-income" class="stat-value confirmed">¥0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label" id="label-stat-savings-rate">現在確定残高 / 予測</div>
-          <div id="stat-confirmed-balance" class="stat-value projected">¥0</div>
-        </div>
-      </div>
-
-      <!-- Interactive Chart Container -->
-      <div class="card">
-        <div class="card-title">
-          <span id="chart-title">収支推移・内訳グラフ</span>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <button id="btn-toggle-planned" class="btn btn-secondary btn-sm">予定: ON</button>
-            <button id="btn-toggle-axis" class="btn btn-secondary btn-sm">計上分類</button>
-          </div>
-        </div>
-        <div class="chart-container" style="height: 320px; position: relative;">
-          <canvas id="summary-chart"></canvas>
-          <div id="chart-fallback" style="display:none; padding: 20px; text-align: center; color: var(--text-muted);"></div>
-        </div>
-      </div>
-
-      <!-- Granular Aggregation Table & Item Changes -->
-      <div class="card">
-        <div class="card-title">
-          <span id="table-title">集計表・推移データ</span>
-        </div>
-        <div id="breakdown-table-container" style="overflow-x: auto;"></div>
-      </div>
-
-      <!-- Category Changes Breakdown -->
-      <div class="card" id="card-category-breakdown">
-        <div class="card-title">
-          <span>費目別推移・内訳</span>
-        </div>
-        <div id="category-breakdown-list" class="tx-list"></div>
-      </div>
-
-      <!-- Account Balances Breakdown -->
-      <div class="card">
-        <div class="card-title">
-          <span>内部口座別残高</span>
-        </div>
-        <div id="account-balances-list" class="tx-list"></div>
-      </div>
-
-      <!-- External Assets Breakdown -->
-      <div class="card">
-        <div class="card-title">
-          <span>保有外部資産一覧</span>
-        </div>
-        <div id="summary-external-assets-list" class="tx-list"></div>
-      </div>
-
-      <!-- Monthly Operations & Month Closing -->
-      <div class="card">
-        <div class="card-title">
-          <span>月次アクション</span>
-        </div>
-        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-          <button id="btn-generate-recurring" class="btn btn-secondary">
-            📅 当月の定期予定を一括生成
-          </button>
-          <button id="btn-close-month" class="btn btn-success">
-            🔒 この月を月締めする (GASへ送信)
-          </button>
-        </div>
-      </div>
-
-      <!-- Transactions in Selected Month -->
-      <div class="card">
-        <div class="card-title">
-          <span>当月の明細一覧</span>
-          <select id="select-status-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
-            <option value="all">すべて表示</option>
-            <option value="confirmed">確定のみ</option>
-            <option value="planned">予定のみ</option>
-          </select>
-        </div>
-        <div id="month-tx-list" class="tx-list"></div>
-      </div>
-    </section>
-
-    <!-- ==================== TAB 3: SETTINGS & MASTER ==================== -->
-    <section id="tab-settings" class="tab-panel">
-      <!-- Security & Public Key -->
-      <div class="card">
-        <div class="card-title">
-          <span>🔐 認証・Ed25519鍵管理</span>
-          <span id="key-configured-badge" class="badge badge-success" style="display: none;">初期設定済み</span>
-        </div>
-
-        <div id="key-configured-summary" style="display: none; margin-bottom: 12px;">
-          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px;">
-            認証鍵（Ed25519 + WebAuthn + At-Rest AES-GCM）は正常に設定されています。
-          </p>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <button id="btn-register-initial-key-gas" class="btn btn-primary btn-sm">⚡ GASへ公開鍵を一発自動登録</button>
-            <button id="btn-toggle-key-details" class="btn btn-secondary btn-sm">⚙️ 鍵管理の詳細を表示</button>
-          </div>
-        </div>
-
-        <div id="key-mgmt-details">
-          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-            ブラウザ内でEd25519鍵ペアを生成し、公開鍵のみをGASの <code>USER_PUBLIC_KEYS</code> に登録します。秘密鍵は端末内に保護されます。
-          </p>
-          <div class="form-group">
-            <label class="form-label">登録用 Ed25519 公開鍵 (Base64)</label>
-            <textarea id="txt-public-key" class="form-control" rows="2" readonly></textarea>
-          </div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
-            <button id="btn-generate-key" class="btn btn-secondary btn-sm">新しい鍵ペアを生成</button>
-            <button id="btn-copy-public-key" class="btn btn-secondary btn-sm">公開鍵をコピー</button>
-            <button id="btn-register-key-gas-direct" class="btn btn-primary btn-sm">⚡ GASへワンクリック登録</button>
-          </div>
-
-          <!-- PIN Protection -->
-          <div style="border-top: 1px solid var(--border); padding-top: 12px;">
-            <div id="pin-status-banner" style="margin-bottom: 12px;"></div>
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label" for="input-pin">秘密鍵保護 PIN (4桁以上)</label>
-                <input type="password" id="input-pin" class="form-control" placeholder="PINコード">
-              </div>
-              <div class="form-group" style="display: flex; align-items: flex-end;">
-                <button id="btn-save-pin" class="btn btn-primary btn-block">PINで秘密鍵を保護</button>
-              </div>
-            </div>
-            <div id="pin-action-buttons" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
-              <button id="btn-register-webauthn" class="btn btn-secondary btn-sm">👆 WebAuthn (Passkey) を再登録</button>
-              <button id="btn-unlock-pin" class="btn btn-success btn-sm" style="display: none;">🔓 PINでロック解除</button>
-              <button id="btn-lock-now" class="btn btn-secondary btn-sm" style="display: none;">🔒 今すぐ再ロック</button>
-              <button id="btn-remove-pin" class="btn btn-danger btn-sm" style="display: none;">PIN保護を解除</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- GAS Web App Sync Configuration -->
-      <div class="card">
-        <div class="card-title">
-          <span>☁️ Google Apps Script (GAS) 連携</span>
-        </div>
-
-        <details id="details-gas-url" class="holiday-year-group" style="margin-bottom: 16px;">
-          <summary><span>⚙️ GAS Web App URL 設定</span><span id="gas-url-status-badge" class="badge badge-success">設定済</span></summary>
-          <div class="holiday-year-content">
-            <div class="form-group" style="margin-bottom: 8px;">
-              <input type="url" id="input-gas-url" class="form-control" placeholder="https://script.google.com/macros/s/.../exec">
-            </div>
-            <button id="btn-save-gas-url" class="btn btn-secondary btn-sm">URLを保存</button>
-          </div>
-        </details>
-
-        <!-- Daily Normal Operations -->
-        <div style="margin-bottom: 12px;">
-          <button id="btn-manual-sync" class="btn btn-primary btn-block" style="padding: 12px; font-weight: 700;">
-            🔄 今すぐ差分同期 (push_diff)
-          </button>
-        </div>
-
-        <hr class="divider">
-
-        <!-- Maintenance Operations -->
-        <div>
-          <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;">
-            ⚠️ 手動メンテナンス操作（通常は上記の差分同期をご利用ください）
-          </div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <button id="btn-sync-master" class="btn btn-secondary btn-sm">📤 設定マスタをGASへ送信 (update_master)</button>
-            <button id="btn-fetch-remote" class="btn btn-secondary btn-sm">📥 リモート最新状態を取得 (fetch_state)</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Backup & Restore -->
-      <div class="card">
-        <div class="card-title">
-          <span>📦 バックアップ・リストア</span>
-        </div>
-        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-          <button id="btn-export-backup" class="btn btn-secondary">💾 全データJSONエクスポート</button>
-          <button id="btn-import-trigger" class="btn btn-secondary">📂 JSONインポート</button>
-          <input type="file" id="file-import-input" accept=".json" style="display: none;">
-        </div>
-      </div>
-
-      <!-- Master Config Management -->
-      <div class="card">
-        <div class="card-title">
-          <span>🏷️ マスタ管理 (口座・費目・定期・祝日)</span>
-        </div>
-        <div id="master-summary-info" style="font-size: 0.9rem; margin-bottom: 12px;"></div>
-
-        <!-- Master Sub Navigation -->
-        <div class="master-tabs">
-          <button type="button" class="master-tab-btn active" data-master="accounts">🏦 口座</button>
-          <button type="button" class="master-tab-btn" data-master="categories">📁 費目・内訳</button>
-          <button type="button" class="master-tab-btn" data-master="recurring">📅 定期予定</button>
-          <button type="button" class="master-tab-btn" data-master="holidays">🎌 祝日</button>
-        </div>
-
-        <!-- Panel: Accounts -->
-        <div id="panel-master-accounts" class="master-panel active">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="font-weight: 600; font-size: 0.9rem;">登録口座一覧 (現金・銀行・証券・クレカ)</span>
-            <button id="btn-add-account" class="btn btn-primary btn-sm">+ 新規口座を追加</button>
-          </div>
-          <div id="master-accounts-list"></div>
-        </div>
-
-        <!-- Panel: Categories -->
-        <div id="panel-master-categories" class="master-panel">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="font-weight: 600; font-size: 0.9rem;">費目・内訳一覧</span>
-            <button id="btn-add-category" class="btn btn-primary btn-sm">+ 新規大項目を追加</button>
-          </div>
-          <div id="master-categories-list"></div>
-        </div>
-
-        <!-- Panel: Recurring Rules -->
-        <div id="panel-master-recurring" class="master-panel">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="font-weight: 600; font-size: 0.9rem;">定期支出ルール一覧</span>
-            <button id="btn-add-recurring" class="btn btn-primary btn-sm">+ 定期ルールを追加</button>
-          </div>
-          <div id="master-recurring-list"></div>
-        </div>
-
-        <!-- Panel: Holidays -->
-        <div id="panel-master-holidays" class="master-panel">
-          <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap;">
-            <input type="date" id="input-new-holiday" class="form-control" style="max-width: 170px;">
-            <button id="btn-add-holiday" class="btn btn-primary btn-sm">+ 祝日を追加</button>
-            <button id="btn-import-holidays-preset" class="btn btn-secondary btn-sm">🎌 日本の祝日を一括インポート (内閣府データ)</button>
-            <button id="btn-open-holiday-modal" class="btn btn-secondary btn-sm">📂 CSV/テキストからインポート</button>
-          </div>
-          <div id="master-holidays-list"></div>
-        </div>
-
-        <!-- JSON View / Edit Accordion -->
-        <div style="border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px;">
-          <button id="btn-view-master-json" class="btn btn-secondary btn-sm">高度な設定: マスタJSONを直接表示/編集</button>
-          <div id="master-json-editor" style="display: none; margin-top: 12px;">
-            <textarea id="txt-master-json" class="form-control" rows="8"></textarea>
-            <button id="btn-save-master-json" class="btn btn-primary btn-sm" style="margin-top: 8px;">マスタJSONを更新保存</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- App Version & Update Management -->
-      <div class="card" id="card-app-update">
-        <div class="card-title">
-          <span>🔄 アプリのバージョンと更新</span>
-          <span class="badge badge-info" id="badge-current-version">v1.1.0</span>
-        </div>
-        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-          PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
-        </p>
-        <div id="update-status-msg" style="display: none; font-size: 0.85rem; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px;"></div>
-        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <button type="button" id="btn-check-app-update" class="btn btn-secondary btn-sm">🔄 更新を確認</button>
-          <button type="button" id="btn-force-cache-clear" class="btn btn-danger btn-sm">⚡ 強制再読み込み (キャッシュクリア＆更新)</button>
-        </div>
-      </div>
-    </section>
-
-  </main>
-
-  <!-- ==================== MODAL: EDIT TRANSACTION ==================== -->
-  <div id="modal-edit-tx" class="modal-overlay">
-    <div class="modal">
-      <div class="modal-header">
-        <h3 class="modal-title">✏️ 取引明細の修正</h3>
-        <button type="button" class="close-btn" id="btn-close-edit-tx">&times;</button>
-      </div>
-      <form id="edit-tx-form">
-        <input type="hidden" id="edit-tx-id">
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label" for="edit-tx-date">日付</label>
-            <input type="date" id="edit-tx-date" class="form-control" required>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="edit-tx-type">取引種別</label>
-            <select id="edit-tx-type" class="form-control">
-              <option value="expense">支出</option>
-              <option value="income">収入</option>
-              <option value="transfer">口座振替</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="edit-tx-amount">
-            金額 (円)
-            <button type="button" id="btn-edit-open-tax-calc" class="btn btn-secondary btn-sm" style="float: right;">🧮 税抜計算</button>
-          </label>
-          <input type="number" id="edit-tx-amount" class="form-control" required min="0" step="1">
-        </div>
-
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label" for="edit-tx-account">決済口座</label>
-            <select id="edit-tx-account" class="form-control" required></select>
-          </div>
-          <div class="form-group" id="edit-tx-to-account-group" style="display: none;">
-            <label class="form-label" for="edit-tx-to-account">振替先口座</label>
-            <select id="edit-tx-to-account" class="form-control"></select>
-          </div>
-        </div>
-
-        <div id="edit-tx-cat-container">
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label" for="edit-tx-category">計上大項目</label>
-              <select id="edit-tx-category" class="form-control"></select>
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="edit-tx-subcategory">計中項目</label>
-              <select id="edit-tx-subcategory" class="form-control"></select>
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label" for="edit-tx-actual-category">実態大項目</label>
-              <select id="edit-tx-actual-category" class="form-control"></select>
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="edit-tx-actual-subcategory">実態中項目</label>
-              <select id="edit-tx-actual-subcategory" class="form-control"></select>
-            </div>
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group" style="flex: 2;">
-            <label class="form-label" for="edit-tx-memo">メモ</label>
-            <input type="text" id="edit-tx-memo" class="form-control">
-          </div>
-          <div class="form-group" style="flex: 1;">
-            <label class="form-label" for="edit-tx-status">ステータス</label>
-            <select id="edit-tx-status" class="form-control">
-              <option value="confirmed">確定 (confirmed)</option>
-              <option value="planned">予定 (planned)</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="edit-tx-tags">タグ (カンマ区切り)</label>
-          <input type="text" id="edit-tx-tags" class="form-control">
-        </div>
-
-        <div style="display: flex; gap: 8px; margin-top: 16px;">
-          <button type="submit" class="btn btn-primary" style="flex: 2;">💾 修正内容を保存</button>
-          <button type="button" id="btn-edit-delete-tx" class="btn btn-danger" style="flex: 1;">🗑️ 削除</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <!-- ==================== MODAL: MASTER ITEM EDIT ==================== -->
-  <div id="modal-master-item" class="modal-overlay">
-    <div class="modal">
-      <div class="modal-header">
-        <h3 class="modal-title" id="master-modal-title">マスタ項目の編集</h3>
-        <button type="button" class="close-btn" id="btn-close-master-modal">&times;</button>
-      </div>
-      <div id="master-modal-body"></div>
-    </div>
-  </div>
-
-  <!-- ==================== MODAL: TAX CALCULATOR ==================== -->
-  <div id="modal-tax" class="modal-overlay">
-    <div class="modal">
-      <div class="modal-header">
-        <h3 class="modal-title">🧮 税抜・税込 電卓補助</h3>
-        <button type="button" class="close-btn" id="btn-close-tax-modal">&times;</button>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="tax-base-amount">税抜本体金額 (円)</label>
-        <input type="number" id="tax-base-amount" class="form-control" placeholder="例: 1000" min="0" step="1">
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label" for="tax-rate-select">消費税率</label>
-          <select id="tax-rate-select" class="form-control">
-            <option value="0.10">10% (標準税率)</option>
-            <option value="0.08">8% (軽減税率)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="tax-rounding-select">端数処理</label>
-          <select id="tax-rounding-select" class="form-control">
-            <option value="floor">切り捨て (floor)</option>
-            <option value="round">四捨五入 (round)</option>
-          </select>
-        </div>
-      </div>
-      <div class="card" style="background: #f8fafc; margin-top: 12px;">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-          <span style="color: var(--text-muted);">計算消費税:</span>
-          <span id="tax-calc-tax" style="font-weight: 600;">¥0</span>
-        </div>
-        <div style="display: flex; justify-content: space-between; font-size: 1.1rem; font-weight: 700;">
-          <span>税込合計金額:</span>
-          <span id="tax-calc-total" style="color: var(--primary);">¥0</span>
-        </div>
-      </div>
-      <div style="display: flex; gap: 8px; margin-top: 16px;">
-        <button type="button" id="btn-apply-tax" class="btn btn-primary btn-block">金額欄に反映する</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ==================== MODAL: PIN UNLOCK ==================== -->
-  <div id="modal-pin-unlock" class="modal-overlay">
-    <div class="modal">
-      <div class="modal-header">
-        <h3 class="modal-title">🔐 秘密鍵のロック解除</h3>
-        <button type="button" class="close-btn" id="btn-close-pin-modal">&times;</button>
-      </div>
-      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-        秘密鍵はPINコードで保護されています。同期や署名処理を行うためにPINを入力してください。
-      </p>
-      <div class="form-group">
-        <label class="form-label" for="input-unlock-pin">PINコード (4桁以上)</label>
-        <input type="password" id="input-unlock-pin" class="form-control" placeholder="PINコードを入力">
-      </div>
-      <div style="display: flex; gap: 8px; margin-top: 16px;">
-        <button type="button" id="btn-submit-unlock-pin" class="btn btn-primary btn-block">🔓 ロック解除</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ==================== MODAL: HOLIDAY IMPORT ==================== -->
-  <div id="modal-holiday-import" class="modal-overlay">
-    <div class="modal">
-      <div class="modal-header">
-        <h3 class="modal-title">🎌 祝日データの一括インポート</h3>
-        <button type="button" class="close-btn" id="btn-close-holiday-modal">&times;</button>
-      </div>
-      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-        内閣府の祝日CSV、APIのJSON、または日付一覧（YYYY-MM-DD または YYYY/MM/DD）を貼り付けてインポートできます。
-      </p>
-      <div class="form-group">
-        <label class="form-label" for="txt-holiday-import-input">祝日テキスト / CSV / JSON</label>
-        <textarea id="txt-holiday-import-input" class="form-control" rows="8" placeholder="例:&#10;2026-01-01,元日&#10;2026-01-12,成人の日&#10;2026-02-11,建国記念の日"></textarea>
-      </div>
-      <div style="display: flex; gap: 8px; margin-top: 12px;">
-        <button type="button" id="btn-fetch-holiday-api" class="btn btn-secondary btn-sm">🌐 オンラインAPIから最新祝日を取得</button>
-      </div>
-      <div style="display: flex; gap: 8px; margin-top: 16px;">
-        <button type="button" id="btn-confirm-import-holidays" class="btn btn-primary btn-block">インポート実行</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ==================== MODAL: APP UPDATE CONFIRMATION ==================== -->
-  <div id="modal-app-update" class="modal-overlay">
-    <div class="modal">
-      <div class="modal-header">
-        <h3 class="modal-title">🚀 新しいバージョンが利用可能です</h3>
-        <button type="button" class="close-btn" id="btn-close-app-update-modal">&times;</button>
-      </div>
-      <p style="font-size: 0.9rem; line-height: 1.5; margin-bottom: 12px;">
-        新しいバージョン (<span id="modal-new-version-text" style="font-weight: bold; color: var(--primary);"></span>) が公開されています。<br>
-        最新の機能や修正を反映するため、アップデートして再読み込みしますか？
-      </p>
-      <div style="display: flex; gap: 8px; margin-top: 16px;">
-        <button type="button" id="btn-dismiss-app-update" class="btn btn-secondary btn-block">後で</button>
-        <button type="button" id="btn-confirm-app-update" class="btn btn-primary btn-block">⚡ 今すぐアップデート</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Main Application Script (ES Module) -->
-  <script type="module" src="js/app.js"></script>
+	<!-- ==================== AUTH & UNLOCK SCREEN ==================== -->
+	<div id="auth-screen" class="auth-screen-overlay">
+		<div class="auth-card">
+			<div style="font-size: 2.5rem; margin-bottom: 8px;">🔐</div>
+			<h2 id="auth-title">よせあつめ家計簿</h2>
+			<p id="auth-description">安全のためデータは暗号化されています。<br>生体認証（Passkey）またはPINで解除してください。</p>
+
+			<div id="auth-webauthn-container">
+				<button type="button" id="btn-auth-webauthn" class="btn-webauthn">
+					<span>👆 生体認証 / Passkeyで解除</span>
+				</button>
+			</div>
+
+			<div id="auth-pin-container" style="margin-top: 16px;">
+				<div class="form-group">
+					<label class="form-label" for="auth-pin-input" style="text-align: left;">PINコードで解除 (バックアップ)</label>
+					<input type="password" id="auth-pin-input" class="form-control" placeholder="PINコードを入力">
+				</div>
+				<button type="button" id="btn-auth-pin" class="btn btn-primary btn-block" style="margin-top: 8px;">
+					🔓 ロック解除
+				</button>
+			</div>
+
+			<div id="auth-setup-container" style="display: none; margin-top: 16px;">
+				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px;">
+					初回セットアップ: データ保護用のPINコード（4桁以上）を設定してください。同時にWebAuthnおよびEd25519通信鍵が生成されます。
+				</p>
+				<div class="form-group">
+					<input type="password" id="auth-setup-pin" class="form-control" placeholder="新しいPINコード (4桁以上)">
+				</div>
+				<button type="button" id="btn-auth-setup" class="btn btn-primary btn-block" style="margin-top: 8px;">
+					🚀 暗号化鍵の初期生成と開始
+				</button>
+			</div>
+
+			<div id="auth-error-msg" style="color: var(--danger); font-size: 0.85rem; margin-top: 12px; display: none;"></div>
+		</div>
+	</div>
+
+	<!-- App Header -->
+	<header>
+		<div class="brand">
+			<h1>よせあつめ家計簿</h1>
+		</div>
+		<div class="header-status">
+			<span id="network-badge" class="badge badge-success">Online</span>
+			<span id="sync-badge" class="badge badge-info">未同期: 0件</span>
+			<button id="btn-header-sync" class="btn btn-secondary btn-sm" title="今すぐ同期">🔄</button>
+		</div>
+	</header>
+
+	<!-- Top Navigation Tabs -->
+	<nav class="nav-tabs">
+		<button class="tab-btn active" data-tab="tab-input">📝 入力</button>
+		<button class="tab-btn" data-tab="tab-summary">📊 集計・グラフ</button>
+		<button class="tab-btn" data-tab="tab-settings">⚙️ 設定・マスタ</button>
+	</nav>
+
+	<main class="container">
+
+		<!-- ==================== TAB 1: INPUT ==================== -->
+		<section id="tab-input" class="tab-panel active">
+			<div class="card">
+				<!-- Input Mode Switcher -->
+				<div class="mode-tabs">
+					<button type="button" class="mode-tab-btn active" data-mode="normal">通常入力</button>
+					<button type="button" class="mode-tab-btn" data-mode="advance">立替払い</button>
+					<button type="button" class="mode-tab-btn" data-mode="repay">立替返済・回収</button>
+					<button type="button" class="mode-tab-btn" data-mode="prepaid">前払分割</button>
+					<button type="button" class="mode-tab-btn" data-mode="point">ポイント併用</button>
+				</div>
+
+				<form id="tx-form">
+					<!-- Common Date Field -->
+					<div class="form-row">
+						<div class="form-group">
+							<label class="form-label" for="input-date">日付</label>
+							<input type="date" id="input-date" class="form-control" required>
+						</div>
+						<!-- Type Selector -->
+						<div class="form-group" id="group-type">
+							<label class="form-label" for="input-type">取引種別</label>
+							<select id="input-type" class="form-control">
+								<option value="expense">支出</option>
+								<option value="income">収入</option>
+								<option value="transfer">口座振替</option>
+								<option value="advance">立替払い</option>
+								<option value="repay">立替返済・回収</option>
+								<option value="prepaid">前払費用・年払い分割</option>
+								<option value="point">ポイント払い・相殺</option>
+							</select>
+						</div>
+					</div>
+
+					<!-- Normal / Single Amount Field with Tax Calc Trigger -->
+					<div class="form-group" id="group-normal-amount">
+						<label class="form-label" for="input-amount">
+							金額 (円)
+							<button type="button" id="btn-open-tax-calc" class="btn btn-secondary btn-sm" style="float: right;">🧮 税抜計算</button>
+						</label>
+						<input type="number" id="input-amount" class="form-control" placeholder="例: 1500" min="0" step="1">
+					</div>
+
+					<!-- Advance Split Fields (For Advance Mode) -->
+					<div id="advance-fields" style="display: none;">
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="input-self-amount">自己負担額 (支出)</label>
+								<input type="number" id="input-self-amount" class="form-control" placeholder="例: 3000" min="0" step="1">
+							</div>
+							<div class="form-group">
+								<label class="form-label" for="input-adv-amount">相手立替額 (立替金振替)</label>
+								<input type="number" id="input-adv-amount" class="form-control" placeholder="例: 3000" min="0" step="1">
+							</div>
+						</div>
+					</div>
+
+					<!-- Prepaid Amortization Fields (For Prepaid Mode) -->
+					<div id="prepaid-fields" style="display: none;">
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="input-prepaid-total">一括支払総額 (円)</label>
+								<input type="number" id="input-prepaid-total" class="form-control" placeholder="例: 12000" min="1" step="1">
+							</div>
+							<div class="form-group">
+								<label class="form-label" for="input-prepaid-months">分割月数</label>
+								<input type="number" id="input-prepaid-months" class="form-control" value="12" min="1" max="60" step="1">
+							</div>
+						</div>
+					</div>
+
+					<!-- Repay Amount Field (For Repay Mode) -->
+					<div id="repay-fields" style="display: none;">
+						<div class="form-group">
+							<label class="form-label" for="input-repay-amount">回収額 (円)</label>
+							<input type="number" id="input-repay-amount" class="form-control" placeholder="例: 3000" min="1" step="1">
+						</div>
+					</div>
+
+					<!-- Point Payment Fields (For Point Mode) -->
+					<div id="point-fields" style="display: none;">
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="input-point-total">購入総額 (円)</label>
+								<input type="number" id="input-point-total" class="form-control" placeholder="例: 5000" min="0" step="1">
+							</div>
+							<div class="form-group">
+								<label class="form-label" for="input-point-used">ポイント利用額 (pt)</label>
+								<input type="number" id="input-point-used" class="form-control" placeholder="例: 1000" min="0" step="1">
+							</div>
+						</div>
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="select-point-account">充当元ポイント口座 (任意)</label>
+								<select id="select-point-account" class="form-control">
+									<option value="">ポイント相殺として計上（口座指定なし）</option>
+								</select>
+							</div>
+							<div class="form-group" style="display: flex; flex-direction: column; justify-content: flex-end;">
+								<div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 4px;">実質決済額 (自己負担):</div>
+								<div id="display-point-self-amount" style="font-size: 1.15rem; font-weight: 700; color: var(--primary);">¥0</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Account Selectors -->
+					<div class="form-row">
+						<div class="form-group" id="group-account">
+							<label class="form-label" id="label-account" for="select-account">決済口座</label>
+							<select id="select-account" class="form-control" required></select>
+						</div>
+						<div class="form-group" id="group-to-account" style="display: none;">
+							<label class="form-label" for="select-to-account">振替先口座</label>
+							<select id="select-to-account" class="form-control"></select>
+						</div>
+					</div>
+
+					<!-- Category Selectors (Accounting vs Actual) -->
+					<div id="category-selection-container">
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="select-category">計上大項目（予算・集計用）</label>
+								<select id="select-category" class="form-control"></select>
+							</div>
+							<div class="form-group">
+								<label class="form-label" for="select-subcategory">計中項目</label>
+								<select id="select-subcategory" class="form-control"></select>
+							</div>
+						</div>
+
+						<div class="form-group">
+							<label style="font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+								<input type="checkbox" id="chk-sync-actual-category" checked>
+								<span>実態分類（モノの性質）を計上分類と同じにする</span>
+							</label>
+						</div>
+
+						<div id="actual-category-container" style="display: none;">
+							<div class="form-row">
+								<div class="form-group">
+									<label class="form-label" for="select-actual-category">実態大項目</label>
+									<select id="select-actual-category" class="form-control"></select>
+								</div>
+								<div class="form-group">
+									<label class="form-label" for="select-actual-subcategory">実態中項目</label>
+									<select id="select-actual-subcategory" class="form-control"></select>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Memo & Tags -->
+					<div class="form-row">
+						<div class="form-group" style="flex: 2;">
+							<label class="form-label" for="input-memo">メモ</label>
+							<input type="text" id="input-memo" class="form-control" placeholder="例: スーパーで食材購入">
+						</div>
+						<div class="form-group" style="flex: 1;">
+							<label class="form-label" for="input-tags">タグ (カンマ区切り)</label>
+							<input type="text" id="input-tags" class="form-control" placeholder="例: 友人, 外食">
+						</div>
+					</div>
+
+					<button type="submit" id="btn-save-tx" class="btn btn-primary btn-block">
+						💾 登録する
+					</button>
+				</form>
+			</div>
+
+			<!-- Recent Transactions in Current Session -->
+			<div class="card">
+				<div class="card-title">
+					<span>最近の入力</span>
+				</div>
+				<div id="recent-tx-list" class="tx-list">
+					<!-- Populated by JS -->
+				</div>
+			</div>
+		</section>
+
+		<!-- ==================== TAB 2: SUMMARY & GRAPHS ==================== -->
+		<section id="tab-summary" class="tab-panel">
+			<!-- Total Assets & External Assets Summary Cards -->
+			<div class="summary-grid">
+				<div class="stat-card">
+					<div class="stat-label">総資産 (流動 + 外部)</div>
+					<div id="stat-total-assets" class="stat-value" style="color: var(--primary);">¥0</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label">内部流動資産 (預貯金等)</div>
+					<div id="stat-liquid-assets" class="stat-value confirmed">¥0</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label">保有外部資産 (株式・投信等)</div>
+					<div id="stat-external-assets" class="stat-value" style="color: #10b981;">¥0</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label">負債・立替金枠</div>
+					<div id="stat-liabilities" class="stat-value" style="color: var(--danger);">¥0</div>
+				</div>
+			</div>
+
+			<!-- Analytics Target & Granularity Controls -->
+			<div class="card" style="padding: 12px 16px;">
+				<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+					<!-- View Target: Cashflow vs Assets -->
+					<div class="segmented-control" id="control-view-target">
+						<button type="button" class="segment-btn active" data-target="cashflow">💰 収支分析</button>
+						<button type="button" class="segment-btn" data-target="assets">🏦 資産残高・推移</button>
+					</div>
+
+					<!-- Granularity: Daily vs Monthly vs Yearly -->
+					<div class="segmented-control" id="control-granularity">
+						<button type="button" class="segment-btn" data-granularity="daily">📅 日別</button>
+						<button type="button" class="segment-btn active" data-granularity="monthly">📊 月別</button>
+						<button type="button" class="segment-btn" data-granularity="yearly">📈 年別</button>
+					</div>
+				</div>
+
+				<!-- Period Navigator -->
+				<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+					<button id="btn-period-prev" class="btn btn-secondary btn-sm">◀ 前へ</button>
+					<span id="period-display" style="font-weight: 700; font-size: 1.15rem;">2026-10</span>
+					<button id="btn-period-next" class="btn btn-secondary btn-sm">次へ ▶</button>
+				</div>
+			</div>
+
+			<!-- Realtime Cashflow Stats (Target-dependent) -->
+			<div id="cashflow-stat-grid" class="summary-grid">
+				<div class="stat-card">
+					<div class="stat-label" id="label-stat-income">確定収入 / 予定込</div>
+					<div id="stat-income" class="stat-value income">¥0 / ¥0</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label" id="label-stat-expense">確定支出 / 予定込</div>
+					<div id="stat-expense" class="stat-value expense">¥0 / ¥0</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label" id="label-stat-net">収支差額 (貯蓄)</div>
+					<div id="stat-net-income" class="stat-value confirmed">¥0</div>
+				</div>
+				<div class="stat-card">
+					<div class="stat-label" id="label-stat-savings-rate">現在確定残高 / 予測</div>
+					<div id="stat-confirmed-balance" class="stat-value projected">¥0</div>
+				</div>
+			</div>
+
+			<!-- Interactive Chart Container -->
+			<div class="card">
+				<div class="card-title">
+					<span id="chart-title">収支推移・内訳グラフ</span>
+					<div style="display: flex; gap: 8px; flex-wrap: wrap;">
+						<button id="btn-toggle-planned" class="btn btn-secondary btn-sm">予定: ON</button>
+						<button id="btn-toggle-axis" class="btn btn-secondary btn-sm">計上分類</button>
+					</div>
+				</div>
+				<div class="chart-container" style="height: 320px; position: relative;">
+					<canvas id="summary-chart"></canvas>
+					<div id="chart-fallback" style="display:none; padding: 20px; text-align: center; color: var(--text-muted);"></div>
+				</div>
+			</div>
+
+			<!-- Granular Aggregation Table & Item Changes -->
+			<div class="card">
+				<div class="card-title">
+					<span id="table-title">集計表・推移データ</span>
+				</div>
+				<div id="breakdown-table-container" style="overflow-x: auto;"></div>
+			</div>
+
+			<!-- Category Changes Breakdown -->
+			<div class="card" id="card-category-breakdown">
+				<div class="card-title">
+					<span>費目別推移・内訳</span>
+				</div>
+				<div id="category-breakdown-list" class="tx-list"></div>
+			</div>
+
+			<!-- Account Balances Breakdown -->
+			<div class="card">
+				<div class="card-title">
+					<span>内部口座別残高</span>
+				</div>
+				<div id="account-balances-list" class="tx-list"></div>
+			</div>
+
+			<!-- External Assets Breakdown -->
+			<div class="card">
+				<div class="card-title">
+					<span>保有外部資産一覧</span>
+				</div>
+				<div id="summary-external-assets-list" class="tx-list"></div>
+			</div>
+
+			<!-- Monthly Operations & Month Closing -->
+			<div class="card">
+				<div class="card-title">
+					<span>月次アクション</span>
+				</div>
+				<div style="display: flex; gap: 12px; flex-wrap: wrap;">
+					<button id="btn-generate-recurring" class="btn btn-secondary">
+						📅 当月の定期予定を一括生成
+					</button>
+					<button id="btn-close-month" class="btn btn-success">
+						🔒 この月を月締めする (GASへ送信)
+					</button>
+				</div>
+			</div>
+
+			<!-- Transactions in Selected Month -->
+			<div class="card">
+				<div class="card-title">
+					<span>当月の明細一覧</span>
+					<select id="select-status-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
+						<option value="all">すべて表示</option>
+						<option value="confirmed">確定のみ</option>
+						<option value="planned">予定のみ</option>
+					</select>
+				</div>
+				<div id="month-tx-list" class="tx-list"></div>
+			</div>
+		</section>
+
+		<!-- ==================== TAB 3: SETTINGS & MASTER ==================== -->
+		<section id="tab-settings" class="tab-panel">
+			<!-- Security & Public Key -->
+			<div class="card">
+				<div class="card-title">
+					<span>🔐 認証・Ed25519鍵管理</span>
+					<span id="key-configured-badge" class="badge badge-success" style="display: none;">初期設定済み</span>
+				</div>
+
+				<div id="key-configured-summary" style="display: none; margin-bottom: 12px;">
+					<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px;">
+						認証鍵（Ed25519 + WebAuthn + At-Rest AES-GCM）は正常に設定されています。
+					</p>
+					<div style="display: flex; gap: 8px; flex-wrap: wrap;">
+						<button id="btn-register-initial-key-gas" class="btn btn-primary btn-sm">⚡ GASへ公開鍵を一発自動登録</button>
+						<button id="btn-toggle-key-details" class="btn btn-secondary btn-sm">⚙️ 鍵管理の詳細を表示</button>
+					</div>
+				</div>
+
+				<div id="key-mgmt-details">
+					<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+						ブラウザ内でEd25519鍵ペアを生成し、公開鍵のみをGASの <code>USER_PUBLIC_KEYS</code> に登録します。秘密鍵は端末内に保護されます。
+					</p>
+					<div class="form-group">
+						<label class="form-label">登録用 Ed25519 公開鍵 (Base64)</label>
+						<textarea id="txt-public-key" class="form-control" rows="2" readonly></textarea>
+					</div>
+					<div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+						<button id="btn-generate-key" class="btn btn-secondary btn-sm">新しい鍵ペアを生成</button>
+						<button id="btn-copy-public-key" class="btn btn-secondary btn-sm">公開鍵をコピー</button>
+						<button id="btn-register-key-gas-direct" class="btn btn-primary btn-sm">⚡ GASへワンクリック登録</button>
+					</div>
+
+					<!-- PIN Protection -->
+					<div style="border-top: 1px solid var(--border); padding-top: 12px;">
+						<div id="pin-status-banner" style="margin-bottom: 12px;"></div>
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="input-pin">秘密鍵保護 PIN (4桁以上)</label>
+								<input type="password" id="input-pin" class="form-control" placeholder="PINコード">
+							</div>
+							<div class="form-group" style="display: flex; align-items: flex-end;">
+								<button id="btn-save-pin" class="btn btn-primary btn-block">PINで秘密鍵を保護</button>
+							</div>
+						</div>
+						<div id="pin-action-buttons" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
+							<button id="btn-register-webauthn" class="btn btn-secondary btn-sm">👆 WebAuthn (Passkey) を再登録</button>
+							<button id="btn-unlock-pin" class="btn btn-success btn-sm" style="display: none;">🔓 PINでロック解除</button>
+							<button id="btn-lock-now" class="btn btn-secondary btn-sm" style="display: none;">🔒 今すぐ再ロック</button>
+							<button id="btn-remove-pin" class="btn btn-danger btn-sm" style="display: none;">PIN保護を解除</button>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<!-- GAS Web App Sync Configuration -->
+			<div class="card">
+				<div class="card-title">
+					<span>☁️ Google Apps Script (GAS) 連携</span>
+				</div>
+
+				<details id="details-gas-url" class="holiday-year-group" style="margin-bottom: 16px;">
+					<summary><span>⚙️ GAS Web App URL 設定</span><span id="gas-url-status-badge" class="badge badge-success">設定済</span></summary>
+					<div class="holiday-year-content">
+						<div class="form-group" style="margin-bottom: 8px;">
+							<input type="url" id="input-gas-url" class="form-control" placeholder="https://script.google.com/macros/s/.../exec">
+						</div>
+						<button id="btn-save-gas-url" class="btn btn-secondary btn-sm">URLを保存</button>
+					</div>
+				</details>
+
+				<!-- Daily Normal Operations -->
+				<div style="margin-bottom: 12px;">
+					<button id="btn-manual-sync" class="btn btn-primary btn-block" style="padding: 12px; font-weight: 700;">
+						🔄 今すぐ差分同期 (push_diff)
+					</button>
+				</div>
+
+				<hr class="divider">
+
+				<!-- Maintenance Operations -->
+				<div>
+					<div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;">
+						⚠️ 手動メンテナンス操作（通常は上記の差分同期をご利用ください）
+					</div>
+					<div style="display: flex; gap: 8px; flex-wrap: wrap;">
+						<button id="btn-sync-master" class="btn btn-secondary btn-sm">📤 設定マスタをGASへ送信 (update_master)</button>
+						<button id="btn-fetch-remote" class="btn btn-secondary btn-sm">📥 リモート最新状態を取得 (fetch_state)</button>
+					</div>
+				</div>
+			</div>
+
+			<!-- Backup & Restore -->
+			<div class="card">
+				<div class="card-title">
+					<span>📦 バックアップ・リストア</span>
+				</div>
+				<div style="display: flex; gap: 12px; flex-wrap: wrap;">
+					<button id="btn-export-backup" class="btn btn-secondary">💾 全データJSONエクスポート</button>
+					<button id="btn-import-trigger" class="btn btn-secondary">📂 JSONインポート</button>
+					<input type="file" id="file-import-input" accept=".json" style="display: none;">
+				</div>
+			</div>
+
+			<!-- Master Config Management -->
+			<div class="card">
+				<div class="card-title">
+					<span>🏷️ マスタ管理 (口座・費目・定期・祝日)</span>
+				</div>
+				<div id="master-summary-info" style="font-size: 0.9rem; margin-bottom: 12px;"></div>
+
+				<!-- Master Sub Navigation -->
+				<div class="master-tabs">
+					<button type="button" class="master-tab-btn active" data-master="accounts">🏦 口座</button>
+					<button type="button" class="master-tab-btn" data-master="categories">📁 費目・内訳</button>
+					<button type="button" class="master-tab-btn" data-master="recurring">📅 定期予定</button>
+					<button type="button" class="master-tab-btn" data-master="holidays">🎌 祝日</button>
+				</div>
+
+				<!-- Panel: Accounts -->
+				<div id="panel-master-accounts" class="master-panel active">
+					<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+						<span style="font-weight: 600; font-size: 0.9rem;">登録口座一覧 (現金・銀行・証券・クレカ)</span>
+						<button id="btn-add-account" class="btn btn-primary btn-sm">+ 新規口座を追加</button>
+					</div>
+					<div id="master-accounts-list"></div>
+				</div>
+
+				<!-- Panel: Categories -->
+				<div id="panel-master-categories" class="master-panel">
+					<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+						<span style="font-weight: 600; font-size: 0.9rem;">費目・内訳一覧</span>
+						<button id="btn-add-category" class="btn btn-primary btn-sm">+ 新規大項目を追加</button>
+					</div>
+					<div id="master-categories-list"></div>
+				</div>
+
+				<!-- Panel: Recurring Rules -->
+				<div id="panel-master-recurring" class="master-panel">
+					<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+						<span style="font-weight: 600; font-size: 0.9rem;">定期支出ルール一覧</span>
+						<button id="btn-add-recurring" class="btn btn-primary btn-sm">+ 定期ルールを追加</button>
+					</div>
+					<div id="master-recurring-list"></div>
+				</div>
+
+				<!-- Panel: Holidays -->
+				<div id="panel-master-holidays" class="master-panel">
+					<div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap;">
+						<input type="date" id="input-new-holiday" class="form-control" style="max-width: 170px;">
+						<button id="btn-add-holiday" class="btn btn-primary btn-sm">+ 祝日を追加</button>
+						<button id="btn-import-holidays-preset" class="btn btn-secondary btn-sm">🎌 日本の祝日を一括インポート (内閣府データ)</button>
+						<button id="btn-open-holiday-modal" class="btn btn-secondary btn-sm">📂 CSV/テキストからインポート</button>
+					</div>
+					<div id="master-holidays-list"></div>
+				</div>
+
+				<!-- JSON View / Edit Accordion -->
+				<div style="border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px;">
+					<button id="btn-view-master-json" class="btn btn-secondary btn-sm">高度な設定: マスタJSONを直接表示/編集</button>
+					<div id="master-json-editor" style="display: none; margin-top: 12px;">
+						<textarea id="txt-master-json" class="form-control" rows="8"></textarea>
+						<button id="btn-save-master-json" class="btn btn-primary btn-sm" style="margin-top: 8px;">マスタJSONを更新保存</button>
+					</div>
+				</div>
+			</div>
+
+			<!-- App Version & Update Management -->
+			<div class="card" id="card-app-update">
+				<div class="card-title">
+					<span>🔄 アプリのバージョンと更新</span>
+					<span class="badge badge-info" id="badge-current-version">v1.1.0</span>
+				</div>
+				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
+				</p>
+				<div id="update-status-msg" style="display: none; font-size: 0.85rem; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px;"></div>
+				<div style="display: flex; gap: 8px; flex-wrap: wrap;">
+					<button type="button" id="btn-check-app-update" class="btn btn-secondary btn-sm">🔄 更新を確認</button>
+					<button type="button" id="btn-force-cache-clear" class="btn btn-danger btn-sm">⚡ 強制再読み込み (キャッシュクリア＆更新)</button>
+				</div>
+			</div>
+		</section>
+
+	</main>
+
+	<!-- ==================== MODAL: EDIT TRANSACTION ==================== -->
+	<div id="modal-edit-tx" class="modal-overlay">
+		<div class="modal">
+			<div class="modal-header">
+				<h3 class="modal-title">✏️ 取引明細の修正</h3>
+				<button type="button" class="close-btn" id="btn-close-edit-tx">&times;</button>
+			</div>
+			<form id="edit-tx-form">
+				<input type="hidden" id="edit-tx-id">
+				<div class="form-row">
+					<div class="form-group">
+						<label class="form-label" for="edit-tx-date">日付</label>
+						<input type="date" id="edit-tx-date" class="form-control" required>
+					</div>
+					<div class="form-group">
+						<label class="form-label" for="edit-tx-type">取引種別</label>
+						<select id="edit-tx-type" class="form-control">
+							<option value="expense">支出</option>
+							<option value="income">収入</option>
+							<option value="transfer">口座振替</option>
+						</select>
+					</div>
+				</div>
+
+				<div class="form-group">
+					<label class="form-label" for="edit-tx-amount">
+						金額 (円)
+						<button type="button" id="btn-edit-open-tax-calc" class="btn btn-secondary btn-sm" style="float: right;">🧮 税抜計算</button>
+					</label>
+					<input type="number" id="edit-tx-amount" class="form-control" required min="0" step="1">
+				</div>
+
+				<div class="form-row">
+					<div class="form-group">
+						<label class="form-label" for="edit-tx-account">決済口座</label>
+						<select id="edit-tx-account" class="form-control" required></select>
+					</div>
+					<div class="form-group" id="edit-tx-to-account-group" style="display: none;">
+						<label class="form-label" for="edit-tx-to-account">振替先口座</label>
+						<select id="edit-tx-to-account" class="form-control"></select>
+					</div>
+				</div>
+
+				<div id="edit-tx-cat-container">
+					<div class="form-row">
+						<div class="form-group">
+							<label class="form-label" for="edit-tx-category">計上大項目</label>
+							<select id="edit-tx-category" class="form-control"></select>
+						</div>
+						<div class="form-group">
+							<label class="form-label" for="edit-tx-subcategory">計中項目</label>
+							<select id="edit-tx-subcategory" class="form-control"></select>
+						</div>
+					</div>
+					<div class="form-row">
+						<div class="form-group">
+							<label class="form-label" for="edit-tx-actual-category">実態大項目</label>
+							<select id="edit-tx-actual-category" class="form-control"></select>
+						</div>
+						<div class="form-group">
+							<label class="form-label" for="edit-tx-actual-subcategory">実態中項目</label>
+							<select id="edit-tx-actual-subcategory" class="form-control"></select>
+						</div>
+					</div>
+				</div>
+
+				<div class="form-row">
+					<div class="form-group" style="flex: 2;">
+						<label class="form-label" for="edit-tx-memo">メモ</label>
+						<input type="text" id="edit-tx-memo" class="form-control">
+					</div>
+					<div class="form-group" style="flex: 1;">
+						<label class="form-label" for="edit-tx-status">ステータス</label>
+						<select id="edit-tx-status" class="form-control">
+							<option value="confirmed">確定 (confirmed)</option>
+							<option value="planned">予定 (planned)</option>
+						</select>
+					</div>
+				</div>
+
+				<div class="form-group">
+					<label class="form-label" for="edit-tx-tags">タグ (カンマ区切り)</label>
+					<input type="text" id="edit-tx-tags" class="form-control">
+				</div>
+
+				<div style="display: flex; gap: 8px; margin-top: 16px;">
+					<button type="submit" class="btn btn-primary" style="flex: 2;">💾 修正内容を保存</button>
+					<button type="button" id="btn-edit-delete-tx" class="btn btn-danger" style="flex: 1;">🗑️ 削除</button>
+				</div>
+			</form>
+		</div>
+	</div>
+
+	<!-- ==================== MODAL: MASTER ITEM EDIT ==================== -->
+	<div id="modal-master-item" class="modal-overlay">
+		<div class="modal">
+			<div class="modal-header">
+				<h3 class="modal-title" id="master-modal-title">マスタ項目の編集</h3>
+				<button type="button" class="close-btn" id="btn-close-master-modal">&times;</button>
+			</div>
+			<div id="master-modal-body"></div>
+		</div>
+	</div>
+
+	<!-- ==================== MODAL: TAX CALCULATOR ==================== -->
+	<div id="modal-tax" class="modal-overlay">
+		<div class="modal">
+			<div class="modal-header">
+				<h3 class="modal-title">🧮 税抜・税込 電卓補助</h3>
+				<button type="button" class="close-btn" id="btn-close-tax-modal">&times;</button>
+			</div>
+			<div class="form-group">
+				<label class="form-label" for="tax-base-amount">税抜本体金額 (円)</label>
+				<input type="number" id="tax-base-amount" class="form-control" placeholder="例: 1000" min="0" step="1">
+			</div>
+			<div class="form-row">
+				<div class="form-group">
+					<label class="form-label" for="tax-rate-select">消費税率</label>
+					<select id="tax-rate-select" class="form-control">
+						<option value="0.10">10% (標準税率)</option>
+						<option value="0.08">8% (軽減税率)</option>
+					</select>
+				</div>
+				<div class="form-group">
+					<label class="form-label" for="tax-rounding-select">端数処理</label>
+					<select id="tax-rounding-select" class="form-control">
+						<option value="floor">切り捨て (floor)</option>
+						<option value="round">四捨五入 (round)</option>
+					</select>
+				</div>
+			</div>
+			<div class="card" style="background: #f8fafc; margin-top: 12px;">
+				<div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+					<span style="color: var(--text-muted);">計算消費税:</span>
+					<span id="tax-calc-tax" style="font-weight: 600;">¥0</span>
+				</div>
+				<div style="display: flex; justify-content: space-between; font-size: 1.1rem; font-weight: 700;">
+					<span>税込合計金額:</span>
+					<span id="tax-calc-total" style="color: var(--primary);">¥0</span>
+				</div>
+			</div>
+			<div style="display: flex; gap: 8px; margin-top: 16px;">
+				<button type="button" id="btn-apply-tax" class="btn btn-primary btn-block">金額欄に反映する</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- ==================== MODAL: PIN UNLOCK ==================== -->
+	<div id="modal-pin-unlock" class="modal-overlay">
+		<div class="modal">
+			<div class="modal-header">
+				<h3 class="modal-title">🔐 秘密鍵のロック解除</h3>
+				<button type="button" class="close-btn" id="btn-close-pin-modal">&times;</button>
+			</div>
+			<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+				秘密鍵はPINコードで保護されています。同期や署名処理を行うためにPINを入力してください。
+			</p>
+			<div class="form-group">
+				<label class="form-label" for="input-unlock-pin">PINコード (4桁以上)</label>
+				<input type="password" id="input-unlock-pin" class="form-control" placeholder="PINコードを入力">
+			</div>
+			<div style="display: flex; gap: 8px; margin-top: 16px;">
+				<button type="button" id="btn-submit-unlock-pin" class="btn btn-primary btn-block">🔓 ロック解除</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- ==================== MODAL: HOLIDAY IMPORT ==================== -->
+	<div id="modal-holiday-import" class="modal-overlay">
+		<div class="modal">
+			<div class="modal-header">
+				<h3 class="modal-title">🎌 祝日データの一括インポート</h3>
+				<button type="button" class="close-btn" id="btn-close-holiday-modal">&times;</button>
+			</div>
+			<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+				内閣府の祝日CSV、APIのJSON、または日付一覧（YYYY-MM-DD または YYYY/MM/DD）を貼り付けてインポートできます。
+			</p>
+			<div class="form-group">
+				<label class="form-label" for="txt-holiday-import-input">祝日テキスト / CSV / JSON</label>
+				<textarea id="txt-holiday-import-input" class="form-control" rows="8" placeholder="例:&#10;2026-01-01,元日&#10;2026-01-12,成人の日&#10;2026-02-11,建国記念の日"></textarea>
+			</div>
+			<div style="display: flex; gap: 8px; margin-top: 12px;">
+				<button type="button" id="btn-fetch-holiday-api" class="btn btn-secondary btn-sm">🌐 オンラインAPIから最新祝日を取得</button>
+			</div>
+			<div style="display: flex; gap: 8px; margin-top: 16px;">
+				<button type="button" id="btn-confirm-import-holidays" class="btn btn-primary btn-block">インポート実行</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- ==================== MODAL: APP UPDATE CONFIRMATION ==================== -->
+	<div id="modal-app-update" class="modal-overlay">
+		<div class="modal">
+			<div class="modal-header">
+				<h3 class="modal-title">🚀 新しいバージョンが利用可能です</h3>
+				<button type="button" class="close-btn" id="btn-close-app-update-modal">&times;</button>
+			</div>
+			<p style="font-size: 0.9rem; line-height: 1.5; margin-bottom: 12px;">
+				新しいバージョン (<span id="modal-new-version-text" style="font-weight: bold; color: var(--primary);"></span>) が公開されています。<br>
+				最新の機能や修正を反映するため、アップデートして再読み込みしますか？
+			</p>
+			<div style="display: flex; gap: 8px; margin-top: 16px;">
+				<button type="button" id="btn-dismiss-app-update" class="btn btn-secondary btn-block">後で</button>
+				<button type="button" id="btn-confirm-app-update" class="btn btn-primary btn-block">⚡ 今すぐアップデート</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- Main Application Script (ES Module) -->
+	<script type="module" src="js/app.js"></script>
 </body>
 </html>
 
