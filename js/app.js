@@ -19,6 +19,8 @@ import {
 	aggregateYearlySummaries,
 	calculateAnnualBudgetProgress,
 	generateAnnualTrajectory,
+	calculateAnnualBudgetDefaults,
+	roundTieredAmount,
 	JAPANESE_HOLIDAYS_PRESET,
 	parseHolidayTextOrCsv,
 	groupHolidaysByYear,
@@ -1272,7 +1274,7 @@ class AppController {
 			});
 		});
 
-		// Period Navigator
+		// Period Navigator (Requirement 3.16)
 		document.getElementById('btn-period-prev')?.addEventListener('click', () => {
 			if (this.analyticsTarget === 'budget' || this.analyticsGranularity === 'yearly') {
 				this.selectedYear = String(Number(this.selectedYear) - 1);
@@ -1299,6 +1301,31 @@ class AppController {
 			this.renderSummary();
 		});
 
+		// Quick Month Picker direct jump (Requirement 3.16)
+		const periodDisplay = document.getElementById('period-display');
+		const periodPicker = document.getElementById('input-period-picker');
+		periodDisplay?.addEventListener('click', () => {
+			if (periodPicker) {
+				periodPicker.value = this.currentMonth || `${this.selectedYear}-01`;
+				if (typeof periodPicker.showPicker === 'function') {
+					periodPicker.showPicker();
+				} else {
+					periodPicker.focus();
+					periodPicker.click();
+				}
+			}
+		});
+
+		periodPicker?.addEventListener('change', (e) => {
+			const val = e.target.value;
+			if (val && /^\d{4}-\d{2}$/.test(val)) {
+				this.currentMonth = val;
+				this.selectedYear = val.slice(0, 4);
+				this.renderSummary();
+				this.renderMonthTransactions();
+			}
+		});
+
 		const btnPlanned = document.getElementById('btn-toggle-planned');
 		btnPlanned?.addEventListener('click', () => {
 			this.showPlanned = !this.showPlanned;
@@ -1309,7 +1336,7 @@ class AppController {
 		const btnAxis = document.getElementById('btn-toggle-axis');
 		btnAxis?.addEventListener('click', () => {
 			this.useActualCategoryAxis = !this.useActualCategoryAxis;
-			btnAxis.textContent = this.useActualCategoryAxis ? '実態分類ベース' : '計上分類ベース';
+			btnAxis.textContent = this.useActualCategoryAxis ? '📦 実態分類ベース' : '🏷️ 計上分類ベース';
 			this.renderSummary();
 		});
 
@@ -1383,13 +1410,13 @@ class AppController {
 		const periodDisplay = document.getElementById('period-display');
 		if (periodDisplay) {
 			if (this.analyticsTarget === 'budget') {
-				periodDisplay.textContent = `${this.selectedYear}年 (年間予算・進捗)`;
+				periodDisplay.textContent = `📅 ${this.selectedYear}年 (年間予算・進捗) ▾`;
 			} else if (this.analyticsGranularity === 'daily') {
-				periodDisplay.textContent = `${this.currentMonth} (日別)`;
+				periodDisplay.textContent = `📅 ${this.currentMonth} (日別) ▾`;
 			} else if (this.analyticsGranularity === 'monthly') {
-				periodDisplay.textContent = `${this.selectedYear}年 (月別)`;
+				periodDisplay.textContent = `📅 ${this.selectedYear}年 (月別) ▾`;
 			} else {
-				periodDisplay.textContent = `全期間 (年別推移)`;
+				periodDisplay.textContent = `📅 全期間 (年別推移) ▾`;
 			}
 		}
 
@@ -1425,6 +1452,7 @@ class AppController {
 		const cashflowGrid = document.getElementById('cashflow-stat-grid');
 		const budgetGrid = document.getElementById('budget-stat-grid');
 		const catCard = document.getElementById('card-category-breakdown');
+		const budgetCatCard = document.getElementById('card-budget-category-progress');
 		const chartTitle = document.getElementById('chart-title');
 		const tableTitle = document.getElementById('table-title');
 
@@ -1432,11 +1460,13 @@ class AppController {
 			if (cashflowGrid) cashflowGrid.style.display = 'none';
 			if (budgetGrid) budgetGrid.style.display = 'grid';
 			if (catCard) catCard.style.display = 'none';
+			if (budgetCatCard) budgetCatCard.style.display = 'block';
 			if (chartTitle) chartTitle.textContent = `${this.selectedYear}年 年間予算・貯蓄目標の進捗推移`;
 			if (tableTitle) tableTitle.textContent = `${this.selectedYear}年 月別予算消化・貯蓄実績一覧`;
 			this.renderBudgetAnalytics(transactions, snapshot, config);
 		} else if (this.analyticsTarget === 'cashflow') {
 			if (budgetGrid) budgetGrid.style.display = 'none';
+			if (budgetCatCard) budgetCatCard.style.display = 'none';
 			if (cashflowGrid) cashflowGrid.style.display = 'grid';
 			if (catCard) catCard.style.display = 'block';
 
@@ -1456,6 +1486,7 @@ class AppController {
 		} else {
 			// Assets Target
 			if (budgetGrid) budgetGrid.style.display = 'none';
+			if (budgetCatCard) budgetCatCard.style.display = 'none';
 			if (cashflowGrid) cashflowGrid.style.display = 'none';
 			if (catCard) catCard.style.display = 'none';
 			if (chartTitle) chartTitle.textContent = '資産構成比・内部口座/外部資産内訳';
@@ -1743,16 +1774,28 @@ class AppController {
 			currentMonthIndex = 1;
 		}
 
+		const yearlyCategoryActuals = {};
+		for (const m of Object.values(monthlyData.months)) {
+			if (m.by_category) {
+				for (const [catId, val] of Object.entries(m.by_category)) {
+					const amt = typeof val === 'object' ? Number(val.total || 0) : Number(val || 0);
+					yearlyCategoryActuals[catId] = (yearlyCategoryActuals[catId] || 0) + amt;
+				}
+			}
+		}
+
 		const progress = calculateAnnualBudgetProgress({
 			yearlySummary: {
 				expense: expenseActual,
 				income: incomeActual,
-				net: savingsActual
+				net: savingsActual,
+				by_category: yearlyCategoryActuals
 			},
 			budgetConfig: {
 				expense_budget: expenseBudget,
 				savings_target_amount: savingsTarget,
-				savings_target_rate: targetRate
+				savings_target_rate: targetRate,
+				category_budgets: budgetConfig.category_budgets || {}
 			},
 			currentMonth: currentMonthIndex,
 			expenseBudget,
@@ -1761,7 +1804,9 @@ class AppController {
 			savingsTargetRate: targetRate,
 			incomeActual,
 			netSavingsActual: savingsActual,
-			currentMonthIndex
+			currentMonthIndex,
+			categoryBudgets: budgetConfig.category_budgets || {},
+			categoryActuals: yearlyCategoryActuals
 		});
 
 		// Update KPI cards
@@ -1895,6 +1940,81 @@ class AppController {
 					</tbody>
 				</table>
 			`;
+		}
+
+		// Category budget progress breakdown list (Requirement 3.14)
+		const catProgressContainer = document.getElementById('budget-category-progress-container');
+		if (catProgressContainer) {
+			const categories = (config?.categories || []).filter(c => !c.type || c.type === 'expense');
+			const catMap = new Map();
+			for (const c of categories) {
+				catMap.set(c.id, c);
+			}
+
+			const catEntries = Object.entries(progress.category_progress || {});
+			if (catEntries.length === 0) {
+				catProgressContainer.innerHTML = `
+					<div style="padding: 16px; text-align: center; color: var(--text-muted); font-size: 0.9rem;">
+						費目別年間予算は未設定です。<br>「設定」タブの「🎯 年間予算・貯蓄目標の設定」から各費目の年間予算を設定できます。
+					</div>
+				`;
+			} else {
+				// Sort by budget descending
+				catEntries.sort((a, b) => b[1].budget - a[1].budget);
+
+				catProgressContainer.innerHTML = `
+					<table class="summary-table">
+						<thead>
+							<tr>
+								<th>費目</th>
+								<th>年間予算</th>
+								<th>支出実績</th>
+								<th>残予算</th>
+								<th>消化率 (進捗)</th>
+								<th>ペース判定</th>
+							</tr>
+						</thead>
+						<tbody>
+							${catEntries.map(([catId, p]) => {
+								const catObj = catMap.get(catId);
+								const catName = catObj ? `${catObj.icon || '🏷️'} ${escapeHtml(catObj.name)}` : escapeHtml(catId);
+								let statusBadge = '<span class="badge badge-success">順調</span>';
+								let barColor = '#10b981';
+								if (p.pace_status === 'ahead') {
+									statusBadge = '<span class="badge badge-info">抑制中</span>';
+									barColor = '#3b82f6';
+								} else if (p.pace_status === 'caution') {
+									statusBadge = '<span class="badge badge-warning" style="background:#f59e0b; color:#fff;">注意</span>';
+									barColor = '#f59e0b';
+								} else if (p.pace_status === 'over_budget') {
+									statusBadge = '<span class="badge badge-danger">予算超過</span>';
+									barColor = 'var(--danger)';
+								}
+
+								return `
+									<tr>
+										<td><strong>${catName}</strong></td>
+										<td style="font-weight: 600;">¥${p.budget.toLocaleString()}</td>
+										<td style="color: var(--danger);">¥${p.actual.toLocaleString()}</td>
+										<td style="color: ${p.remaining >= 0 ? 'var(--text-main)' : 'var(--danger)'};">
+											¥${p.remaining.toLocaleString()}
+										</td>
+										<td style="min-width: 130px;">
+											<div style="display: flex; align-items: center; gap: 8px;">
+												<div style="flex: 1; background: #e2e8f0; height: 6px; border-radius: 3px; overflow: hidden;">
+													<div style="background: ${barColor}; height: 100%; width: ${Math.min(100, Math.max(0, p.consumption_rate))}%;"></div>
+												</div>
+												<span style="font-size: 0.8rem; font-weight: 600; min-width: 38px;">${p.consumption_rate}%</span>
+											</div>
+										</td>
+										<td>${statusBadge}</td>
+									</tr>
+								`;
+							}).join('')}
+						</tbody>
+					</table>
+				`;
+			}
 		}
 
 		// Chart
@@ -2595,7 +2715,7 @@ class AppController {
 			}
 		});
 
-		// Annual Budget settings
+		// Annual Budget settings (Requirement 3.14)
 		const inputBudgetYear = document.getElementById('setting-budget-year');
 		const inputExpBudget = document.getElementById('setting-expense-budget');
 		const inputSavTarget = document.getElementById('setting-savings-target-amount');
@@ -2611,18 +2731,79 @@ class AppController {
 			previewDiv.textContent = `月平均目安: 支出予算 ¥${mExp.toLocaleString()} / 目標貯蓄 ¥${mSav.toLocaleString()}`;
 		};
 
-		inputExpBudget?.addEventListener('input', updateMonthlyPreview);
+		inputExpBudget?.addEventListener('input', () => {
+			updateMonthlyPreview();
+			this.updateCategoryBudgetDiscrepancy();
+		});
 		inputSavTarget?.addEventListener('input', updateMonthlyPreview);
 
 		inputBudgetYear?.addEventListener('change', async () => {
-			const year = inputBudgetYear.value.trim();
-			if (year) {
-				const b = await this.db.getAnnualBudget(year);
-				if (inputExpBudget) inputExpBudget.value = b?.expense_budget || '';
-				if (inputSavTarget) inputSavTarget.value = b?.savings_target_amount || '';
-				if (inputSavRate) inputSavRate.value = b?.savings_target_rate ?? b?.target_savings_rate ?? '';
-				updateMonthlyPreview();
+			await this.renderAnnualBudgetSettings();
+		});
+
+		// Realtime Category Search Filter in Settings (Requirement 3.14 Scalable UI)
+		document.getElementById('input-budget-cat-search')?.addEventListener('input', (e) => {
+			const query = (e.target.value || '').trim().toLowerCase();
+			document.querySelectorAll('.budget-cat-item').forEach(item => {
+				const name = (item.dataset.catName || '').toLowerCase();
+				item.style.display = (!query || name.includes(query)) ? 'flex' : 'none';
+			});
+		});
+
+		// Dynamic Category Budget input change
+		document.getElementById('budget-categories-list-container')?.addEventListener('input', (e) => {
+			if (e.target.classList.contains('input-cat-budget')) {
+				const val = Number(e.target.value) || 0;
+				const hint = e.target.parentElement?.querySelector('.cat-monthly-hint');
+				if (hint) {
+					const mVal = val > 0 ? Math.round(val / 12) : 0;
+					hint.textContent = mVal > 0 ? `¥${mVal.toLocaleString()}/月` : '-';
+				}
+				this.updateCategoryBudgetDiscrepancy();
 			}
+		});
+
+		// Auto-calculate budget defaults from previous year actuals (Requirement 3.14)
+		document.getElementById('btn-budget-auto-calc')?.addEventListener('click', async () => {
+			const year = inputBudgetYear?.value.trim() || this.selectedYear || String(new Date().getFullYear());
+			const config = await this.db.getMasterConfig();
+			const snapshot = await this.db.getSnapshot();
+			const allTransactions = await this.db.getTransactions({ includeDeleted: false });
+			const prevYearStr = String(Number(year) - 1);
+			const prevYearMonthly = aggregateMonthlySummaries(allTransactions, prevYearStr, snapshot?.monthly_summaries || {});
+
+			const prevYearSummary = {
+				income: prevYearMonthly.total_income,
+				expense: prevYearMonthly.total_expense,
+				net: prevYearMonthly.total_net,
+				savings_rate: prevYearMonthly.total_income > 0 ? Math.round((prevYearMonthly.total_net / prevYearMonthly.total_income) * 100) : 0
+			};
+
+			const defaults = calculateAnnualBudgetDefaults({
+				previousYearSummary,
+				pastTransactions: allTransactions,
+				categories: config?.categories || [],
+				targetYear: year
+			});
+
+			if (inputExpBudget) inputExpBudget.value = defaults.expense_budget || '';
+			if (inputSavTarget) inputSavTarget.value = defaults.savings_target_amount || '';
+			if (inputSavRate) inputSavRate.value = defaults.savings_target_rate || '';
+
+			document.querySelectorAll('.input-cat-budget').forEach(input => {
+				const catId = input.dataset.catId;
+				const defAmt = defaults.category_budgets[catId] || 0;
+				input.value = defAmt > 0 ? defAmt : '';
+				const hint = input.parentElement?.querySelector('.cat-monthly-hint');
+				if (hint) {
+					const mVal = defAmt > 0 ? Math.round(defAmt / 12) : 0;
+					hint.textContent = mVal > 0 ? `¥${mVal.toLocaleString()}/月` : '-';
+				}
+			});
+
+			updateMonthlyPreview();
+			this.updateCategoryBudgetDiscrepancy();
+			alert(`${prevYearStr}年の実績を元に、軽く丸めた推奨予算値を試算・反映しました！\n内容を確認・調整の上、「年間予算・費目別目標を保存」ボタンを押してください。`);
 		});
 
 		document.getElementById('btn-save-annual-budget')?.addEventListener('click', async () => {
@@ -2635,13 +2816,23 @@ class AppController {
 			const sav = Number(inputSavTarget?.value) || 0;
 			const rate = Number(inputSavRate?.value) || 0;
 
+			const category_budgets = {};
+			document.querySelectorAll('.input-cat-budget').forEach(input => {
+				const catId = input.dataset.catId;
+				const val = Number(input.value) || 0;
+				if (val > 0) {
+					category_budgets[catId] = val;
+				}
+			});
+
 			await this.db.saveAnnualBudget(year, {
 				expense_budget: exp,
 				savings_target_amount: sav,
 				savings_target_rate: rate,
-				target_savings_rate: rate
+				target_savings_rate: rate,
+				category_budgets
 			});
-			alert(`${year}年の年間予算・貯蓄目標を保存しました！`);
+			alert(`${year}年の年間予算・費目別目標を保存しました！`);
 			await this.refreshAllViews();
 		});
 
@@ -2832,6 +3023,7 @@ class AppController {
 		const inputSavTarget = document.getElementById('setting-savings-target-amount');
 		const inputSavRate = document.getElementById('setting-savings-target-rate');
 		const previewDiv = document.getElementById('budget-monthly-preview');
+		const catContainer = document.getElementById('budget-categories-list-container');
 
 		if (!inputBudgetYear) return;
 
@@ -2850,6 +3042,88 @@ class AppController {
 			const mSav = Math.round(sav / 12);
 			previewDiv.textContent = `月平均目安: 支出予算 ¥${mExp.toLocaleString()} / 目標貯蓄 ¥${mSav.toLocaleString()}`;
 		}
+
+		// Calculate previous year actuals per category
+		const config = await this.db.getMasterConfig();
+		const categories = (config?.categories || []).filter(c => !c.type || c.type === 'expense');
+		const prevYearStr = String(Number(currentYear) - 1);
+		const snapshot = await this.db.getSnapshot();
+		const allTransactions = await this.db.getTransactions({ includeDeleted: false });
+		const prevYearMonthly = aggregateMonthlySummaries(allTransactions, prevYearStr, snapshot?.monthly_summaries || {});
+		const prevYearCatActuals = {};
+		for (const m of Object.values(prevYearMonthly.months)) {
+			if (m.by_category) {
+				for (const [cId, val] of Object.entries(m.by_category)) {
+					const amt = typeof val === 'object' ? Number(val.total || 0) : Number(val || 0);
+					prevYearCatActuals[cId] = (prevYearCatActuals[cId] || 0) + amt;
+				}
+			}
+		}
+
+		// Render category budget rows
+		if (catContainer) {
+			if (categories.length === 0) {
+				catContainer.innerHTML = '<div style="padding: 8px; color: var(--text-muted); font-size: 0.85rem;">費目が登録されていません</div>';
+			} else {
+				const savedCatBudgets = budget?.category_budgets || {};
+				catContainer.innerHTML = categories.map(cat => {
+					const prevAmt = prevYearCatActuals[cat.id] || 0;
+					const savedVal = savedCatBudgets[cat.id] !== undefined ? savedCatBudgets[cat.id] : '';
+					const monthlyVal = savedVal !== '' ? Math.round(Number(savedVal) / 12) : 0;
+					return `
+						<div class="budget-cat-item" data-cat-id="${escapeHtml(cat.id)}" data-cat-name="${escapeHtml(cat.name)}">
+							<div style="flex: 2; min-width: 140px;">
+								<div style="font-weight: 600; font-size: 0.9rem;">
+									${cat.icon || '🏷️'} ${escapeHtml(cat.name)}
+								</div>
+								<div style="font-size: 0.75rem; color: var(--text-muted);">
+									前年実績(${prevYearStr}年): ¥${prevAmt.toLocaleString()}
+								</div>
+							</div>
+							<div style="flex: 2; min-width: 160px; display: flex; align-items: center; gap: 6px;">
+								<input type="number"
+									class="form-control form-control-sm input-cat-budget"
+									data-cat-id="${escapeHtml(cat.id)}"
+									value="${savedVal !== '' ? savedVal : ''}"
+									min="0" step="1000" placeholder="0">
+								<span style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; min-width: 65px;" class="cat-monthly-hint">
+									${monthlyVal > 0 ? `¥${monthlyVal.toLocaleString()}/月` : '-'}
+								</span>
+							</div>
+						</div>
+					`;
+				}).join('');
+			}
+		}
+
+		this.updateCategoryBudgetDiscrepancy();
+	}
+
+	updateCategoryBudgetDiscrepancy() {
+		const inputExpBudget = document.getElementById('setting-expense-budget');
+		const discrepancyEl = document.getElementById('budget-category-discrepancy');
+		if (!discrepancyEl) return;
+
+		let totalCat = 0;
+		document.querySelectorAll('.input-cat-budget').forEach(input => {
+			totalCat += Number(input.value) || 0;
+		});
+
+		const overallExp = Number(inputExpBudget?.value) || 0;
+		const diff = overallExp - totalCat;
+
+		let diffText = '';
+		if (overallExp > 0) {
+			if (diff === 0) {
+				diffText = ` <span style="color: #10b981;">(全体予算と完全一致 ✅)</span>`;
+			} else if (diff > 0) {
+				diffText = ` <span style="color: #3b82f6;">(全体予算まで残り ¥${diff.toLocaleString()})</span>`;
+			} else {
+				diffText = ` <span style="color: var(--danger);">(全体予算を超過 +¥${Math.abs(diff).toLocaleString()})</span>`;
+			}
+		}
+
+		discrepancyEl.innerHTML = `内訳合計: ¥${totalCat.toLocaleString()}${diffText}`;
 	}
 
 	setupMasterTabs() {

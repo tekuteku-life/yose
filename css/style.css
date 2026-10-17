@@ -731,5 +731,50 @@ header {
 	margin: 16px 0;
 }
 
+/* Sub-card & Grouped Key Management (Requirement 4.5) */
+.sub-card {
+	background: #ffffff;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	padding: 14px;
+	margin-bottom: 14px;
+}
+
+.sub-card-title {
+	font-size: 0.95rem;
+	font-weight: 700;
+	margin-bottom: 8px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+/* Category Budget Item Row (Requirement 3.14) */
+.budget-cat-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 8px 10px;
+	background: #ffffff;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	margin-bottom: 6px;
+}
+
+/* Period Display Interactive Cursor (Requirement 3.16) */
+#period-display {
+	cursor: pointer;
+	user-select: none;
+	padding: 4px 8px;
+	border-radius: 6px;
+	transition: background 0.15s;
+}
+
+#period-display:hover {
+	background: var(--bg-hover);
+	color: var(--primary);
+}
+
 
 
