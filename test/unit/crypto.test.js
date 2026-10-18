@@ -434,6 +434,200 @@ describe('js/crypto.js - Unit Tests', () => {
 			assert.equal(getActiveSession(), null);
 		});
 	});
+
+	describe('Canonical JSON Stringification', () => {
+		it('sorts object keys recursively and produces deterministic strings', async () => {
+			const { canonicalJsonStringify } = await import('../../js/crypto.js');
+
+			const objA = { z: 1, a: 2, m: { y: 10, x: 20 } };
+			const objB = { a: 2, m: { x: 20, y: 10 }, z: 1 };
+
+			const strA = canonicalJsonStringify(objA);
+			const strB = canonicalJsonStringify(objB);
+
+			assert.equal(strA, '{"a":2,"m":{"x":20,"y":10},"z":1}');
+			assert.equal(strA, strB);
+		});
+
+		it('handles arrays, null, primitives, and skips undefined or function values', async () => {
+			const { canonicalJsonStringify } = await import('../../js/crypto.js');
+
+			assert.equal(canonicalJsonStringify(null), 'null');
+			assert.equal(canonicalJsonStringify(123), '123');
+			assert.equal(canonicalJsonStringify('hello'), '"hello"');
+			assert.equal(canonicalJsonStringify(true), 'true');
+			assert.equal(canonicalJsonStringify([3, 2, 1]), '[3,2,1]');
+
+			const withSpecial = {
+				name: 'test',
+				fn: () => {},
+				undef: undefined,
+				arr: [{ b: 2, a: 1 }, null, true]
+			};
+			assert.equal(canonicalJsonStringify(withSpecial), '{"arr":[{"a":1,"b":2},null,true],"name":"test"}');
+		});
+	});
+
+	describe('WebAuthn PRF Vault Encryption & Decryption', () => {
+		it('encrypts and decrypts master keys using PRF key', async () => {
+			const {
+				encryptWebAuthnVault,
+				decryptWebAuthnVault,
+				generateDatabaseMasterKey,
+				generateEd25519KeyPair,
+				exportKeyRaw,
+				exportPrivateKeyPkcs8,
+				getRandomValues
+			} = await import('../../js/crypto.js');
+
+			const dmk = await generateDatabaseMasterKey();
+			const kp = await generateEd25519KeyPair();
+			const dmkRaw = await exportKeyRaw(dmk);
+			const privPkcs8 = await exportPrivateKeyPkcs8(kp.privateKey);
+
+			const prfKey = getRandomValues(new Uint8Array(32));
+			const vault = await encryptWebAuthnVault({ dmkRaw, privateKeyPkcs8: privPkcs8 }, prfKey);
+
+			assert.ok(vault.ciphertext);
+			assert.ok(vault.iv);
+			assert.ok(vault.prfSalt);
+
+			const decrypted = await decryptWebAuthnVault(vault, prfKey);
+			assert.deepEqual(decrypted.dmkRaw, dmkRaw);
+			assert.deepEqual(decrypted.privateKeyPkcs8, privPkcs8);
+		});
+
+		it('rejects invalid vault payload or wrong PRF key', async () => {
+			const {
+				decryptWebAuthnVault,
+				encryptWebAuthnVault,
+				getRandomValues
+			} = await import('../../js/crypto.js');
+
+			const prfKey = getRandomValues(new Uint8Array(32));
+			const wrongKey = getRandomValues(new Uint8Array(32));
+
+			await assert.rejects(async () => {
+				await decryptWebAuthnVault(null, prfKey);
+			}, /Invalid webauthn_vault payload/);
+
+			await assert.rejects(async () => {
+				await decryptWebAuthnVault({ ciphertext: 'abc' }, prfKey);
+			}, /Invalid webauthn_vault payload/);
+
+			const validVault = await encryptWebAuthnVault({
+				dmkRaw: new Uint8Array(32).fill(1),
+				privateKeyPkcs8: new Uint8Array(48).fill(2)
+			}, prfKey);
+
+			await assert.rejects(async () => {
+				await decryptWebAuthnVault(validVault, wrongKey);
+			}, /WebAuthn PRF vault decryption failed/);
+		});
+	});
+
+	describe('WebAuthn Extensions & PRF Handling', () => {
+		it('extracts PRF key when authenticator returns extension results', async () => {
+			const {
+				registerWebAuthnCredential,
+				authenticateWithWebAuthn,
+				bytesToBase64
+			} = await import('../../js/crypto.js');
+
+			const mockPrfRaw = new Uint8Array(32).fill(99);
+			const mockCredId = new Uint8Array([11, 22, 33]);
+
+			const mockNavWithPrf = {
+				credentials: {
+					create: async () => ({
+						rawId: mockCredId.buffer,
+						id: bytesToBase64(mockCredId),
+						getClientExtensionResults: () => ({
+							prf: {
+								enabled: true,
+								results: {
+									first: mockPrfRaw.buffer
+								}
+							}
+						})
+					}),
+					get: async () => ({
+						rawId: mockCredId.buffer,
+						id: bytesToBase64(mockCredId),
+						getClientExtensionResults: () => ({
+							prf: {
+								results: {
+									first: mockPrfRaw.buffer
+								}
+							}
+						})
+					})
+				}
+			};
+
+			const regRes = await registerWebAuthnCredential('test-user', mockNavWithPrf);
+			assert.equal(regRes.prfSupported, true);
+			assert.deepEqual(regRes.prfKeyRaw, mockPrfRaw);
+
+			const authRes = await authenticateWithWebAuthn(regRes.credentialId, mockNavWithPrf);
+			assert.equal(authRes.success, true);
+			assert.deepEqual(authRes.prfKeyRaw, mockPrfRaw);
+		});
+
+		it('handles missing credentials or get errors', async () => {
+			const {
+				registerWebAuthnCredential,
+				authenticateWithWebAuthn,
+				decryptObject
+			} = await import('../../js/crypto.js');
+
+			const emptyNav = {
+				credentials: {
+					create: async () => null,
+					get: async () => null
+				}
+			};
+
+			await assert.rejects(async () => {
+				await registerWebAuthnCredential('test', emptyNav);
+			}, /Failed to create WebAuthn credential/);
+
+			await assert.rejects(async () => {
+				await authenticateWithWebAuthn('test', emptyNav);
+			}, /No assertion returned/);
+
+			// Test non-base64 credentialId fallback
+			const mockNavFallback = {
+				credentials: {
+					create: async () => ({}),
+					get: async (opts) => ({
+						rawId: new Uint8Array([1, 2, 3]).buffer,
+						id: 'mock'
+					})
+				}
+			};
+			const authRes = await authenticateWithWebAuthn('not-valid-base64!@#$', mockNavFallback);
+			assert.equal(authRes.success, true);
+
+			// Test unsupported WebAuthn environment
+			await assert.rejects(async () => {
+				await registerWebAuthnCredential('test', {});
+			}, /WebAuthn is not supported in this environment/);
+
+			await assert.rejects(async () => {
+				await authenticateWithWebAuthn('test', {});
+			}, /WebAuthn is not supported in this environment/);
+
+			// Test decryptObject error validation
+			await assert.rejects(async () => {
+				await decryptObject(null, {});
+			}, /Invalid encrypted object payload/);
+
+			await assert.rejects(async () => {
+				await decryptObject({ ciphertext: 'abc' }, {});
+			}, /Invalid encrypted object payload/);
+		});
+	});
 });
 
 

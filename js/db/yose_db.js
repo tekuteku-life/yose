@@ -89,8 +89,15 @@ export class YoseDB extends StorageEngine {
 
 	async getTransactions(filter = {}) {
 		const all = await this.getAllRaw('transactions');
+		const candidateItems = all.filter(raw => {
+			if (!filter.includeDeleted && raw.is_deleted) return false;
+			if (filter.target_month && raw.target_month && raw.target_month !== filter.target_month) return false;
+			if (filter.sync_status && raw.sync_status && raw.sync_status !== filter.sync_status) return false;
+			return true;
+		});
+
 		const decrypted = [];
-		for (const item of all) {
+		for (const item of candidateItems) {
 			decrypted.push(await this.decryptRecord(item));
 		}
 

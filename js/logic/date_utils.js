@@ -195,6 +195,10 @@ export function groupHolidaysByYear(holidays) {
  * Generate a unique ID with optional prefix
  */
 export function generateUUID(prefix = 'tx') {
+	const c = typeof crypto !== 'undefined' ? crypto : (typeof globalThis !== 'undefined' ? globalThis.crypto : null);
+	if (c && typeof c.randomUUID === 'function') {
+		return `${prefix}_${c.randomUUID().replace(/-/g, '')}`;
+	}
 	const rnd = Math.random().toString(36).substring(2, 9);
 	const timestamp = Date.now().toString(36);
 	return `${prefix}_${timestamp}_${rnd}`;

@@ -337,6 +337,30 @@ function saveJsonFile(fileName, data) {
 // 3. Web App Request Handlers
 // ==========================================
 
+function canonicalJsonStringify(obj) {
+	if (obj === null || typeof obj !== 'object') {
+		return JSON.stringify(obj);
+	}
+	if (Array.isArray(obj)) {
+		return '[' + obj.map(item => {
+			if (item === undefined || typeof item === 'function' || typeof item === 'symbol') {
+				return 'null';
+			}
+			return canonicalJsonStringify(item);
+		}).join(',') + ']';
+	}
+	const sortedKeys = Object.keys(obj).sort();
+	const keyValues = [];
+	for (const key of sortedKeys) {
+		const val = obj[key];
+		if (val === undefined || typeof val === 'function' || typeof val === 'symbol') {
+			continue;
+		}
+		keyValues.push(JSON.stringify(key) + ':' + canonicalJsonStringify(val));
+	}
+	return '{' + keyValues.join(',') + '}';
+}
+
 function doGet(e) {
 	return createResponse({
 		status: 'ok',
@@ -424,7 +448,7 @@ function doPost(e) {
 				});
 			}
 
-			const signString = JSON.stringify({ action, timestamp, payload });
+			const signString = canonicalJsonStringify({ action, timestamp, payload });
 			const msgBytes = (typeof Utilities !== 'undefined' && Utilities.newBlob)
 				? new Uint8Array(Utilities.newBlob(signString).getBytes().map(b => (b < 0 ? b + 256 : b)))
 				: new TextEncoder().encode(signString);
@@ -453,7 +477,7 @@ function doPost(e) {
 			});
 		}
 
-		const signString = JSON.stringify({ action, timestamp, payload });
+		const signString = canonicalJsonStringify({ action, timestamp, payload });
 		const msgBytes = (typeof Utilities !== 'undefined' && Utilities.newBlob)
 			? new Uint8Array(Utilities.newBlob(signString).getBytes().map(b => (b < 0 ? b + 256 : b)))
 			: new TextEncoder().encode(signString);
@@ -833,6 +857,7 @@ if (typeof module !== 'undefined' && module.exports) {
 		getRegisteredPublicKeys,
 		handleUpdateExternalAssets,
 		handleUpdateMaster,
-		handleFetchState
+		handleFetchState,
+		canonicalJsonStringify
 	};
 }

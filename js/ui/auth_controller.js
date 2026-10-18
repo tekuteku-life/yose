@@ -16,6 +16,8 @@ import {
 	importAesKeyRaw,
 	encryptMasterKeysWithPin,
 	decryptMasterKeysWithPin,
+	encryptWebAuthnVault,
+	decryptWebAuthnVault,
 	isWebAuthnSupported,
 	registerWebAuthnCredential,
 	authenticateWithWebAuthn,
@@ -94,10 +96,12 @@ export class AuthController {
 
 					// 3. Register WebAuthn if supported
 					let credentialId = null;
+					let prfKey = null;
 					if (isWebAuthnSupported()) {
 						try {
 							const cred = await registerWebAuthnCredential('よせあつめ家計簿 ユーザー');
 							credentialId = cred.credentialId;
+							prfKey = cred.prfKey;
 							await this.db.saveSecurityKey('webauthn_credential_id', credentialId);
 						} catch (wErr) {
 							console.warn('WebAuthn setup skipped or failed:', wErr);
@@ -111,10 +115,15 @@ export class AuthController {
 					await this.db.saveSecurityKey('master_keys_package', pkg);
 
 					if (credentialId) {
-						await this.db.saveSecurityKey('webauthn_vault', {
-							dmk: bytesToBase64(dmkRaw),
-							priv: bytesToBase64(privPkcs8)
-						});
+						if (prfKey) {
+							const encVault = await encryptWebAuthnVault({ dmkRaw, privateKeyPkcs8: privPkcs8 }, prfKey);
+							await this.db.saveSecurityKey('webauthn_vault', encVault);
+						} else {
+							await this.db.saveSecurityKey('webauthn_vault', {
+								dmk: bytesToBase64(dmkRaw),
+								priv: bytesToBase64(privPkcs8)
+							});
+						}
 					}
 
 					// 5. Activate keys in memory & DB
@@ -165,8 +174,18 @@ export class AuthController {
 				if (res.success) {
 					const vault = await this.db.getSecurityKey('webauthn_vault');
 					if (vault) {
-						const dmk = await importAesKeyRaw(base64ToBytes(vault.dmk));
-						const priv = await importPrivateKeyPkcs8(base64ToBytes(vault.priv));
+						let dmk, priv;
+						if (vault.ciphertext) {
+							if (!res.prfKey) {
+								throw new Error('PRF key is required for encrypted WebAuthn vault');
+							}
+							const decrypted = await decryptWebAuthnVault(vault, res.prfKey);
+							dmk = await importAesKeyRaw(decrypted.dmkRaw);
+							priv = await importPrivateKeyPkcs8(decrypted.privateKeyPkcs8);
+						} else {
+							dmk = await importAesKeyRaw(base64ToBytes(vault.dmk));
+							priv = await importPrivateKeyPkcs8(base64ToBytes(vault.priv));
+						}
 						this.db.setEncryptionKey(dmk);
 						this.privateKey = priv;
 						this.isKeyLocked = false;
@@ -230,20 +249,56 @@ export class AuthController {
 
 	async generateNewKeyPair() {
 		try {
+			if (!this.db.encryptionKey) {
+				alert('DBがロックされています。鍵ペアを再生成する前にPINでロック解除してください。');
+				return;
+			}
+			const pin = prompt('新しい鍵ペアを保護するための現在のPINコードを入力してください:');
+			if (!pin) {
+				alert('PINコードが入力されなかったため、鍵ペアの再生成を中止しました。');
+				return;
+			}
+
+			const masterPkg = await this.db.getSecurityKey('master_keys_package');
+			if (masterPkg) {
+				try {
+					await decryptMasterKeysWithPin(masterPkg, pin);
+				} catch (e) {
+					alert('PINコードが正しくありません。鍵ペアの再生成を中止しました。');
+					return;
+				}
+			}
+
 			const kp = await generateEd25519KeyPair();
 			this.privateKey = kp.privateKey;
 			this.publicKey = kp.publicKey;
 			this.publicKeyBase64 = await exportPublicKeyBase64(kp.publicKey);
 
 			await this.db.saveSecurityKey('public_key_base64', this.publicKeyBase64);
+
+			// Re-wrap master_keys_package with existing DMK and new private key
+			const dmkRaw = await exportKeyRaw(this.db.encryptionKey);
+			const privPkcs8 = await exportPrivateKeyPkcs8(kp.privateKey);
+			const newPkg = await encryptMasterKeysWithPin({ dmkRaw, privateKeyPkcs8: privPkcs8 }, pin);
+			await this.db.saveSecurityKey('master_keys_package', newPkg);
+
 			this.isKeyLocked = false;
+			setActiveSession({ dmk: this.db.encryptionKey, privateKey: kp.privateKey, publicKey: kp.publicKey });
 
 			if (this.syncManager) {
 				this.syncManager.setPrivateKey(this.privateKey);
 			}
 			this.updateKeyDisplay();
+
+			const webauthnId = await this.db.getSecurityKey('webauthn_credential_id');
+			if (webauthnId) {
+				alert('新しいEd25519鍵ペアを生成し、PINで保護しました。\nWebAuthn（Passkey）をご利用の場合は、設定画面のボタンからWebAuthnを再登録してください。');
+			} else {
+				alert('新しいEd25519鍵ペアを生成し、PINで保護しました。');
+			}
 		} catch (err) {
 			console.warn('Failed to generate Ed25519 key pair:', err);
+			alert(`鍵ペアの再生成に失敗しました: ${err.message}`);
 		}
 	}
 
@@ -263,22 +318,22 @@ export class AuthController {
 			if (this.isKeyProtectedWithPin) {
 				if (this.isKeyLocked) {
 					banner.className = 'security-banner locked';
-					banner.innerHTML = `<span>🔒 <strong>秘密鍵はPINで保護されています（現在ロック中）</strong></span>`;
+					banner.innerHTML = `<span>🔒 <strong>秘密鍵・DBはPINで保護されています（現在ロック中）</strong></span>`;
 					if (btnUnlock) btnUnlock.style.display = 'inline-block';
 					if (btnLock) btnLock.style.display = 'none';
-					if (btnRemove) btnRemove.style.display = 'inline-block';
+					if (btnRemove) btnRemove.style.display = 'none';
 					if (inputPin) inputPin.placeholder = '新しいPINを設定する場合に入力';
 				} else {
 					banner.className = 'security-banner unlocked';
-					banner.innerHTML = `<span>🔓 <strong>秘密鍵のロック解除中（署名・同期可能）</strong></span>`;
+					banner.innerHTML = `<span>🔓 <strong>秘密鍵・DBのロック解除中（暗号化セッション有効）</strong></span>`;
 					if (btnUnlock) btnUnlock.style.display = 'none';
 					if (btnLock) btnLock.style.display = 'inline-block';
-					if (btnRemove) btnRemove.style.display = 'inline-block';
+					if (btnRemove) btnRemove.style.display = 'none';
 					if (inputPin) inputPin.placeholder = '新しいPINに変更する場合に入力';
 				}
 			} else {
 				banner.className = 'security-banner unprotected';
-				banner.innerHTML = `<span>⚠️ 秘密鍵は現在PIN保護されていません（端末内に平文保存）</span>`;
+				banner.innerHTML = `<span>⚠️ 秘密鍵は現在PIN保護されていません</span>`;
 				if (btnUnlock) btnUnlock.style.display = 'none';
 				if (btnLock) btnLock.style.display = 'none';
 				if (btnRemove) btnRemove.style.display = 'none';
@@ -387,26 +442,7 @@ export class AuthController {
 	}
 
 	async removePinProtection() {
-		if (!this.isKeyProtectedWithPin) return;
-		const pin = prompt('現在のPINコードを入力してください（PIN保護を解除します）:');
-		if (!pin) return;
-		try {
-			const enc = await this.db.getSecurityKey('encrypted_private_key');
-			const privKey = await decryptPrivateKeyWithPin(enc, pin);
-			this.privateKey = privKey;
-			const pkcs8 = await exportPrivateKeyPkcs8(privKey);
-			await this.db.saveSecurityKey('private_key_pkcs8', Array.from(pkcs8));
-			await this.db.deleteSecurityKey('encrypted_private_key');
-			this.isKeyProtectedWithPin = false;
-			this.isKeyLocked = false;
-			if (this.syncManager) {
-				this.syncManager.setPrivateKey(this.privateKey);
-			}
-			this.updateKeyDisplay();
-			alert('PIN保護を解除しました。秘密鍵はローカル端末内に直接保存されます。');
-		} catch (err) {
-			alert('PINコードが正しくありません');
-		}
+		alert('データベース完全暗号化（Zero-Trust DMK）のため、PIN保護の解除（平文保存への移行）は無効化されています。端末セキュリティを維持するためPIN保護をご利用ください。');
 	}
 }
 

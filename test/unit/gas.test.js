@@ -803,5 +803,14 @@ describe('gas/Code.gs - Unit Tests', () => {
 			const updatedArch = gas.loadJsonFile('archives/2026-08.json');
 			assert.equal(updatedArch.transactions.length, 2);
 		});
+
+		it('canonicalJsonStringify produces deterministic JSON matching client', () => {
+			const obj1 = { z: 1, a: 2, m: { y: 10, x: 20 } };
+			const obj2 = { a: 2, m: { x: 20, y: 10 }, z: 1 };
+			assert.equal(gas.canonicalJsonStringify(obj1), '{"a":2,"m":{"x":20,"y":10},"z":1}');
+			assert.equal(gas.canonicalJsonStringify(obj1), gas.canonicalJsonStringify(obj2));
+			assert.equal(gas.canonicalJsonStringify(null), 'null');
+			assert.equal(gas.canonicalJsonStringify([3, 2, 1]), '[3,2,1]');
+		});
 	});
 });

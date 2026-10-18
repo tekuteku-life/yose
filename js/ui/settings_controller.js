@@ -10,7 +10,8 @@ import {
 	escapeHtml
 } from '../logic.js';
 import {
-	encryptPrivateKeyWithPin,
+	encryptMasterKeysWithPin,
+	encryptWebAuthnVault,
 	exportKeyRaw,
 	exportPrivateKeyPkcs8,
 	isWebAuthnSupported,
@@ -69,19 +70,20 @@ export class SettingsController {
 				alert('PINコードは4桁以上を入力してください');
 				return;
 			}
-			if (!this.authController.privateKey) {
-				alert('秘密鍵がロードされていません。ロック中の場合は解除してください。');
+			if (!this.db.encryptionKey || !this.authController.privateKey) {
+				alert('秘密鍵またはDB暗号化鍵がロードされていません。ロック中の場合は先に解除してください。');
 				return;
 			}
 
-			const enc = await encryptPrivateKeyWithPin(this.authController.privateKey, pin);
-			await this.db.saveSecurityKey('encrypted_private_key', enc);
-			await this.db.deleteSecurityKey('private_key_pkcs8');
+			const dmkRaw = await exportKeyRaw(this.db.encryptionKey);
+			const privPkcs8 = await exportPrivateKeyPkcs8(this.authController.privateKey);
+			const pkg = await encryptMasterKeysWithPin({ dmkRaw, privateKeyPkcs8: privPkcs8 }, pin);
+			await this.db.saveSecurityKey('master_keys_package', pkg);
 			this.authController.isKeyProtectedWithPin = true;
 			this.authController.isKeyLocked = false;
 			if (pinInput) pinInput.value = '';
 			this.authController.updateKeyDisplay();
-			alert('秘密鍵をPINコードで暗号化保護しました！\n平文の秘密鍵は端末内ストレージから削除されました。');
+			alert('PINコードを正常に更新しました！\n秘密鍵およびDB暗号化鍵が新しいPINで保護されました。');
 		});
 
 		document.getElementById('btn-unlock-pin')?.addEventListener('click', async () => {
@@ -90,10 +92,6 @@ export class SettingsController {
 
 		document.getElementById('btn-lock-now')?.addEventListener('click', async () => {
 			await this.authController.lockPrivateKey();
-		});
-
-		document.getElementById('btn-remove-pin')?.addEventListener('click', async () => {
-			await this.authController.removePinProtection();
 		});
 
 		// Save GAS URL
@@ -119,12 +117,8 @@ export class SettingsController {
 					return;
 				}
 				const config = await this.db.getMasterConfig();
-				const snapshot = await this.db.getSnapshot();
 				await this.syncManager.sendAction('update_master', { master_config: config });
-				if (snapshot?.external_assets) {
-					await this.syncManager.sendAction('update_external_assets', { external_assets: snapshot.external_assets });
-				}
-				alert('設定マスタおよび外部資産をGASへ送信しました！');
+				alert('設定マスタをGASへ送信しました！');
 			} catch (err) {
 				alert(`マスタ同期エラー: ${err.message}`);
 			}
@@ -235,10 +229,15 @@ export class SettingsController {
 					if (dmk) {
 						const dmkRaw = await exportKeyRaw(dmk);
 						const privPkcs8 = await exportPrivateKeyPkcs8(this.authController.privateKey);
-						await this.db.saveSecurityKey('webauthn_vault', {
-							dmk: bytesToBase64(dmkRaw),
-							priv: bytesToBase64(privPkcs8)
-						});
+						if (cred.prfKey) {
+							const encVault = await encryptWebAuthnVault({ dmkRaw, privateKeyPkcs8 }, cred.prfKey);
+							await this.db.saveSecurityKey('webauthn_vault', encVault);
+						} else {
+							await this.db.saveSecurityKey('webauthn_vault', {
+								dmk: bytesToBase64(dmkRaw),
+								priv: bytesToBase64(privPkcs8)
+							});
+						}
 					}
 				}
 				alert('WebAuthn (Passkey) を上書き・再登録しました！\n（1Password等で既存パスキーの上書きが可能です）');
