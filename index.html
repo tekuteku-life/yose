@@ -9,6 +9,19 @@
 	<link rel="icon" type="image/svg+xml" href="icon.svg">
 	<link rel="apple-touch-icon" href="icon-192.png">
 	<link rel="stylesheet" href="css/style.css">
+	<script>
+		(function() {
+			try {
+				var saved = localStorage.getItem('yose_theme_preference');
+				var theme = saved || 'system';
+				var resolved = theme;
+				if (theme === 'system') {
+					resolved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+				}
+				document.documentElement.setAttribute('data-theme', resolved);
+			} catch (e) {}
+		})();
+	</script>
 	<script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
 </head>
 <body>
@@ -150,6 +163,14 @@
 							<label class="form-label" for="input-repay-amount">回収額 (円)</label>
 							<input type="number" id="input-repay-amount" class="form-control" placeholder="例: 3000" min="1" step="1">
 						</div>
+						<!-- Advance Repayment Uncollected List (Requirement 3.20) -->
+						<div id="unsettled-advance-container" style="margin-top: 10px;">
+							<div class="form-label" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+								<span>📋 未回収の立替金リスト</span>
+								<span id="unsettled-advance-count" class="badge badge-info" style="font-size: 0.75rem;">0件</span>
+							</div>
+							<div id="unsettled-advance-list" class="unsettled-list-box"></div>
+						</div>
 					</div>
 
 					<!-- Point Payment Fields (For Point Mode) -->
@@ -224,15 +245,21 @@
 						</div>
 					</div>
 
-					<!-- Memo & Tags -->
+					<!-- Memo & Tags (Requirements 3.18, 3.19) -->
 					<div class="form-row">
 						<div class="form-group" style="flex: 2;">
 							<label class="form-label" for="input-memo">メモ</label>
-							<input type="text" id="input-memo" class="form-control" placeholder="例: スーパーで食材購入">
+							<input type="text" id="input-memo" class="form-control" placeholder="例: スーパーで食材購入" list="memo-history-list" autocomplete="off">
+							<datalist id="memo-history-list"></datalist>
 						</div>
 						<div class="form-group" style="flex: 1;">
-							<label class="form-label" for="input-tags">タグ (カンマ区切り)</label>
-							<input type="text" id="input-tags" class="form-control" placeholder="例: 友人, 外食">
+							<label class="form-label" for="input-tag-text">タグ (Enter/カンマで追加)</label>
+							<div id="tags-chip-container" class="tags-input-box">
+								<div id="tags-chips-list" class="tags-chips-list"></div>
+								<input type="text" id="input-tag-text" class="tags-inner-input" placeholder="タグ候補..." list="tags-history-list" autocomplete="off">
+								<datalist id="tags-history-list"></datalist>
+							</div>
+							<input type="hidden" id="input-tags" value="">
 						</div>
 					</div>
 
@@ -391,6 +418,31 @@
 					<span>費目別推移・内訳</span>
 				</div>
 				<div id="category-breakdown-list" class="tx-list"></div>
+			</div>
+
+			<!-- Tag Analytics & Breakdown (Requirement 3.18) -->
+			<div class="card" id="card-tag-analytics">
+				<div class="card-title">
+					<span>🏷️ タグ別集計・内訳</span>
+				</div>
+				<div style="margin-bottom: 10px;">
+					<input type="text" id="input-tag-search" class="form-control" placeholder="🔍 タグ名で絞り込み検索...">
+				</div>
+				<div class="chart-container" style="height: 240px; position: relative; margin-bottom: 12px;">
+					<canvas id="tag-chart"></canvas>
+				</div>
+				<div id="tag-breakdown-list" class="tx-list"></div>
+			</div>
+
+			<!-- Accrual × Actual Cross-Aggregation Matrix (Requirement 3.23) -->
+			<div class="card" id="card-cross-matrix">
+				<div class="card-title">
+					<span>📊 計上 × 実態 クロス集計マトリクス</span>
+				</div>
+				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
+					行方向＝計上分類（予算・目的別）、列方向＝実態分類（モノの性質）の2次元クロス集計表です。
+				</p>
+				<div id="cross-matrix-table-container" style="overflow-x: auto;"></div>
 			</div>
 
 			<!-- Account Balances Breakdown -->
@@ -677,11 +729,35 @@
 				</div>
 			</div>
 
+			<!-- Theme Setting (Requirement 3.24) -->
+			<div class="card" id="card-theme-setting">
+				<div class="card-title">
+					<span>🎨 表示テーマ設定</span>
+				</div>
+				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+					画面の配色テーマを選択します。「システム設定に従う」を選択するとOSのダークモード設定と自動連動します。
+				</p>
+				<div style="display: flex; gap: 16px; flex-wrap: wrap;">
+					<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+						<input type="radio" name="theme-preference" value="system" id="theme-radio-system" checked>
+						<span>💻 システム設定に従う</span>
+					</label>
+					<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+						<input type="radio" name="theme-preference" value="light" id="theme-radio-light">
+						<span>☀️ ライトテーマ</span>
+					</label>
+					<label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+						<input type="radio" name="theme-preference" value="dark" id="theme-radio-dark">
+						<span>🌙 ダークテーマ</span>
+					</label>
+				</div>
+			</div>
+
 			<!-- App Version & Update Management -->
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.1.0</span>
+					<span class="badge badge-info" id="badge-current-version">v1.4.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
@@ -800,44 +876,66 @@
 		</div>
 	</div>
 
-	<!-- ==================== MODAL: TAX CALCULATOR ==================== -->
+	<!-- ==================== MODAL: QUICK CALCULATOR & TAX ==================== -->
 	<div id="modal-tax" class="modal-overlay">
-		<div class="modal">
+		<div class="modal" style="max-width: 380px;">
 			<div class="modal-header">
-				<h3 class="modal-title">🧮 税抜・税込 電卓補助</h3>
+				<h3 class="modal-title" id="calc-modal-title">🧮 簡易電卓・税計算</h3>
 				<button type="button" class="close-btn" id="btn-close-tax-modal">&times;</button>
 			</div>
-			<div class="form-group">
-				<label class="form-label" for="tax-base-amount">税抜本体金額 (円)</label>
-				<input type="number" id="tax-base-amount" class="form-control" placeholder="例: 1000" min="0" step="1">
+
+			<!-- Calculator Display -->
+			<div class="calc-display-container">
+				<div id="calc-expr-display" class="calc-expr-display">0</div>
+				<div id="calc-result-display" class="calc-result-display">0</div>
 			</div>
-			<div class="form-row">
-				<div class="form-group">
-					<label class="form-label" for="tax-rate-select">消費税率</label>
-					<select id="tax-rate-select" class="form-control">
-						<option value="0.10">10% (標準税率)</option>
-						<option value="0.08">8% (軽減税率)</option>
-					</select>
-				</div>
-				<div class="form-group">
-					<label class="form-label" for="tax-rounding-select">端数処理</label>
-					<select id="tax-rounding-select" class="form-control">
-						<option value="floor">切り捨て (floor)</option>
-						<option value="round">四捨五入 (round)</option>
-					</select>
-				</div>
+
+			<!-- Keypad Grid (Requirement 3.25) -->
+			<div class="calc-grid">
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-action="clear">C</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-action="backspace">⌫</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="(">(</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert=")">)</button>
+
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-tax="add10">+10%</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-tax="add8">+8%</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-tax="sub10">内税10%</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-tax="sub8">内税8%</button>
+
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="7">7</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="8">8</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="9">9</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="÷">÷</button>
+
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="4">4</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="5">5</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="6">6</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="×">×</button>
+
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="1">1</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="2">2</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="3">3</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="-">-</button>
+
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="0">0</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert=".">.</button>
+				<button type="button" class="btn btn-primary calc-btn" data-calc-action="equals">=</button>
+				<button type="button" class="btn btn-secondary calc-btn" data-calc-insert="+">+</button>
 			</div>
-			<div class="card" style="background: #f8fafc; margin-top: 12px;">
-				<div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-					<span style="color: var(--text-muted);">計算消費税:</span>
-					<span id="tax-calc-tax" style="font-weight: 600;">¥0</span>
-				</div>
-				<div style="display: flex; justify-content: space-between; font-size: 1.1rem; font-weight: 700;">
-					<span>税込合計金額:</span>
-					<span id="tax-calc-total" style="color: var(--primary);">¥0</span>
-				</div>
+
+			<!-- Tax Detail Summary -->
+			<div id="calc-tax-summary" style="display: none; font-size: 0.85rem; color: var(--text-muted); margin-top: 10px; padding: 6px 10px; background: var(--bg-hover); border-radius: var(--radius-sm); text-align: center;">
+				税抜本体: <span id="calc-tax-base" style="font-weight: 600;">¥0</span> / 消費税: <span id="calc-tax-amount" style="font-weight: 600;">¥0</span>
 			</div>
-			<div style="display: flex; gap: 8px; margin-top: 16px;">
+
+			<!-- Compatibility elements -->
+			<input type="hidden" id="tax-base-amount" value="0">
+			<select id="tax-rate-select" style="display: none;"><option value="0.10">0.10</option><option value="0.08">0.08</option></select>
+			<select id="tax-rounding-select" style="display: none;"><option value="floor">floor</option><option value="round">round</option></select>
+			<span id="tax-calc-tax" style="display: none;">¥0</span>
+			<span id="tax-calc-total" style="display: none;">¥0</span>
+
+			<div style="display: flex; gap: 8px; margin-top: 14px;">
 				<button type="button" id="btn-apply-tax" class="btn btn-primary btn-block">金額欄に反映する</button>
 			</div>
 		</div>

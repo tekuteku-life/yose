@@ -110,10 +110,13 @@ export class AppCoordinator {
 			}
 		}
 
-		// 6. Initial Render
+		// 6. Setup Theme
+		await this.initTheme();
+
+		// 7. Initial Render
 		await this.refreshAllViews();
 
-		// 7. Check for PWA updates if online
+		// 8. Check for PWA updates if online
 		this.checkStartupUpdate();
 	}
 
@@ -182,11 +185,72 @@ export class AppCoordinator {
 	}
 
 	async refreshAllViews() {
+		try {
+			await this.db.processCreditCardAutoSettlements();
+		} catch (e) {
+			console.warn('Auto credit card settlement check skipped:', e.message);
+		}
 		await this.txInputController.populateMasterDropdowns();
 		await this.txListController.renderRecentTransactions();
 		await this.summaryController.renderSummary();
 		await this.settingsController.renderSettings();
 		await this.syncStatusController.updateSyncBadge();
+	}
+
+	async initTheme() {
+		let theme = 'system';
+		try {
+			const config = await this.db.getMasterConfig();
+			if (config?.theme) {
+				theme = config.theme;
+			} else if (typeof localStorage !== 'undefined') {
+				theme = localStorage.getItem('yose_theme_preference') || 'system';
+			}
+		} catch (e) {}
+		this.applyTheme(theme);
+
+		if (typeof window !== 'undefined' && window.matchMedia) {
+			const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+			if (typeof mediaQuery.addEventListener === 'function') {
+				mediaQuery.addEventListener('change', () => {
+					if (this.currentThemePreference === 'system') {
+						this.applyTheme('system');
+					}
+				});
+			}
+		}
+	}
+
+	applyTheme(theme) {
+		this.currentThemePreference = theme;
+		let resolved = theme;
+		if (theme === 'system') {
+			if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+				resolved = 'dark';
+			} else {
+				resolved = 'light';
+			}
+		}
+		if (typeof document !== 'undefined') {
+			document.documentElement.setAttribute('data-theme', resolved);
+		}
+		if (typeof localStorage !== 'undefined') {
+			try { localStorage.setItem('yose_theme_preference', theme); } catch (e) {}
+		}
+		if (this.chartController) {
+			this.chartController.updateThemeMode(resolved === 'dark');
+		}
+	}
+
+	async setTheme(theme) {
+		this.applyTheme(theme);
+		try {
+			const config = await this.db.getMasterConfig();
+			if (config) {
+				config.theme = theme;
+				await this.db.saveMasterConfig(config);
+			}
+		} catch (e) {}
 	}
 
 	// Facade delegation methods for 100% backward compatibility

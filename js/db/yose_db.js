@@ -2,9 +2,11 @@
  * Yoseatsume Kakeibo - High-Level Domain Repository (YoseDB)
  */
 
-import { DEFAULT_MASTER_CONFIG } from './defaults.js';
+import { DEFAULT_MASTER_CONFIG, DEFAULT_SUMMARY_SNAPSHOT } from './defaults.js';
 import { StorageEngine } from './storage_engine.js';
 import { BackupMerger } from './backup_merger.js';
+import { formatDate, calculateCreditCardDebitDate } from '../logic/date_utils.js';
+import { createCreditCardSettlementTransaction } from '../logic/transaction_factory.js';
 
 export class YoseDB extends StorageEngine {
 	// --- Master Config ---
@@ -249,4 +251,193 @@ export class YoseDB extends StorageEngine {
 
 		return { success: true, stats };
 	}
+
+	// --- Advance Unsettled Tracking (Requirement 3.20) ---
+	async getUnsettledAdvancePayments() {
+		const txs = await this.getTransactions({ type: 'advance_payment' });
+		return txs.filter(t => t.settlement_status !== 'settled');
+	}
+
+	// --- Tag Management (Requirement 3.18) ---
+	async getUniqueTags() {
+		const txs = await this.getTransactions();
+		const set = new Set();
+		for (const t of txs) {
+			if (Array.isArray(t.tags)) {
+				for (const tag of t.tags) {
+					const clean = String(tag || '').trim();
+					if (clean) set.add(clean);
+				}
+			}
+		}
+		return Array.from(set).sort((a, b) => a.localeCompare(b, 'ja'));
+	}
+
+	// --- Memo Autocomplete History (Requirement 3.19) ---
+	async getMemoHistory() {
+		const txs = await this.getTransactions();
+		// Sort by date ascending so latest transaction for each memo overwrites earlier ones
+		txs.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+		const map = {};
+		for (const t of txs) {
+			const memo = String(t.memo || '').trim();
+			if (!memo) continue;
+			map[memo] = {
+				category_id: t.category_id || null,
+				subcategory_id: t.subcategory_id || null,
+				actual_category_id: t.actual_category_id || null,
+				actual_subcategory_id: t.actual_subcategory_id || null,
+				date: t.date
+			};
+		}
+		return map;
+	}
+
+	// --- Credit Card Auto Settlement (Requirement 3.21) ---
+	async processCreditCardAutoSettlements(todayStr = formatDate(new Date())) {
+		const config = await this.getMasterConfig();
+		if (!config || !Array.isArray(config.accounts)) return [];
+
+		const creditCards = config.accounts.filter(a =>
+			!a.is_archived &&
+			a.type === 'credit_card' &&
+			a.debit_account_id
+		);
+		if (creditCards.length === 0) return [];
+
+		const allTxs = await this.getTransactions();
+		const generatedSettlements = [];
+
+		for (const card of creditCards) {
+			const closingDay = card.closing_day || 15;
+			const debitDay = card.debit_day || 10;
+			const offset = card.debit_month_offset || 1;
+			const debitAccountId = card.debit_account_id;
+
+			const currentCycleInfo = calculateCreditCardDebitDate(todayStr, closingDay, debitDay, offset, config.holidays || []);
+
+			// Check past 2 cycles and current cycle
+			const prev1 = calculateCreditCardDebitDate(currentCycleInfo.billingPeriodStart, closingDay, debitDay, offset, config.holidays || []);
+			const prev2Date = new Date(prev1.billingPeriodStart);
+			prev2Date.setDate(prev2Date.getDate() - 1);
+			const prev2 = calculateCreditCardDebitDate(formatDate(prev2Date), closingDay, debitDay, offset, config.holidays || []);
+
+			for (const cycleInfo of [prev2, prev1, currentCycleInfo]) {
+				if (todayStr < cycleInfo.debitDate) continue;
+
+				// Check duplicate settlement
+				const alreadySettled = allTxs.some(t =>
+					!t.is_deleted &&
+					t.type === 'transfer' &&
+					t.to_account_id === card.id &&
+					t.auto_settlement_meta?.card_id === card.id &&
+					t.auto_settlement_meta?.billing_cycle === cycleInfo.billingCycle
+				);
+				if (alreadySettled) continue;
+
+				// Sum expenses for that cycle
+				const periodExpenses = allTxs.filter(t =>
+					!t.is_deleted &&
+					t.account_id === card.id &&
+					t.type === 'expense' &&
+					t.date >= cycleInfo.billingPeriodStart &&
+					t.date <= cycleInfo.billingPeriodEnd
+				);
+				const totalAmount = periodExpenses.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+				if (totalAmount > 0) {
+					const settlementTx = createCreditCardSettlementTransaction({
+						payingAccountId: debitAccountId,
+						creditCardId: card.id,
+						amount: totalAmount,
+						debitDate: cycleInfo.debitDate,
+						billingCycle: cycleInfo.billingCycle,
+						todayStr
+					});
+					await this.putTransaction(settlementTx);
+					allTxs.push(settlementTx);
+					generatedSettlements.push(settlementTx);
+				}
+			}
+		}
+
+		return generatedSettlements;
+	}
+
+	async getTransactionsByGroupId(groupId) {
+		return this.getTransactions({ group_id: groupId });
+	}
+
+	// --- Installment / Split Transaction Cascading Update (Requirement 3.22) ---
+	async updateInstallmentGroup(groupId, updates = {}, amountAdjustment = null) {
+		if (!groupId) return 0;
+		const all = await this.getTransactions({ group_id: groupId, includeDeleted: true });
+		const activeGroupTxs = all.filter(t => !t.is_deleted);
+		if (activeGroupTxs.length === 0) return 0;
+
+		const paymentTx = activeGroupTxs.find(t => t.amortization_meta?.is_payment_record);
+		const amortTxs = activeGroupTxs.filter(t => !t.amortization_meta?.is_payment_record && t.type === 'expense');
+
+		let newTotal = amountAdjustment?.newTotalAmount;
+		if (newTotal === undefined && paymentTx && updates.amount !== undefined) {
+			newTotal = updates.amount;
+		}
+		if (newTotal === undefined && updates.total_amount !== undefined) {
+			newTotal = updates.total_amount;
+		}
+
+		const nowIso = new Date().toISOString();
+		const updatedTxs = [];
+
+		if (paymentTx) {
+			if (newTotal !== undefined) {
+				paymentTx.amount = Math.round(Number(newTotal) || 0);
+				if (paymentTx.amortization_meta) {
+					paymentTx.amortization_meta.total_amount = paymentTx.amount;
+				}
+			}
+			if (updates.memo !== undefined) paymentTx.memo = `[前払一括支払] ${updates.memo}`;
+			if (updates.tags !== undefined) paymentTx.tags = Array.from(new Set([...updates.tags, '前払費用支払']));
+			paymentTx.updated_at = nowIso;
+			paymentTx.sync_status = 'unsynced';
+			updatedTxs.push(paymentTx);
+		}
+
+		if (amortTxs.length > 0) {
+			const count = amortTxs.length;
+			let monthlyBase = null;
+			let remainder = 0;
+			if (newTotal !== undefined) {
+				monthlyBase = Math.floor(newTotal / count);
+				remainder = newTotal - (monthlyBase * count);
+			}
+
+			// Sort by date/target_month
+			amortTxs.sort((a, b) => {
+				const da = a.target_month || a.date || '';
+				const db = b.target_month || b.date || '';
+				return da.localeCompare(db);
+			});
+
+			for (let i = 0; i < amortTxs.length; i++) {
+				const atx = amortTxs[i];
+				if (monthlyBase !== null) {
+					atx.amount = i === 0 ? monthlyBase + remainder : monthlyBase;
+				}
+				if (updates.category_id !== undefined) atx.category_id = updates.category_id;
+				if (updates.subcategory_id !== undefined) atx.subcategory_id = updates.subcategory_id;
+				if (updates.actual_category_id !== undefined) atx.actual_category_id = updates.actual_category_id;
+				if (updates.actual_subcategory_id !== undefined) atx.actual_subcategory_id = updates.actual_subcategory_id;
+				if (updates.memo !== undefined) atx.memo = updates.memo;
+				if (updates.tags !== undefined) atx.tags = updates.tags;
+				atx.updated_at = nowIso;
+				atx.sync_status = 'unsynced';
+				updatedTxs.push(atx);
+			}
+		}
+
+		await this.putTransactions(updatedTxs);
+		return updatedTxs.length;
+	}
 }
+

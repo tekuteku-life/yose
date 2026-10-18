@@ -13,12 +13,16 @@ import {
 	aggregateYearlySummaries,
 	calculateAnnualBudgetProgress,
 	generateAnnualTrajectory,
+	calculateTagSummary,
+	calculateCrossAccrualActualSummary,
 	escapeHtml
 } from '../logic.js';
 
 export class SummaryController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
+		this.tagSearchQuery = '';
+		this.lastTransactions = null;
 	}
 
 	get db() {
@@ -132,6 +136,14 @@ export class SummaryController {
 		// Month close button
 		document.getElementById('btn-close-month')?.addEventListener('click', async () => {
 			await this.handleCloseMonth();
+		});
+
+		// Tag search filter listener (Requirement 3.18)
+		document.getElementById('input-tag-search')?.addEventListener('input', (e) => {
+			this.tagSearchQuery = (e.target.value || '').trim();
+			if (this.lastTransactions) {
+				this.renderTagAnalytics(this.lastTransactions);
+			}
 		});
 	}
 
@@ -277,8 +289,118 @@ export class SummaryController {
 			this.renderAssetsAnalytics(totalAssetSummary, config, snapshot?.external_assets || []);
 		}
 
+		// Render Tag Analytics & Breakdown (Requirement 3.18)
+		this.lastTransactions = transactions;
+		this.renderTagAnalytics(transactions);
+
+		// Render Accrual × Actual Cross Matrix (Requirement 3.23)
+		this.renderCrossMatrix(transactions, config);
+
 		// Render Transactions List for current month
 		await this.coordinator.txListController.renderMonthTransactions();
+	}
+
+	renderTagAnalytics(transactions) {
+		const list = document.getElementById('tag-breakdown-list');
+		if (!list) return;
+
+		let relevantTxs = transactions;
+		if (this.coordinator.analyticsTarget === 'budget' || this.coordinator.analyticsGranularity === 'yearly') {
+			relevantTxs = transactions.filter(t => (t.target_month || t.date || '').startsWith(this.coordinator.selectedYear));
+		} else if (this.coordinator.analyticsGranularity === 'daily' || this.coordinator.analyticsGranularity === 'monthly') {
+			relevantTxs = transactions.filter(t => (t.target_month || t.date || '').slice(0, 7) === this.coordinator.currentMonth);
+		}
+
+		const tagSummary = calculateTagSummary(relevantTxs, {
+			searchQuery: this.tagSearchQuery || '',
+			filterTag: this.tagSearchQuery || ''
+		});
+
+		const tagsList = tagSummary.tagList || (Array.isArray(tagSummary.tags) ? tagSummary.tags : Object.values(tagSummary.tags || {}));
+
+		if (tagsList.length === 0) {
+			list.innerHTML = '<div style="color: var(--text-muted); padding: 12px; text-align: center;">該当するタグの取引はありません</div>';
+		} else {
+			list.innerHTML = tagsList.map(t => {
+				const tagName = t.tag || t.name;
+				const expenseAmt = t.expense ?? t.expense_total ?? 0;
+				const incomeAmt = t.income ?? t.income_total ?? 0;
+				const netAmt = t.net ?? t.net_total ?? 0;
+				return `
+					<div class="tx-item">
+						<div class="tx-info">
+							<span class="tx-title">🏷️ ${escapeHtml(tagName)}</span>
+							<span class="tx-meta">${t.count}件 (収入: ¥${incomeAmt.toLocaleString()})</span>
+						</div>
+						<div style="text-align: right;">
+							<div style="font-weight: 700; color: var(--danger);">支出: ¥${expenseAmt.toLocaleString()}</div>
+							<div style="font-size: 0.8rem; color: ${netAmt >= 0 ? 'var(--success)' : 'var(--danger)'};">
+								差引: ¥${netAmt.toLocaleString()}
+							</div>
+						</div>
+					</div>
+				`;
+			}).join('');
+		}
+
+		this.chartController.renderChartForTags(tagSummary);
+	}
+
+	renderCrossMatrix(transactions, config) {
+		const container = document.getElementById('cross-matrix-table-container');
+		if (!container) return;
+
+		let relevantTxs = transactions;
+		if (this.coordinator.analyticsTarget === 'budget' || this.coordinator.analyticsGranularity === 'yearly') {
+			relevantTxs = transactions.filter(t => (t.target_month || t.date || '').startsWith(this.coordinator.selectedYear));
+		} else if (this.coordinator.analyticsGranularity === 'daily' || this.coordinator.analyticsGranularity === 'monthly') {
+			relevantTxs = transactions.filter(t => (t.target_month || t.date || '').slice(0, 7) === this.coordinator.currentMonth);
+		}
+
+		const categories = config?.categories || [];
+		const summary = calculateCrossAccrualActualSummary(relevantTxs, categories);
+
+		if (summary.categories.length === 0) {
+			container.innerHTML = '<div style="color: var(--text-muted); padding: 12px; text-align: center;">費目マスタが設定されていません</div>';
+			return;
+		}
+
+		const theadHtml = `
+			<thead>
+				<tr>
+					<th>計上 ＼ 実態</th>
+					${summary.categories.map(c => `<th>${escapeHtml(c.name)}</th>`).join('')}
+					<th class="cross-matrix-total-col">計上合計</th>
+				</tr>
+			</thead>
+		`;
+
+		const tbodyHtml = `
+			<tbody>
+				${summary.categories.map(rCat => `
+					<tr>
+						<th>${escapeHtml(rCat.name)}</th>
+						${summary.categories.map(cCat => {
+							const amt = summary.matrix[rCat.id]?.[cCat.id] || 0;
+							return `<td>${amt > 0 ? '¥' + amt.toLocaleString() : '-'}</td>`;
+						}).join('')}
+						<td class="cross-matrix-total-col">¥${(summary.accrualTotals[rCat.id] || 0).toLocaleString()}</td>
+					</tr>
+				`).join('')}
+			</tbody>
+		`;
+
+		const tfootHtml = `
+			<tfoot>
+				<tr class="cross-matrix-total-row">
+					<th>実態合計</th>
+					${summary.categories.map(cCat => `<td>¥${(summary.actualTotals[cCat.id] || 0).toLocaleString()}</td>`).join('')}
+					<td class="cross-matrix-total-col">¥${summary.grandTotal.toLocaleString()}</td>
+				</tr>
+			</tfoot>
+		`;
+
+		container.innerHTML = `<table class="cross-matrix-table">${theadHtml}${tbodyHtml}${tfootHtml}</table>`;
 	}
 
 	renderExternalAssetsBreakdown(assets) {

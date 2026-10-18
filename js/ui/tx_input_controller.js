@@ -6,6 +6,7 @@
 import {
 	formatDate,
 	calculateTax,
+	evaluateCalculatorExpression,
 	createPrepaidAmortizationTransactions,
 	createAdvancePaymentTransactions,
 	createAdvanceRepaymentTransaction,
@@ -17,6 +18,13 @@ import {
 export class TransactionInputController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
+		this.confirmedTags = [];
+		this.memoHistoryMap = {};
+		this.calcTargetInputId = 'input-amount';
+		this.calcCurrentExpr = '0';
+		this.calcEvaluatedResult = 0;
+		this.calcTaxMeta = null;
+		this.currentSettlingAdvanceId = null;
 	}
 
 	get db() {
@@ -101,6 +109,89 @@ export class TransactionInputController {
 			});
 		}
 
+		// Memo autocomplete & auto-categorization (Requirement 3.19)
+		const memoInput = document.getElementById('input-memo');
+		const handleMemoChange = async (e) => {
+			const val = (e.target.value || '').trim();
+			const match = this.memoHistoryMap[val];
+			if (match && match.category_id) {
+				const catSelect = document.getElementById('select-category');
+				if (catSelect) {
+					catSelect.value = match.category_id;
+					await this.updateSubcategories(match.category_id, 'select-subcategory');
+					const subSelect = document.getElementById('select-subcategory');
+					if (subSelect && match.subcategory_id) {
+						subSelect.value = match.subcategory_id;
+					}
+				}
+				const chkSync = document.getElementById('chk-sync-actual-category');
+				if (chkSync && chkSync.checked) {
+					const actCatSelect = document.getElementById('select-actual-category');
+					if (actCatSelect) {
+						actCatSelect.value = match.category_id;
+						await this.updateSubcategories(match.category_id, 'select-actual-subcategory');
+						const actSubSelect = document.getElementById('select-actual-subcategory');
+						if (actSubSelect && match.subcategory_id) {
+							actSubSelect.value = match.subcategory_id;
+						}
+					}
+				}
+			}
+		};
+		memoInput?.addEventListener('input', handleMemoChange);
+		memoInput?.addEventListener('change', handleMemoChange);
+
+		// Tag chips input handling (Requirement 3.18)
+		const tagTextInput = document.getElementById('input-tag-text');
+		const tagsChipsList = document.getElementById('tags-chips-list');
+		const hiddenTagsInput = document.getElementById('input-tags');
+
+		tagTextInput?.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' || e.key === ',') {
+				e.preventDefault();
+				const val = tagTextInput.value.trim();
+				if (val) {
+					this.addTag(val);
+					tagTextInput.value = '';
+				}
+			} else if (e.key === 'Backspace' && tagTextInput.value === '' && this.confirmedTags.length > 0) {
+				this.confirmedTags.pop();
+				this.renderTagChips();
+			}
+		});
+
+		tagTextInput?.addEventListener('blur', () => {
+			const val = tagTextInput.value.trim();
+			if (val) {
+				this.addTag(val);
+				tagTextInput.value = '';
+			}
+		});
+
+		tagsChipsList?.addEventListener('click', (e) => {
+			const btn = e.target.closest('.tag-chip-del');
+			if (btn && btn.dataset.tagIndex !== undefined) {
+				const idx = Number(btn.dataset.tagIndex);
+				this.confirmedTags.splice(idx, 1);
+				this.renderTagChips();
+			}
+		});
+
+		hiddenTagsInput?.addEventListener('change', () => {
+			if (hiddenTagsInput.value) {
+				this.confirmedTags = hiddenTagsInput.value.split(',').map(s => s.trim()).filter(Boolean);
+				this.renderTagChips();
+			}
+		});
+
+		// Unsettled Advance List settlement click (Requirement 3.20)
+		document.getElementById('unsettled-advance-list')?.addEventListener('click', async (e) => {
+			const btn = e.target.closest('.btn-settle-advance');
+			if (btn && btn.dataset.txId) {
+				await this.handleSettleAdvanceDirectly(btn.dataset.txId);
+			}
+		});
+
 		// Form submit
 		const form = document.getElementById('tx-form');
 		if (form) {
@@ -160,6 +251,7 @@ export class TransactionInputController {
 			if (catContainer) catContainer.style.display = 'none';
 			if (groupToAccount) groupToAccount.style.display = 'none';
 			if (labelAccount) labelAccount.textContent = '受取先口座（入金口座）';
+			this.renderUnsettledAdvanceList();
 		} else if (mode === 'advance') {
 			if (catContainer) catContainer.style.display = 'block';
 			if (groupToAccount) groupToAccount.style.display = 'none';
@@ -224,6 +316,11 @@ export class TransactionInputController {
 		// Categories filtered by current input-type
 		const currentType = document.getElementById('input-type')?.value || 'expense';
 		await this.populateCategoryDropdowns(currentType);
+
+		// Tag & Memo suggestions & unsettled advances (Requirements 3.18, 3.19, 3.20)
+		await this.updateTagAndMemoSuggestions();
+		await this.renderUnsettledAdvanceList();
+		this.renderTagChips();
 	}
 
 	async populateCategoryDropdowns(type = 'expense') {
@@ -271,52 +368,201 @@ export class TransactionInputController {
 		).join('');
 	}
 
+	renderTagChips() {
+		const container = document.getElementById('tags-chips-list');
+		const hiddenInput = document.getElementById('input-tags');
+		if (hiddenInput) hiddenInput.value = this.confirmedTags.join(', ');
+		if (!container) return;
+
+		container.innerHTML = this.confirmedTags.map((tag, idx) => `
+			<span class="tag-chip">
+				${escapeHtml(tag)}
+				<button type="button" class="tag-chip-del" data-tag-index="${idx}" aria-label="タグ削除">&times;</button>
+			</span>
+		`).join('');
+	}
+
+	addTag(tagStr) {
+		if (!tagStr) return;
+		const parts = tagStr.split(',').map(s => s.trim()).filter(Boolean);
+		for (const p of parts) {
+			if (!this.confirmedTags.includes(p)) {
+				this.confirmedTags.push(p);
+			}
+		}
+		this.renderTagChips();
+	}
+
+	async updateTagAndMemoSuggestions() {
+		// Tags datalist
+		const tagDatalist = document.getElementById('tags-history-list');
+		if (tagDatalist) {
+			const uniqueTags = await this.db.getUniqueTags();
+			tagDatalist.innerHTML = uniqueTags.map(t => `<option value="${escapeHtml(t)}"></option>`).join('');
+		}
+
+		// Memo datalist & history map
+		const memoDatalist = document.getElementById('memo-history-list');
+		if (memoDatalist) {
+			const memoHistory = await this.db.getMemoHistory();
+			this.memoHistoryMap = memoHistory;
+			memoDatalist.innerHTML = Object.keys(memoHistory).map(m => `<option value="${escapeHtml(m)}"></option>`).join('');
+		}
+	}
+
+	async renderUnsettledAdvanceList() {
+		const list = document.getElementById('unsettled-advance-list');
+		const countBadge = document.getElementById('unsettled-advance-count');
+		if (!list) return;
+
+		const unsettled = await this.db.getUnsettledAdvancePayments();
+		if (countBadge) countBadge.textContent = `${unsettled.length}件`;
+
+		if (unsettled.length === 0) {
+			list.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 10px; text-align: center;">未回収の立替金はありません</div>';
+			return;
+		}
+
+		list.innerHTML = unsettled.map(tx => `
+			<div class="unsettled-advance-item">
+				<div class="unsettled-info">
+					<span class="unsettled-date">${escapeHtml(tx.date)}</span>
+					<span class="unsettled-memo">${escapeHtml(tx.memo || '立替金')}</span>
+					<span class="unsettled-amount">¥${tx.amount.toLocaleString()}</span>
+				</div>
+				<button type="button" class="btn btn-primary btn-sm btn-settle-advance" data-tx-id="${escapeHtml(tx.id)}" data-tx-amount="${tx.amount}" data-tx-memo="${escapeHtml(tx.memo || '')}">
+					回収・精算
+				</button>
+			</div>
+		`).join('');
+	}
+
+	async handleSettleAdvanceDirectly(advanceId) {
+		const advTx = await this.db.getTransaction(advanceId);
+		if (!advTx) return;
+
+		const config = await this.db.getMasterConfig();
+		const receivingAccountId = document.getElementById('select-account')?.value || (config?.accounts?.[0]?.id || 'acc_default');
+		const today = formatDate(new Date());
+		const memo = `[立替精算] ${advTx.memo || ''}`.trim();
+		const tags = Array.from(new Set([...(advTx.tags || []), '立替回収']));
+
+		const repayTx = createAdvanceRepaymentTransaction({
+			date: today,
+			receivingAccountId,
+			amount: advTx.amount,
+			memo,
+			tags
+		});
+
+		advTx.settlement_status = 'settled';
+		advTx.updated_at = new Date().toISOString();
+		advTx.sync_status = 'unsynced';
+
+		await this.db.putTransactions([repayTx, advTx]);
+		alert(`立替金「${advTx.memo || '未回収'}」(¥${advTx.amount.toLocaleString()}) の回収・精算を完了しました`);
+		await this.coordinator.refreshAllViews();
+		this.syncManager?.syncPendingDiffs().catch(e => console.log('Sync deferred:', e.message));
+	}
+
+	openCalculatorFor(targetInputId = 'input-amount') {
+		this.calcTargetInputId = targetInputId;
+		const targetInput = document.getElementById(targetInputId);
+		const currentVal = targetInput?.value ? String(targetInput.value).trim() : '0';
+		this.calcCurrentExpr = currentVal || '0';
+		this.calcTaxMeta = null;
+		this.updateCalculatorDisplay();
+
+		const modal = document.getElementById('modal-tax');
+		if (modal) modal.classList.add('active');
+	}
+
+	updateCalculatorDisplay() {
+		const exprEl = document.getElementById('calc-expr-display');
+		const resEl = document.getElementById('calc-result-display');
+		const taxSummary = document.getElementById('calc-tax-summary');
+		const baseEl = document.getElementById('calc-tax-base');
+		const amtEl = document.getElementById('calc-tax-amount');
+
+		if (exprEl) exprEl.textContent = this.calcCurrentExpr || '0';
+
+		const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr || '0');
+		this.calcEvaluatedResult = evalRes.result;
+
+		if (resEl) resEl.textContent = `¥${evalRes.result.toLocaleString()}`;
+
+		if (this.calcTaxMeta) {
+			if (taxSummary) taxSummary.style.display = 'block';
+			if (baseEl) baseEl.textContent = `¥${this.calcTaxMeta.base_amount.toLocaleString()}`;
+			if (amtEl) amtEl.textContent = `¥${this.calcTaxMeta.tax_amount.toLocaleString()} (${Math.round(this.calcTaxMeta.tax_rate * 100)}%)`;
+		} else {
+			if (taxSummary) taxSummary.style.display = 'none';
+		}
+	}
+
 	setupTaxModal() {
 		const modal = document.getElementById('modal-tax');
 		const btnOpen = document.getElementById('btn-open-tax-calc');
 		const btnClose = document.getElementById('btn-close-tax-modal');
 		const btnApply = document.getElementById('btn-apply-tax');
 
-		const baseInput = document.getElementById('tax-base-amount');
-		const rateSelect = document.getElementById('tax-rate-select');
-		const roundSelect = document.getElementById('tax-rounding-select');
-		const displayTax = document.getElementById('tax-calc-tax');
-		const displayTotal = document.getElementById('tax-calc-total');
-
 		if (!modal) return;
 
-		const recalculateTaxModal = () => {
-			const base = Number(baseInput?.value) || 0;
-			const rate = Number(rateSelect?.value) || 0.10;
-			const rounding = roundSelect?.value || 'floor';
-			const result = calculateTax(base, rate, rounding);
-
-			const taxAmount = result.amount - base;
-			if (displayTax) displayTax.textContent = `¥${taxAmount.toLocaleString()}`;
-			if (displayTotal) displayTotal.textContent = `¥${result.amount.toLocaleString()}`;
-			return result;
-		};
-
 		btnOpen?.addEventListener('click', () => {
-			const currentAmt = document.getElementById('input-amount')?.value;
-			if (baseInput) baseInput.value = currentAmt || '';
-			recalculateTaxModal();
-			modal.classList.add('active');
+			this.openCalculatorFor('input-amount');
 		});
 
 		btnClose?.addEventListener('click', () => {
 			modal.classList.remove('active');
 		});
 
-		baseInput?.addEventListener('input', recalculateTaxModal);
-		rateSelect?.addEventListener('change', recalculateTaxModal);
-		roundSelect?.addEventListener('change', recalculateTaxModal);
+		// Keypad clicks (Insert, Actions, Tax)
+		modal.addEventListener('click', (e) => {
+			const btn = e.target.closest('.calc-btn');
+			if (!btn) return;
+
+			if (btn.dataset.calcInsert) {
+				const char = btn.dataset.calcInsert;
+				if (this.calcCurrentExpr === '0' && /[0-9(]/.test(char)) {
+					this.calcCurrentExpr = char;
+				} else {
+					this.calcCurrentExpr += char;
+				}
+				this.calcTaxMeta = null;
+				this.updateCalculatorDisplay();
+			} else if (btn.dataset.calcAction === 'clear') {
+				this.calcCurrentExpr = '0';
+				this.calcTaxMeta = null;
+				this.updateCalculatorDisplay();
+			} else if (btn.dataset.calcAction === 'backspace') {
+				if (this.calcCurrentExpr.length > 1) {
+					this.calcCurrentExpr = this.calcCurrentExpr.slice(0, -1);
+				} else {
+					this.calcCurrentExpr = '0';
+				}
+				this.calcTaxMeta = null;
+				this.updateCalculatorDisplay();
+			} else if (btn.dataset.calcAction === 'equals') {
+				const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr || '0');
+				this.calcCurrentExpr = String(evalRes.result);
+				this.updateCalculatorDisplay();
+			} else if (btn.dataset.calcTax) {
+				const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr || '0', btn.dataset.calcTax);
+				this.calcCurrentExpr = String(evalRes.result);
+				this.calcTaxMeta = evalRes.tax_meta;
+				this.updateCalculatorDisplay();
+			}
+		});
 
 		btnApply?.addEventListener('click', () => {
-			const result = recalculateTaxModal();
-			const amountInput = document.getElementById('input-amount');
-			if (amountInput) amountInput.value = result.amount;
-			this.coordinator.currentTaxMeta = result.tax_meta;
+			const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr || '0');
+			const targetInput = document.getElementById(this.calcTargetInputId);
+			if (targetInput) {
+				targetInput.value = evalRes.result;
+			}
+			if (this.calcTargetInputId === 'input-amount') {
+				this.coordinator.currentTaxMeta = this.calcTaxMeta;
+			}
 			modal.classList.remove('active');
 		});
 	}
@@ -410,6 +656,17 @@ export class TransactionInputController {
 				tags
 			});
 			txRecordsToSave.push(repayTx);
+
+			if (this.currentSettlingAdvanceId) {
+				const advTx = await this.db.getTransaction(this.currentSettlingAdvanceId);
+				if (advTx) {
+					advTx.settlement_status = 'settled';
+					advTx.updated_at = new Date().toISOString();
+					advTx.sync_status = 'unsynced';
+					txRecordsToSave.push(advTx);
+				}
+				this.currentSettlingAdvanceId = null;
+			}
 		} else if (this.coordinator.currentMode === 'prepaid') {
 			const totalAmount = Number(document.getElementById('input-prepaid-total')?.value) || 0;
 			const amortizeMonths = Number(document.getElementById('input-prepaid-months')?.value) || 12;
@@ -483,6 +740,10 @@ export class TransactionInputController {
 		if (elMemo) elMemo.value = '';
 		const elTags = document.getElementById('input-tags');
 		if (elTags) elTags.value = '';
+		const elTagText = document.getElementById('input-tag-text');
+		if (elTagText) elTagText.value = '';
+		this.confirmedTags = [];
+		this.renderTagChips();
 		this.coordinator.currentTaxMeta = null;
 
 		// Refresh views & try auto sync in background

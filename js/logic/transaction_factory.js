@@ -500,3 +500,127 @@ export function createPointPaymentTransactions({
 	return [txPurchase, txOffset];
 }
 
+/**
+ * Create Credit Card Settlement Transfer Transaction (Requirement 3.21)
+ * @param {object} params
+ * @param {string} params.payingAccountId - e.g. 'acc_bank_main'
+ * @param {string} params.creditCardId - e.g. 'acc_card_a'
+ * @param {number} params.amount - settlement amount
+ * @param {string} params.debitDate - YYYY-MM-DD
+ * @param {string} params.billingCycle - YYYY-MM
+ * @param {string} [params.todayStr] - YYYY-MM-DD
+ * @returns {object} Transaction
+ */
+export function createCreditCardSettlementTransaction({
+	payingAccountId,
+	creditCardId,
+	amount,
+	debitDate,
+	billingCycle,
+	todayStr = formatDate(new Date())
+}) {
+	const nowIso = new Date().toISOString();
+	const numAmount = Math.round(Number(amount) || 0);
+
+	return {
+		id: generateUUID('tx_cc_settle'),
+		group_id: generateUUID('grp_cc_settle'),
+		date: debitDate,
+		target_month: debitDate.slice(0, 7),
+		status: 'confirmed',
+		type: 'transfer',
+		amount: numAmount,
+		tax_meta: null,
+		account_id: payingAccountId,
+		to_account_id: creditCardId,
+		category_id: null,
+		subcategory_id: null,
+		actual_category_id: null,
+		actual_subcategory_id: null,
+		recurring_rule_id: null,
+		amortization_meta: null,
+		auto_settlement_meta: {
+			card_id: creditCardId,
+			billing_cycle: billingCycle,
+			debit_account_id: payingAccountId
+		},
+		memo: `[クレカ引落相殺] ${billingCycle}利用分`,
+		tags: ['クレカ引落', '口座振替'],
+		created_at: nowIso,
+		updated_at: nowIso,
+		is_deleted: false,
+		sync_status: 'unsynced'
+	};
+}
+
+/**
+ * Evaluate Calculator Expression safely with optional Tax Action (Requirement 3.25)
+ * @param {string} expression - e.g. "1500 + 500", "200 × 5"
+ * @param {string|null} [taxAction] - '+10%', '+8%', 'inc10%', 'inc8%'
+ * @param {'floor'|'round'} [rounding] - 'floor' or 'round'
+ * @returns {{ success: boolean, amount: number, base_amount: number, tax_meta: object|null, error?: string }}
+ */
+export function evaluateCalculatorExpression(expression = '', taxAction = null, rounding = 'floor') {
+	let raw = String(expression || '').trim();
+	if (!raw) {
+		return { success: true, amount: 0, result: 0, base_amount: 0, tax_meta: null };
+	}
+
+	// Normalize arithmetic symbols
+	raw = raw.replace(/×/g, '*').replace(/÷/g, '/');
+
+	// Disallow any characters other than digits, operators, spaces, parentheses, decimal points
+	if (/[^0-9+\-*/().\s]/.test(raw)) {
+		return { success: false, amount: 0, result: 0, base_amount: 0, tax_meta: null, error: 'Invalid characters in expression' };
+	}
+
+	let evaluated = 0;
+	try {
+		const fn = new Function(`"use strict"; return (${raw});`);
+		const val = fn();
+		if (typeof val !== 'number' || isNaN(val) || !isFinite(val)) {
+			return { success: false, amount: 0, result: 0, base_amount: 0, tax_meta: null, error: 'Division by zero' };
+		}
+		evaluated = Math.round(val);
+	} catch (err) {
+		return { success: false, amount: 0, result: 0, base_amount: 0, tax_meta: null, error: err.message };
+	}
+
+	let finalAmount = evaluated;
+	let baseAmount = evaluated;
+	let taxMeta = null;
+
+	if (taxAction) {
+		if (taxAction === '+10%' || taxAction === 'add10' || taxAction === '+8%' || taxAction === 'add8') {
+			const rate = (taxAction === '+10%' || taxAction === 'add10') ? 0.10 : 0.08;
+			const res = calculateTax(evaluated, rate, rounding);
+			finalAmount = res.amount;
+			baseAmount = res.tax_meta.base_amount;
+			taxMeta = res.tax_meta;
+		} else if (taxAction === 'inc10%' || taxAction === 'sub10' || taxAction === 'inc8%' || taxAction === 'sub8') {
+			const rate = (taxAction === 'inc10%' || taxAction === 'sub10') ? 0.10 : 0.08;
+			const factor = (taxAction === 'inc10%' || taxAction === 'sub10') ? (10 / 110) : (8 / 108);
+			const rawTax = evaluated * factor;
+			const tax = rounding === 'round' ? Math.round(rawTax) : Math.floor(rawTax);
+			baseAmount = evaluated - tax;
+			finalAmount = evaluated;
+			taxMeta = {
+				input_mode: 'tax_included_extracted',
+				base_amount: baseAmount,
+				tax_amount: tax,
+				tax_rate: rate,
+				rounding
+			};
+		}
+	}
+
+	const safeFinal = Math.max(0, finalAmount);
+	return {
+		success: true,
+		amount: safeFinal,
+		result: safeFinal,
+		base_amount: Math.max(0, baseAmount),
+		tax_meta: taxMeta
+	};
+}
+

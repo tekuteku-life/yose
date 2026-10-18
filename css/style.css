@@ -8,6 +8,7 @@
 	--primary-light: #dbeafe;
 	--bg-main: #f8fafc;
 	--bg-card: #ffffff;
+	--bg-hover: #f1f5f9;
 	--text-main: #0f172a;
 	--text-muted: #64748b;
 	--border: #e2e8f0;
@@ -18,7 +19,27 @@
 	--danger: #dc2626;
 	--danger-bg: #fee2e2;
 	--radius: 12px;
+	--radius-sm: 6px;
 	--shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+[data-theme="dark"] {
+	--primary: #3b82f6;
+	--primary-hover: #60a5fa;
+	--primary-light: #1e293b;
+	--bg-main: #0b1120;
+	--bg-card: #1e293b;
+	--bg-hover: #334155;
+	--text-main: #f8fafc;
+	--text-muted: #94a3b8;
+	--border: #334155;
+	--success: #22c55e;
+	--success-bg: #14532d;
+	--warning: #f59e0b;
+	--warning-bg: #78350f;
+	--danger: #ef4444;
+	--danger-bg: #7f1d1d;
+	--shadow: 0 4px 6px -1px rgb(0 0 0 / 0.5), 0 2px 4px -2px rgb(0 0 0 / 0.5);
 }
 
 * {
@@ -163,7 +184,8 @@ header {
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	font-size: 1rem;
-	background: #fff;
+	background: var(--bg-card);
+	color: var(--text-main);
 	transition: border-color 0.2s;
 }
 
@@ -206,13 +228,13 @@ header {
 }
 
 .btn-secondary {
-	background: #f1f5f9;
+	background: var(--bg-hover);
 	color: var(--text-main);
 	border-color: var(--border);
 }
 
 .btn-secondary:hover {
-	background: #e2e8f0;
+	background: var(--border);
 }
 
 .btn-success {
@@ -447,7 +469,7 @@ header {
 /* Master Management Styles */
 .master-tabs {
 	display: flex;
-	background: #f1f5f9;
+	background: var(--bg-hover);
 	border-radius: 8px;
 	padding: 4px;
 	gap: 4px;
@@ -470,7 +492,7 @@ header {
 }
 
 .master-tab-btn.active {
-	background: #fff;
+	background: var(--bg-card);
 	color: var(--primary);
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
@@ -491,12 +513,12 @@ header {
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	margin-bottom: 8px;
-	background: #fff;
+	background: var(--bg-card);
 }
 
 .master-item-row.archived {
 	opacity: 0.6;
-	background: #f8fafc;
+	background: var(--bg-main);
 	border-style: dashed;
 }
 
@@ -511,7 +533,8 @@ header {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	background: #f1f5f9;
+	background: var(--bg-hover);
+	color: var(--text-main);
 	padding: 4px 10px;
 	border-radius: 9999px;
 	font-size: 0.8rem;
@@ -532,7 +555,7 @@ header {
 /* Segmented Controls (Target & Granularity) */
 .segmented-control {
 	display: inline-flex;
-	background: #f1f5f9;
+	background: var(--bg-hover);
 	border-radius: 8px;
 	padding: 3px;
 	gap: 2px;
@@ -556,7 +579,7 @@ header {
 }
 
 .segment-btn.active {
-	background: #ffffff;
+	background: var(--bg-card);
 	color: var(--primary);
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
@@ -733,7 +756,7 @@ header {
 
 /* Sub-card & Grouped Key Management (Requirement 4.5) */
 .sub-card {
-	background: #ffffff;
+	background: var(--bg-card);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	padding: 14px;
@@ -756,7 +779,7 @@ header {
 	justify-content: space-between;
 	gap: 10px;
 	padding: 8px 10px;
-	background: #ffffff;
+	background: var(--bg-card);
 	border: 1px solid var(--border);
 	border-radius: 6px;
 	margin-bottom: 6px;
@@ -774,6 +797,196 @@ header {
 #period-display:hover {
 	background: var(--bg-hover);
 	color: var(--primary);
+}
+
+/* Tag Chips UI (Requirement 3.18) */
+.tags-input-box {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+	padding: 6px 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-card);
+	min-height: 42px;
+	transition: border-color 0.2s;
+}
+
+.tags-input-box:focus-within {
+	border-color: var(--primary);
+}
+
+.tags-chips-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.tag-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	background: var(--primary-light);
+	color: var(--primary);
+	font-size: 0.8rem;
+	padding: 2px 8px;
+	border-radius: 12px;
+	font-weight: 600;
+}
+
+.tag-chip-del {
+	background: none;
+	border: none;
+	color: inherit;
+	cursor: pointer;
+	font-size: 0.95rem;
+	line-height: 1;
+	padding: 0 2px;
+	display: inline-flex;
+	align-items: center;
+}
+
+.tag-chip-del:hover {
+	opacity: 0.7;
+}
+
+.tags-inner-input {
+	flex: 1;
+	min-width: 80px;
+	border: none;
+	background: transparent;
+	outline: none;
+	font-size: 0.9rem;
+	color: var(--text-main);
+	padding: 2px 4px;
+}
+
+/* Uncollected Advance List (Requirement 3.20) */
+.unsettled-list-box {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: 220px;
+	overflow-y: auto;
+	padding: 4px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-hover);
+}
+
+.unsettled-advance-item {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 8px 12px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg-card);
+	gap: 8px;
+}
+
+.unsettled-info {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.unsettled-date {
+	font-size: 0.75rem;
+	color: var(--text-muted);
+}
+
+.unsettled-memo {
+	font-size: 0.85rem;
+	font-weight: 600;
+	color: var(--text-main);
+}
+
+.unsettled-amount {
+	font-size: 0.95rem;
+	font-weight: 700;
+	color: var(--danger);
+}
+
+/* Quick Calculator Modal (Requirement 3.25) */
+.calc-display-container {
+	background: var(--bg-hover);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 10px 14px;
+	margin-bottom: 12px;
+	text-align: right;
+}
+
+.calc-expr-display {
+	font-size: 0.85rem;
+	color: var(--text-muted);
+	min-height: 1.2rem;
+	overflow-x: auto;
+	white-space: nowrap;
+}
+
+.calc-result-display {
+	font-size: 1.6rem;
+	font-weight: 700;
+	color: var(--text-main);
+	overflow-x: auto;
+	white-space: nowrap;
+}
+
+.calc-grid {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 6px;
+}
+
+.calc-btn {
+	padding: 10px 0;
+	font-size: 1rem;
+	font-weight: 600;
+	border-radius: 8px;
+}
+
+/* Accrual × Actual Cross Matrix Pivot Table (Requirement 3.23) */
+.cross-matrix-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.85rem;
+	text-align: right;
+}
+
+.cross-matrix-table th,
+.cross-matrix-table td {
+	border: 1px solid var(--border);
+	padding: 8px 10px;
+	white-space: nowrap;
+}
+
+.cross-matrix-table th {
+	background: var(--bg-hover);
+	color: var(--text-main);
+	font-weight: 600;
+}
+
+.cross-matrix-table th:first-child,
+.cross-matrix-table td:first-child {
+	text-align: left;
+	position: sticky;
+	left: 0;
+	background: var(--bg-card);
+	font-weight: 600;
+	z-index: 2;
+}
+
+.cross-matrix-total-row {
+	font-weight: 700;
+	background: var(--bg-hover);
+}
+
+.cross-matrix-total-col {
+	font-weight: 700;
+	background: var(--bg-hover);
 }
 
 

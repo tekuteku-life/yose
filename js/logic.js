@@ -16,7 +16,8 @@ export {
 	parseHolidayTextOrCsv,
 	groupHolidaysByYear,
 	generateUUID,
-	escapeHtml
+	escapeHtml,
+	calculateCreditCardDebitDate
 } from './logic/date_utils.js';
 
 export {
@@ -25,7 +26,9 @@ export {
 	createPrepaidAmortizationTransactions,
 	createAdvancePaymentTransactions,
 	createAdvanceRepaymentTransaction,
-	createPointPaymentTransactions
+	createPointPaymentTransactions,
+	createCreditCardSettlementTransaction,
+	evaluateCalculatorExpression
 } from './logic/transaction_factory.js';
 
 export {
@@ -33,7 +36,9 @@ export {
 	aggregateDailySummaries,
 	aggregateMonthlySummaries,
 	aggregateYearlySummaries,
-	calculateTotalAssetSummary
+	calculateTotalAssetSummary,
+	calculateTagSummary,
+	calculateCrossAccrualActualSummary
 } from './logic/aggregator.js';
 
 export {
@@ -42,3 +47,4 @@ export {
 	calculateAnnualBudgetProgress,
 	generateAnnualTrajectory
 } from './logic/budget_engine.js';
+

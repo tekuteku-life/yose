@@ -511,12 +511,26 @@ export class SettingsController {
 		document.getElementById('btn-close-app-update-modal')?.addEventListener('click', () => {
 			this.coordinator.hideUpdateModal();
 		});
+
+		// Theme Preference Change (Requirement 3.24)
+		document.querySelectorAll('input[name="theme-preference"]').forEach(radio => {
+			radio.addEventListener('change', async (e) => {
+				if (e.target.checked) {
+					await this.coordinator.setTheme(e.target.value);
+				}
+			});
+		});
 	}
 
 	async renderSettings() {
 		this.authController.updateKeyDisplay();
 		const badgeVer = document.getElementById('badge-current-version');
 		if (badgeVer) badgeVer.textContent = `v${CURRENT_APP_VERSION}`;
+
+		// Sync theme radio selection (Requirement 3.24)
+		const savedTheme = this.coordinator.currentThemePreference || 'system';
+		const themeRadio = document.querySelector(`input[name="theme-preference"][value="${savedTheme}"]`);
+		if (themeRadio) themeRadio.checked = true;
 
 		const gasUrl = await this.db.getSetting('gas_url', '');
 		const urlInput = document.getElementById('input-gas-url');
