@@ -90,7 +90,7 @@ flowchart TD
         UI[UI / DOM / Charts]
         Crypto[Web Crypto / Passkey Handler]
         Logic[Annual Budget & Pace Engine]
-        DB[(IndexedDB: AES-GCM Encrypted At-Rest)]
+        DB[("IndexedDB: AES-GCM Encrypted At-Rest")]
     end
 
     subgraph ExternalBackup [External JSON File]
@@ -99,7 +99,7 @@ flowchart TD
 
     subgraph RemoteBackend [Google Apps Script / Drive]
         GAS[GAS Web Endpoint / Ed25519 Verify]
-        Sheet[(Encrypted Sheet Data)]
+        Sheet[("Encrypted Sheet Data")]
     end
 
     BackupFile -->|importFullData (Sanitized & Validated)| DB

@@ -5,8 +5,9 @@
 	"type": "module",
 	"scripts": {
 		"lint:indent": "node scripts/check_indent.js",
-		"lint": "npm run lint:indent",
-		"test": "npm run lint:indent && node --test --experimental-test-coverage test/unit/*.test.js test/integration/*.test.js test/system/*.test.js",
+		"check:syntax": "node scripts/check_syntax.js",
+		"lint": "npm run lint:indent && npm run check:syntax",
+		"test": "npm run lint:indent && npm run check:syntax && node --test --experimental-test-coverage test/unit/*.test.js test/integration/*.test.js test/system/*.test.js",
 		"test:unit": "node --test test/unit/*.test.js",
 		"test:integration": "node --test test/integration/*.test.js",
 		"test:system": "node --test test/system/*.test.js",

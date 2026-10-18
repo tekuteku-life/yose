@@ -151,7 +151,7 @@ flowchart TD
     end
 
     subgraph SecurityKeys [security_keys Store]
-        DMK[Active Session DMK (Memory Only)]
+        DMK["Active Session DMK (Memory Only)"]
         Vault[PBKDF2 + AES-GCM Encrypted Key Vault]
     end
 

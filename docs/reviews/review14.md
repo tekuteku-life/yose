@@ -185,13 +185,13 @@ flowchart TD
     subgraph BrowserProcess [Browser Memory & DOM Boundary]
         UICont[UI Component Controllers]
         Coord[AppCoordinator]
-        InMemDMK[Active Session DMK (Memory Only)]
+        InMemDMK["Active Session DMK (Memory Only)"]
         AuthCont[AuthController: Memory Wipe on Unload]
     end
 
     subgraph StorageBoundary [IndexedDB Boundary: Zero-Trust At-Rest]
-        EncDB[(Encrypted IDB: AES-GCM-256)]
-        Vault[(security_keys: PBKDF2/WebAuthn Vault)]
+        EncDB[("Encrypted IDB: AES-GCM-256")]
+        Vault[("security_keys: PBKDF2/WebAuthn Vault")]
     end
 
     subgraph ExternalBoundary [Untrusted External Payloads]
