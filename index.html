@@ -39,27 +39,27 @@
 				</button>
 			</div>
 
-			<div id="auth-pin-container" style="margin-top: 16px;">
+			<form id="auth-pin-container" onsubmit="return false;" style="margin-top: 16px;">
 				<div class="form-group">
 					<label class="form-label" for="auth-pin-input" style="text-align: left;">PINコードで解除 (バックアップ)</label>
-					<input type="password" id="auth-pin-input" class="form-control" placeholder="PINコードを入力">
+					<input type="password" id="auth-pin-input" class="form-control" placeholder="PINコードを入力" autocomplete="current-password">
 				</div>
-				<button type="button" id="btn-auth-pin" class="btn btn-primary btn-block" style="margin-top: 8px;">
+				<button type="submit" id="btn-auth-pin" class="btn btn-primary btn-block" style="margin-top: 8px;">
 					🔓 ロック解除
 				</button>
-			</div>
+			</form>
 
-			<div id="auth-setup-container" style="display: none; margin-top: 16px;">
+			<form id="auth-setup-container" onsubmit="return false;" style="display: none; margin-top: 16px;">
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px;">
 					初回セットアップ: データ保護用のPINコード（4桁以上）を設定してください。同時にWebAuthnおよびEd25519通信鍵が生成されます。
 				</p>
 				<div class="form-group">
-					<input type="password" id="auth-setup-pin" class="form-control" placeholder="新しいPINコード (4桁以上)">
+					<input type="password" id="auth-setup-pin" class="form-control" placeholder="新しいPINコード (4桁以上)" autocomplete="new-password">
 				</div>
-				<button type="button" id="btn-auth-setup" class="btn btn-primary btn-block" style="margin-top: 8px;">
+				<button type="submit" id="btn-auth-setup" class="btn btn-primary btn-block" style="margin-top: 8px;">
 					🚀 暗号化鍵の初期生成と開始
 				</button>
-			</div>
+			</form>
 
 			<div id="auth-error-msg" style="color: var(--danger); font-size: 0.85rem; margin-top: 12px; display: none;"></div>
 		</div>
@@ -507,15 +507,15 @@
 							<span>① 🔐 秘密鍵PIN保護 & 端末ロック状態</span>
 						</div>
 						<div id="pin-status-banner" style="margin-bottom: 12px;"></div>
-						<div class="form-row">
+						<form id="form-save-pin" onsubmit="return false;" class="form-row">
 							<div class="form-group">
 								<label class="form-label" for="input-pin">秘密鍵保護 PIN (4桁以上)</label>
-								<input type="password" id="input-pin" class="form-control" placeholder="PINコード">
+								<input type="password" id="input-pin" class="form-control" placeholder="PINコード" autocomplete="new-password">
 							</div>
 							<div class="form-group" style="display: flex; align-items: flex-end;">
-								<button id="btn-save-pin" class="btn btn-primary btn-block">PINで秘密鍵を保護</button>
+								<button type="submit" id="btn-save-pin" class="btn btn-primary btn-block">PINで秘密鍵を保護</button>
 							</div>
-						</div>
+						</form>
 						<div id="pin-action-buttons" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
 							<button id="btn-lock-now" class="btn btn-secondary btn-sm" style="display: none;">🔒 今すぐ再ロック</button>
 							<button id="btn-unlock-pin" class="btn btn-success btn-sm" style="display: none;">🔓 PINでロック解除</button>
@@ -953,13 +953,15 @@
 			<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 				秘密鍵はPINコードで保護されています。同期や署名処理を行うためにPINを入力してください。
 			</p>
-			<div class="form-group">
-				<label class="form-label" for="input-unlock-pin">PINコード (4桁以上)</label>
-				<input type="password" id="input-unlock-pin" class="form-control" placeholder="PINコードを入力">
-			</div>
-			<div style="display: flex; gap: 8px; margin-top: 16px;">
-				<button type="button" id="btn-submit-unlock-pin" class="btn btn-primary btn-block">🔓 ロック解除</button>
-			</div>
+			<form id="form-pin-unlock" onsubmit="return false;">
+				<div class="form-group">
+					<label class="form-label" for="input-unlock-pin">PINコード (4桁以上)</label>
+					<input type="password" id="input-unlock-pin" class="form-control" placeholder="PINコードを入力" autocomplete="current-password">
+				</div>
+				<div style="display: flex; gap: 8px; margin-top: 16px;">
+					<button type="button" id="btn-submit-unlock-pin" class="btn btn-primary btn-block">🔓 ロック解除</button>
+				</div>
+			</form>
 		</div>
 	</div>
 
