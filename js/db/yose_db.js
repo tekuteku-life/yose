@@ -183,13 +183,14 @@ export class YoseDB extends StorageEngine {
 		return config.annual_budgets[yearStr];
 	}
 
-	// --- Backup Export / Import ---
+	// --- Backup Export / Import (Requirement 3.15 & 3.26) ---
 	async exportFullData() {
 		const config = await this.getMasterConfig();
 		const snapshot = await this.getSnapshot();
 		const transactions = await this.getTransactions({ includeDeleted: true });
 		return {
 			schema_version: 2,
+			export_type: 'full_backup',
 			exported_at: new Date().toISOString(),
 			master_config: config,
 			summary_snapshot: snapshot,
@@ -197,9 +198,81 @@ export class YoseDB extends StorageEngine {
 		};
 	}
 
+	async exportTransactionsData() {
+		const transactions = await this.getTransactions({ includeDeleted: true });
+		return {
+			schema_version: 2,
+			export_type: 'transactions',
+			exported_at: new Date().toISOString(),
+			transactions
+		};
+	}
+
+	async exportMasterConfigData() {
+		const config = await this.getMasterConfig();
+		return {
+			schema_version: 2,
+			export_type: 'master_config',
+			exported_at: new Date().toISOString(),
+			master_config: config
+		};
+	}
+
+	async exportAnnualBudgetsData() {
+		const config = await this.getMasterConfig();
+		return {
+			schema_version: 2,
+			export_type: 'annual_budgets',
+			exported_at: new Date().toISOString(),
+			annual_budgets: config?.annual_budgets || {}
+		};
+	}
+
+	async exportSummarySnapshotData() {
+		const snapshot = await this.getSnapshot();
+		return {
+			schema_version: 2,
+			export_type: 'summary_snapshot',
+			exported_at: new Date().toISOString(),
+			summary_snapshot: snapshot
+		};
+	}
+
 	async importFullData(data) {
-		if (!data || data.schema_version !== 2) {
+		if (!data) {
 			throw new Error('Invalid data schema version');
+		}
+		if (typeof data !== 'object') {
+			throw new Error('Invalid data schema or payload');
+		}
+
+		if (Array.isArray(data)) {
+			data = {
+				schema_version: 2,
+				export_type: 'transactions',
+				transactions: data
+			};
+		}
+
+		if (data.schema_version !== undefined && data.schema_version !== 2) {
+			throw new Error('Invalid data schema version');
+		}
+
+		let detectedType = data.export_type || null;
+		if (!detectedType) {
+			if (data.master_config && data.summary_snapshot && data.transactions) {
+				detectedType = 'full_backup';
+			} else if (Array.isArray(data.transactions)) {
+				detectedType = 'transactions';
+			} else if (data.annual_budgets && typeof data.annual_budgets === 'object' && !data.master_config) {
+				detectedType = 'annual_budgets';
+			} else if (data.master_config && typeof data.master_config === 'object') {
+				detectedType = 'master_config';
+			} else if (data.summary_snapshot && typeof data.summary_snapshot === 'object') {
+				detectedType = 'summary_snapshot';
+			} else {
+				detectedType = 'unknown';
+			}
 		}
 
 		const stats = {
@@ -242,14 +315,21 @@ export class YoseDB extends StorageEngine {
 			await this.saveMasterConfig(localConfig);
 		}
 
-		// 3. Summary Snapshot Non-Destructive Merge
+		// 3. Standalone Annual Budgets Merge (when annual_budgets is provided without master_config)
+		if (data.annual_budgets && typeof data.annual_budgets === 'object' && !data.master_config) {
+			const localConfig = await this.getMasterConfig() || { ...DEFAULT_MASTER_CONFIG };
+			BackupMerger.mergeMasterConfig(localConfig, { annual_budgets: data.annual_budgets }, stats);
+			await this.saveMasterConfig(localConfig);
+		}
+
+		// 4. Summary Snapshot Non-Destructive Merge
 		if (data.summary_snapshot && typeof data.summary_snapshot === 'object') {
 			const localSnapshot = await this.getSnapshot() || { ...DEFAULT_SUMMARY_SNAPSHOT };
 			BackupMerger.mergeSummarySnapshot(localSnapshot, data.summary_snapshot);
 			await this.saveSnapshot(localSnapshot);
 		}
 
-		return { success: true, stats };
+		return { success: true, stats, detectedType };
 	}
 
 	// --- Advance Unsettled Tracking (Requirement 3.20) ---

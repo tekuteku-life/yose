@@ -653,17 +653,18 @@
 				</div>
 			</div>
 
-			<!-- Backup & Restore -->
-			<div class="card">
+			<!-- Backup & Restore (Requirement 3.15 & 3.26) -->
+			<div class="card" id="card-backup-restore">
 				<div class="card-title">
-					<span>📦 バックアップ・リストア (非破壊・差分ORマージ)</span>
+					<span>📦 データエクスポート・バックアップ & インポート (非破壊・差分ORマージ)</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-					JSONインポート時は、ローカルの既存データを削除せず重複なく差分のみを取り込みます（ローカル限定データは保持され、同一IDの明細は更新日時が新しい方を優先マージ）。
+					各種データ（取引明細、マスタ設定、年間予算、残高スナップショット、または全データ一括）を個別にJSON形式でダウンロードできます。また、出力した各種JSONファイルをインポートすることで、差分のみを自動判別して安全にマージ・復元できます。
 				</p>
 				<div style="display: flex; gap: 12px; flex-wrap: wrap;">
-					<button id="btn-export-backup" class="btn btn-secondary">💾 全データJSONエクスポート</button>
-					<button id="btn-import-trigger" class="btn btn-secondary">📂 JSONインポート (差分ORマージ)</button>
+					<button type="button" id="btn-open-export-modal" class="btn btn-primary">💾 各種データJSONダウンロード</button>
+					<button type="button" id="btn-export-backup" class="btn btn-secondary">📦 全データ一括バックアップ</button>
+					<button type="button" id="btn-import-trigger" class="btn btn-secondary">📂 JSONインポート (自動判別・差分ORマージ)</button>
 					<input type="file" id="file-import-input" accept=".json" style="display: none;">
 				</div>
 			</div>
@@ -984,6 +985,56 @@
 			</div>
 			<div style="display: flex; gap: 8px; margin-top: 16px;">
 				<button type="button" id="btn-confirm-import-holidays" class="btn btn-primary btn-block">インポート実行</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- ==================== MODAL: EXPORT VARIOUS JSON (Requirement 3.26) ==================== -->
+	<div id="modal-export-json" class="modal-overlay">
+		<div class="modal" style="max-width: 600px;">
+			<div class="modal-header">
+				<h3 class="modal-title">💾 各種データJSONダウンロード</h3>
+				<button type="button" class="close-btn" id="btn-close-export-modal">&times;</button>
+			</div>
+			<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px;">
+				必要なデータ種別を選択してJSON形式でダウンロードできます。出力したJSONファイルは、後から「JSONインポート」で安全に復元・差分マージできます。
+			</p>
+			<div style="display: flex; flex-direction: column; gap: 12px;">
+				<div class="export-option-card" style="border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; background: var(--bg-card); display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+					<div>
+						<div style="font-weight: 700; font-size: 0.95rem;">📦 全データ一括バックアップ</div>
+						<div style="font-size: 0.8rem; color: var(--text-muted);">取引明細、マスタ設定、残高スナップショット、年間予算を含む完全データ</div>
+					</div>
+					<button type="button" id="btn-export-full" class="btn btn-secondary btn-sm" style="white-space: nowrap;">⬇️ ダウンロード</button>
+				</div>
+				<div class="export-option-card" style="border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; background: var(--bg-card); display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+					<div>
+						<div style="font-weight: 700; font-size: 0.95rem;">📝 取引明細データのみ</div>
+						<div style="font-size: 0.8rem; color: var(--text-muted);">全期間の取引明細レコード配列（日付、金額、口座、費目、メモ、タグ等）</div>
+					</div>
+					<button type="button" id="btn-export-transactions" class="btn btn-secondary btn-sm" style="white-space: nowrap;">⬇️ ダウンロード</button>
+				</div>
+				<div class="export-option-card" style="border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; background: var(--bg-card); display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+					<div>
+						<div style="font-weight: 700; font-size: 0.95rem;">🏷️ マスタ設定データのみ</div>
+						<div style="font-size: 0.8rem; color: var(--text-muted);">口座、大項目・中項目、定期ルール、祝日、年間予算設定等の定義マスタ</div>
+					</div>
+					<button type="button" id="btn-export-master" class="btn btn-secondary btn-sm" style="white-space: nowrap;">⬇️ ダウンロード</button>
+				</div>
+				<div class="export-option-card" style="border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; background: var(--bg-card); display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+					<div>
+						<div style="font-weight: 700; font-size: 0.95rem;">🎯 年間予算データのみ</div>
+						<div style="font-size: 0.8rem; color: var(--text-muted);">全年度の年間支出予算、目標貯蓄額・貯蓄率、および費目別予算（内訳）</div>
+					</div>
+					<button type="button" id="btn-export-budgets" class="btn btn-secondary btn-sm" style="white-space: nowrap;">⬇️ ダウンロード</button>
+				</div>
+				<div class="export-option-card" style="border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; background: var(--bg-card); display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+					<div>
+						<div style="font-weight: 700; font-size: 0.95rem;">📊 残高スナップショットのみ</div>
+						<div style="font-size: 0.8rem; color: var(--text-muted);">締め済み過去月の確定口座残高および月次収支サマリ</div>
+					</div>
+					<button type="button" id="btn-export-snapshot" class="btn btn-secondary btn-sm" style="white-space: nowrap;">⬇️ ダウンロード</button>
+				</div>
 			</div>
 		</div>
 	</div>

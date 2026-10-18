@@ -135,16 +135,61 @@ export class SettingsController {
 			}
 		});
 
-		// Export backup
-		document.getElementById('btn-export-backup')?.addEventListener('click', async () => {
-			const backup = await this.db.exportFullData();
-			const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+		// Helper function to trigger download of JSON
+		const downloadJsonFile = (data, filename) => {
+			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');
 			a.href = url;
-			a.download = `yose_backup_${formatDate(new Date())}.json`;
+			a.download = filename;
 			a.click();
 			URL.revokeObjectURL(url);
+		};
+
+		// Export modal open / close (Requirement 3.26)
+		const modalExport = document.getElementById('modal-export-json');
+		document.getElementById('btn-open-export-modal')?.addEventListener('click', () => {
+			modalExport?.classList.add('active');
+		});
+		document.getElementById('btn-close-export-modal')?.addEventListener('click', () => {
+			modalExport?.classList.remove('active');
+		});
+
+		// Export Full Backup
+		const handleExportFull = async () => {
+			const backup = await this.db.exportFullData();
+			downloadJsonFile(backup, `yose_backup_${formatDate(new Date())}.json`);
+			modalExport?.classList.remove('active');
+		};
+		document.getElementById('btn-export-backup')?.addEventListener('click', handleExportFull);
+		document.getElementById('btn-export-full')?.addEventListener('click', handleExportFull);
+
+		// Export Transactions Only
+		document.getElementById('btn-export-transactions')?.addEventListener('click', async () => {
+			const data = await this.db.exportTransactionsData();
+			downloadJsonFile(data, `yose_transactions_${formatDate(new Date())}.json`);
+			modalExport?.classList.remove('active');
+		});
+
+		// Export Master Config Only
+		document.getElementById('btn-export-master')?.addEventListener('click', async () => {
+			const data = await this.db.exportMasterConfigData();
+			downloadJsonFile(data, `yose_master_config_${formatDate(new Date())}.json`);
+			modalExport?.classList.remove('active');
+		});
+
+		// Export Annual Budgets Only
+		document.getElementById('btn-export-budgets')?.addEventListener('click', async () => {
+			const data = await this.db.exportAnnualBudgetsData();
+			downloadJsonFile(data, `yose_annual_budgets_${formatDate(new Date())}.json`);
+			modalExport?.classList.remove('active');
+		});
+
+		// Export Summary Snapshot Only
+		document.getElementById('btn-export-snapshot')?.addEventListener('click', async () => {
+			const data = await this.db.exportSummarySnapshotData();
+			downloadJsonFile(data, `yose_snapshot_${formatDate(new Date())}.json`);
+			modalExport?.classList.remove('active');
 		});
 
 		// Import backup trigger
@@ -166,8 +211,16 @@ export class SettingsController {
 				}
 				const res = await this.db.importFullData(data);
 				const s = res?.stats || {};
+				const typeNames = {
+					full_backup: '全データ',
+					transactions: '取引明細',
+					master_config: 'マスタ設定',
+					annual_budgets: '年間予算',
+					summary_snapshot: '残高スナップショット'
+				};
+				const typeLabel = typeNames[res?.detectedType] || 'データ';
 				const msg = [
-					'【バックアップ差分ORマージ完了】',
+					`【${typeLabel}差分ORマージ完了】`,
 					`・明細: 追加 ${s.addedTransactions || 0}件 / 更新 ${s.updatedTransactions || 0}件 / スキップ ${s.skippedTransactions || 0}件`,
 					`・口座マスタ: 追加 ${s.addedAccounts || 0}件`,
 					`・大項目マスタ: 追加 ${s.addedCategories || 0}件 (内訳中項目: 追加 ${s.addedSubcategories || 0}件)`,

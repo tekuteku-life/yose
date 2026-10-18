@@ -424,6 +424,51 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * 四則演算の途中結果に対しても直接消費税率を乗除算可能とし、計算結果は整数端数処理（切捨て `floor` / 四捨五入 `round`）を経て金額入力欄へ反映。
    * `calculateTax` および `evaluateCalculatorExpression` において、`tax_meta` オブジェクトに必ず `tax_amount`（税額）を含めて返却し、UI描画（`updateCalculatorDisplay`）における `tax_amount.toLocaleString()` の未定義プロパティ参照（`TypeError`）を防御的フォールバックと共に根絶。計算過程は `tax_meta` として取引に安全に引き継がれる。
 
+### 3.26 各種データ種別ごとのJSONエクスポート & 自動判別インポート（データポータビリティ強化）要件
+
+1. **背景と目的**
+   * 従来はシステム全体のバックアップJSON（全データ一括）のみがエクスポート対象であったが、「取引明細のみを外部ツールや別環境へ移行・分析したい」「口座や費目のマスタ設定のみを別端末に配備したい」「年間予算データのみを切り出して保存したい」といったデータポータビリティのニーズに対応するため、データ種別ごとの個別JSONダウンロード機能を提供する。
+   * また、「吐き出したJSONをインポートできるようにしておかないと消費先がない」という要件に応え、エクスポートされた各種JSON（全データ、取引明細単体、マスタ設定単体、年間予算単体、残高スナップショット単体）をインポート時に自動判別し、安全に非破壊・差分ORマージできるインポートエンジンを提供する。
+
+2. **エクスポート可能なJSONデータ種別と仕様**
+   * すべてのJSONエクスポートファイルには、メタデータとして `schema_version: 2`、`export_type`、および `exported_at: ISO8601文字列` を付与し、人間可読なインデント整形（Pretty Print: 2 spaces）で出力する。
+   1. **全データ一括バックアップ (Full Backup)**:
+      * `export_type: 'full_backup'`
+      * 内容: `master_config`, `summary_snapshot`, `transactions`
+      * ファイル名: `yose_backup_YYYY-MM-DD.json`
+   2. **取引明細データ (Transactions Only)**:
+      * `export_type: 'transactions'`
+      * 内容: `transactions: [...]`（全有効取引、および削除フラグ付き取引を含む明細配列）
+      * ファイル名: `yose_transactions_YYYY-MM-DD.json`
+   3. **マスタ設定データ (Master Config Only)**:
+      * `export_type: 'master_config'`
+      * 内容: `master_config: { accounts, categories, subcategories, recurring_rules, holidays, annual_budgets, credit_cards, theme, ... }`
+      * ファイル名: `yose_master_config_YYYY-MM-DD.json`
+   4. **年間予算データ (Annual Budgets Only)**:
+      * `export_type: 'annual_budgets'`
+      * 内容: `annual_budgets: { "2026": { expense_budget, savings_target_amount, savings_target_rate, category_budgets }, ... }`
+      * ファイル名: `yose_annual_budgets_YYYY-MM-DD.json`
+   5. **残高スナップショットデータ (Summary Snapshot Only)**:
+      * `export_type: 'summary_snapshot'`
+      * 内容: `summary_snapshot: { closed_months, monthly_summaries, last_closed_month }`
+      * ファイル名: `yose_snapshot_YYYY-MM-DD.json`
+
+3. **自動判別インポートエンジン（非破壊・差分ORマージ）**
+   * インポートハンドラにおいて、アップロードされたJSONの構造（`export_type` または含有キー `transactions`, `master_config`, `annual_budgets`, `summary_snapshot`）を自動検知：
+     * **取引明細単体JSON**: 取引明細のみを既存の非破壊ORマージ（`updated_at` による競合解決、新規追加、ローカル保護）で統合。
+     * **マスタ設定単体JSON**: 口座、大項目・中項目（ユニオン）、定期ルール、祝日（Setユニオン）、年間予算を既存マスタへ非破壊マージ。
+     * **年間予算単体JSON**: 対象年度の予算および費目別予算（`category_budgets`）を既存マスタの `annual_budgets` へ非破壊マージ。
+     * **スナップショット単体JSON**: 過去締め月の集計サマリを既存スナップショットへ月キー単位でマージ。
+     * **全データ一括バックアップJSON**: 従来通り上記すべてのデータセットを包含マージ。
+     * **生配列（`[...]`）互換**: オブジェクトにラップされていない生の取引明細配列が渡された場合も自動ラップして取引明細として取り込み。
+   * インポート完了時のダイアログで、取り込んだデータ種別（種別名）と詳細な統計情報（追加件数、更新件数、スキップ件数等）を明示し、正常完了を通知。
+
+4. **UI設計（設定画面 `#tab-settings` の拡張）**
+   * 設定タブのバックアップ領域を「📦 データエクスポート・バックアップ & インポート」カードへと拡張。
+   * 「💾 各種データJSONダウンロード」ボタン（`#btn-open-export-modal`）を配置し、押下時にモーダル（`#modal-export-json`）を表示。
+   * モーダル内には、全データ一括、取引明細、マスタ設定、年間予算、残高スナップショットの各説明文と、ワンクリックダウンロードボタン（`#btn-export-full`, `#btn-export-transactions`, `#btn-export-master`, `#btn-export-budgets`, `#btn-export-snapshot`）を整然と配置。
+   * 「📂 JSONインポート (自動判別・差分ORマージ)」ボタンから、上記のどのJSONファイルを指定してもシームレスに判別・マージが行われる統一的UXを実現。
+
 ---
 
 ## 4. 同期トリガー・通信・セキュリティ要件
@@ -1449,6 +1494,7 @@ flowchart TD
 | **3.23** | 計上分類×実態分類のクロス集計（マトリクス/ピボット） | `js/ui/summary_controller.js`, `js/logic/aggregator.js`, `index.html` | - | - | `test/unit/logic.test.js` |
 | **3.24** | ダークテーマ対応（システム追従・ライト・ダーク） | `js/ui/coordinator.js`, `js/ui/settings_controller.js`, `js/ui/chart_controller.js`, `css/style.css` | - | `master_config` (`theme`) | `test/unit/master_management.test.js` |
 | **3.25** | 金額入力欄の簡易電卓機能統合（四則演算・8%・10%・税抜統合） | `js/ui/tx_input_controller.js`, `js/ui/tx_edit_controller.js`, `js/logic/transaction_factory.js`, `index.html` | - | `pending_diffs` (`tax_meta`) | `test/unit/logic.test.js` |
+| **3.26** | 各種データ種別ごとのJSONエクスポート & 自動判別インポート（データポータビリティ強化） | `js/ui/settings_controller.js`, `js/db/yose_db.js`, `js/db/backup_merger.js`, `index.html` | - | IndexedDB全ストア | `test/unit/db.test.js`, `test/unit/master_management.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |
