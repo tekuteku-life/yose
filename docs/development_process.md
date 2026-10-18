@@ -37,6 +37,17 @@
 10. **実装後の独立コードレビュー原則 (Post-Implementation Independent Code Review)**:
    - 実装完了後、独立サブエージェント（Gemini 4 Argon）による実装後コードレビュー（Code Review）を必ず実施する。
    - 単なるテスト通過確認にとどまらず、プロダクションコードの品質・安全性・クレンリネス、および「不足する設計、実装、テストがないか」の網羅性を厳しく精査する。
+11. **改修内容に応じたバージョン引き上げと同期原則 (Semantic Versioning & Version Synchronization)**:
+   - 機能追加、仕様変更、不具合修正等のすべての改修において、改修内容の性質・影響度に応じたセマンティックバージョニング（SemVer: `Major.Minor.Patch`）に従い、バージョン番号を必ず引き上げる。
+     - **Major (`X.0.0`)**: 既存仕様との後方互換性を破壊する変更、暗号スキーマやデータ構造の根本的刷新。
+     - **Minor (`x.Y.0`)**: 後方互換性のある新機能の追加、要求仕様の拡張（新機能要件の実装、新UIコンポーネントの追加等）。
+     - **Patch (`x.y.Z`)**: 後方互換性のある不具合修正（バグフィックス）、セキュリティ修正、軽微なUI改善、リファクタリング、ドキュメント改定。
+   - バージョンを引き上げる際は、PWAオフラインキャッシュおよびバージョン自動検知・強制更新機構（要件3.13）が確実に動作するよう、関連する**全5箇所**のバージョン情報・キャッシュ名を完全に同期して更新する:
+     1. `package.json`: `"version": "X.Y.Z"`
+     2. `version.json`: `"version": "X.Y.Z"`, `"cache_name": "yose-cache-vX.Y.Z"`
+     3. `js/version.js`: `export const CURRENT_APP_VERSION = 'X.Y.Z';`
+     4. `sw.js`: `const CACHE_NAME = 'yose-cache-vX.Y.Z';`
+     5. `index.html`: `#badge-current-version`（`vX.Y.Z`）
 
 ---
 
@@ -127,6 +138,9 @@ flowchart TD
    - **不要な互換性維持コードの排除**: 過去の暫定対応や、古いデータ構造を維持するための場当たり的なフォールバック・冗長分岐を点検し、現行仕様（Schema v2等）に統一して不要な分岐を削除する。
 4. **インデント・フォーマット検証**:
    - `npm run lint:indent` を実行し、全コードファイルがタブインデント（表示幅4スペース）に準拠していることを検証する。
+5. **改修内容に応じたバージョン引き上げと完全同期（必須ステップ）**:
+   - 実施した改修内容の性質（Major / Minor / Patch）に応じ、バージョン番号を必ず引き上げる。
+   - 関連する全5箇所（`package.json`, `version.json`, `js/version.js`, `sw.js`, `index.html`）のバージョン表記およびPWAキャッシュ名を同時に更新・同期する。
 
 ---
 
@@ -135,6 +149,7 @@ flowchart TD
    - 静的チェック（`npm run lint` = `lint:indent` + `check:syntax`）のエラーが 0 件であること。
    - 全自動テスト（単体・結合・システム）が 100% 合格すること。
    - カバレッジ基準: **全対象ファイルで命令網羅（Line）$\ge 97\%$ かつ 分岐網羅（Branch）$\ge 97\%$** を満たしていること。
+   - バージョン情報が改修内容（Major / Minor / Patch）に応じて適切に引き上げられ、関連5ファイルで完全に同期していること。
 2. **実装後コードレビュー（Code Review）の実施**:
    - モデルに **Gemini 4 Argon** を指定した独立サブエージェント（Role: `Senior Release & Security Gatekeeper` 等）を召喚し、実装コード差分の精査を実施する。
    - **不足する設計・実装・テストの網羅性チェック**:
@@ -256,6 +271,7 @@ flowchart TD
 - STRIDE脅威分析に基づくセキュリティ堅牢性の評価。
 - TABインデント規約（タブ幅4スペース、`\t`）の完全順守。
 - 一時的ワークアラウンド、不要な過去互換コード、残存デバッグログ（`console.debug`, `debugger` 等）の完全排除。
+- 改修内容に応じたセマンティックバージョニングの引き上げ（Major / Minor / Patch）および全5箇所（`package.json`, `version.json`, `js/version.js`, `sw.js`, `index.html`）の完全同期検証。
 
 
 
