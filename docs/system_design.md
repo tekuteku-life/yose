@@ -401,42 +401,44 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 * **署名検証**: `{ action, timestamp, payload }` をEd25519署名し、GAS側でタイムスタンプ乖離（±5分以内）と署名の有効性を検証。
 * **排他制御**: GASの `doPost(e)` 処理全体を `LockService.getScriptLock().waitLock(30000)` で排他制御し、`finally` で確実に解放する。
 
-### 4.4 決定論的User IDによるWebAuthn・Passkey（1Password等）上書き・更新および鍵管理設計
+### 4.4 決定論的User IDによるWebAuthn・Passkey（1Password等）上書き・更新およびPRF拡張暗号化鍵管理設計
 
-1. **背景と課題（無限増殖・上書き不可の根本原因）**
+1. **背景と課題（無限増殖・上書き不可および平文保存の根本解消）**
    * FIDO2 / WebAuthn仕様および1Password等のパスキーマネージャでは、同一ドメインにおけるアカウント資格情報を `(rp.id, user.id)` のタプルによって一意に識別・インデックスする。
-   * 従来実装では資格情報生成（`registerWebAuthnCredential`）の呼び出しごとにランダムな16バイト（`getRandomValues(new Uint8Array(16))`）を `user.id` として割り当てていた。
-   * その結果、1Password等のパスキーマネージャは再登録やアップデート後の鍵更新を「まったく別の新規ユーザーアカウント」と判定し、既存パスキーを上書き（更新）する選択肢を表示できず、再登録のたびに新規パスキーエントリが無限に増殖（累積）して管理が破綻する課題が生じていた。
+   * 従来実装では資格情報生成（`registerWebAuthnCredential`）の呼び出しごとにランダムな16バイト（`getRandomValues(new Uint8Array(16))`）を `user.id` として割り当てていたため、パスキーマネージャが新規アカウントと誤認し、再登録のたびに新規パスキーエントリが無限に累積する課題が生じていた。
+   * また、IndexedDBの `security_keys` ストアに保存される `webauthn_vault`（DMKおよびEd25519秘密鍵の格納オブジェクト）が平文（Base64エンコードのみ）で保存されていた場合、ブラウザの開発者ツール（DevTools）から誰でも簡単にDMKを取り出せてしまい、At-Rest暗号化の境界が損なわれる重大な脆弱性リスクが存在した。
 
 2. **決定論的・永続的User ID (`user.id`) の導入**
    * 同一アプリ（同一インストール・ドメイン）において、常に固定・決定論的なUser ID（固定バイト列 `new TextEncoder().encode('yose_passkey_user_v1')` またはIndexedDB `security_keys` に永続化された `webauthn_user_id`）を `nav.credentials.create()` の `user.id` として提供する。
    * これにより、1PasswordやiCloudキーチェーン、Googleパスワードマネージャー等の主要パスキー管理ツールが同一ユーザーであることを正確に検知し、再登録時に**「既存のよせあつめ家計簿パスキーを上書き・更新しますか？」という更新ダイアログを確実に提示**させる。
 
-3. **認証時（`authenticateWithWebAuthn`）の柔軟な照合**
-   * 保存された単一の `credentialId` のみに厳格拘束せず、パスキーマネージャ内の最新資格情報を柔軟に受け入れ可能な構造とし、ブラウザや1Passwordで再登録・更新されたパスキーからのスムーズな認証復帰を実現する。
-   * IndexedDBに保存される `webauthn_vault`（DMKおよびEd25519秘密鍵の暗号化ペイロード）はPWAキャッシュパージ時にも一切削除されず永続化されるため、アップデート後も同一パスキーで確実にアンラップ可能とする。
+3. **WebAuthn PRF（Pseudo-Random Function）拡張によるVaultの暗号化保護**
+   * `webauthn_vault` の平文保存を根本解決するため、WebAuthnの **PRF拡張（`extensions: { prf: ... }`）** を採用する。
+   * パスキー登録・認証時、パスキー固有の32バイトシークレット出力を取得し、Web Crypto APIにより `AES-GCM-256` 鍵としてインポートする。
+   * メモリ上の `dmk`（DB暗号化鍵）および `privateKey`（Ed25519秘密鍵）をこのPRF由来AES鍵で暗号化し、暗号文・IV・ソルトのみを `webauthn_vault` に保存する。
+   * これにより、DevToolsや物理ダンプから `security_keys` を閲覧されても暗号化鍵は一切漏洩せず、ゼロトラストなセキュリティ境界が完全に保証される。PRF非対応環境ではWebAuthnによる平文保存を行わず、安全なPIN保護への誘導を行う。
 
-4. **設定画面における鍵管理UIの改善**
-   * 設定画面（`#tab-settings`）の認証鍵管理セクションに、**[🔑 WebAuthn (Passkey) を上書き・再登録]** ボタンおよび **[🗑️ WebAuthn登録を解除]** ボタンを配備。
-   * パスキーの再登録時は1Password上で既存キーが上書き更新される旨を注記し、不要な鍵が溜まるストレスを完全に解消する。
+4. **ゼロトラストDMK・秘密鍵同期ライフサイクル（PIN変更・鍵再生成・平文復帰の廃止）**
+   * **PIN変更（`#btn-save-pin`）**: 現在メモリ上の `this.db.encryptionKey` (DMK) と `this.authController.privateKey` の双方を取得し、`encryptMasterKeysWithPin` で `master_keys_package` をアトミックに再暗号化更新する。WebAuthn登録済みの場合は `webauthn_vault` も同時更新する。
+   * **Ed25519鍵ペア再生成（`#btn-generate-key`）**: 新規Ed25519鍵ペアの生成後、即座にメモリ上のDMKと新秘密鍵をセットにして `master_keys_package`（および `webauthn_vault`）を再ラップ更新し、リロード時の先祖返り・鍵消失を根絶する。
+   * **平文復帰機能の廃止**: ゼロトラストAt-Rest暗号化設計において、DB全体がDMKで暗号化されているため、秘密鍵だけ平文に戻してもDB自体の整合性が維持できず破綻する。危険かつ設計矛盾であった「PIN保護解除（平文に戻す）」操作を完全に廃止し、明確な「PIN変更」機能へと統一する。
 
 ### 4.5 設定画面におけるセキュリティ・鍵管理操作の明確なグルーピングと視覚的分離
 
 1. **背景と課題（操作の性質・毛色の混同防止）**
-   * 設定画面の鍵管理領域において、PINコード管理（端末保護）、WebAuthnパスキー管理（生体認証連携）、GAS登録用Ed25519公開鍵管理という「操作の目的や影響範囲がまったく異なる操作」が同一エリアに並列配置され、誤認・誤操作を誘発しやすい構造となっていた。
-   * 「今すぐ再ロック」と「PIN保護解除（平文復帰）」、あるいは「WebAuthn再登録」と「WebAuthn登録解除」のように、安全性を高める操作と解除・危険操作が混同されるリスクを排除する。
+   * 設定画面の鍵管理領域において、PINコード管理（端末保護・DMK保護）、WebAuthnパスキー管理（生体認証連携）、GAS登録用Ed25519公開鍵管理という「操作の目的や影響範囲がまったく異なる操作」が混同されるリスクを排除する。
 
 2. **3領域の独立した視覚的分離（サブカード＆バッジ）**
    * 設定画面（`#tab-settings`）の認証鍵管理エリアを、以下の3つの独立したブロック（サブカード）として明確に構造化する：
      * **① 🔐 秘密鍵PIN保護 & 端末ロック状態 (PIN Protection & Device Lock)**:
-       * ステータスバッジ（🔒 ロック中 / 🔓 解除中 / ⚠️ PIN未設定）
-       * PIN設定・変更入力フィールド
-       * 日常操作: `[🔒 今すぐ再ロック]`, `[🔓 PINでロック解除]`, `[PINで秘密鍵を保護]`
-       * 危険操作（平文復帰）: 明確な境界線と警告色（`btn-danger`）で区切った `[⚠️ PIN保護を解除 (平文に戻す)]`
+       * ステータスバッジ（🔒 ロック中 / 🔓 解除中）
+       * PIN変更入力フィールドおよび `[PINを変更・保存]` ボタン
+       * 日常操作: `[🔒 今すぐ再ロック]`, `[🔓 PINでロック解除]`
+       * ※ 全データゼロトラスト暗号化（DMK保護）を維持するため、平文復帰ボタンは完全排除。
      * **② 👆 WebAuthn・Passkey連携管理 (WebAuthn / Passkey - 1Password等)**:
-       * 状態表示（設定済 / 未登録）および1Password上書き更新に関する案内文
+       * 状態表示（設定済 / 未登録）および1Password上書き更新・PRF拡張暗号化に関する案内文
        * アクションボタン: `[👆 WebAuthn (Passkey) を上書き・再登録]`
-       * 連携解除ボタン: `[🗑️ WebAuthn登録を解除]`（危険操作として明確に分離）
+       * 連携解除ボタン: `[🗑️ WebAuthn登録を解除]`
      * **③ ☁️ GAS登録用 Ed25519 公開鍵管理 (GAS Public Key)**:
        * 公開鍵Base64テキストエリア
        * アクションボタン: `[⚡ GASへワンクリック登録]`, `[公開鍵をコピー]`, `[新しい鍵ペアを生成]`
@@ -450,24 +452,27 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 2. **モジュール構成と責務分離 (`js/ui/` ディレクトリ配下)**
    * **全体調停 (`js/ui/coordinator.js`) - `AppCoordinator`**:
      * アプリケーション全体のライフサイクル管理、共有状態（`currentMonth`, `selectedYear`, `analyticsTarget`, `useActualCategoryAxis` 等）の一元保持。
+     * `_domInitialized` フラグによるガード制御：端末の再ロック・解除時にDOMイベントリスナーが多重登録され取引が重複送信されるバグを完全防止。
      * 各コンポーネントコントローラーのインスタンス化と依存性注入（DI: `db`, `syncManager`, コールバック関数群）。
      * コンポーネント間連携の調停（イベント通知 ➔ 画面全体の更新 `refreshAllViews()` や特定モーダルの展開）。
    * **認証・セキュリティゲート (`js/ui/auth_controller.js`) - `AuthController`**:
-     * 起動時ロック画面（`#auth-screen`）、WebAuthn/PIN認証ゲートの制御、秘密鍵アンラップ、PINロック/解除、平文復帰、アクティブセッション破棄。
+     * 起動時ロック画面（`#auth-screen`）、WebAuthn PRF暗号化/PIN認証ゲートの制御、DMK＆秘密鍵アトミック再ラップ、アクティブセッション破棄。
    * **取引入力制御 (`js/ui/tx_input_controller.js`) - `TransactionInputController`**:
-     * 取引入力フォーム（通常・ポイント・定期・前払・立替の5モード）、動的フィールド切替、マスタドロップダウン生成、税額計算モーダル連携、新規取引保存。
+     * 取引入力フォーム（通常・ポイント・定期・前払・立替の5モード）、動的フィールド切替、取引種別（`#input-type` 支出/収入）に応じた大項目費目の動的フィルタリング、税額計算モーダル連携（モード切替時や金額手入力時の `currentTaxMeta` 自動クリアによる消費税二重加算防止）、新規取引保存（`generateUUID` による暗号学的衝突防止）。
    * **明細編集・遡及更新 (`js/ui/tx_edit_controller.js`) - `TransactionEditController`**:
      * 取引編集モーダル（`#modal-edit-tx`）の開閉・初期値セット、過去締め月遡及更新判定、明細更新、明細削除。
    * **取引一覧描画 (`js/ui/tx_list_controller.js`) - `TransactionListController`**:
-     * 「当月の明細一覧」および「最近の入力」のDOMレンダリング、編集モーダル呼出イベント伝達。
+     * 「当月の明細一覧」および「最近の入力」のDOMレンダリング、編集モーダル呼出イベント伝達。全動的出力での `escapeHtml()` 徹底。
    * **集計・ダッシュボード制御 (`js/ui/summary_controller.js`) - `SummaryController`**:
      * 集計タブ（`#tab-summary`）のKPIカード、期間ナビゲーション、ネイティブ年月ピッカー（`showPicker`）、分類軸切替、日別・月別・年別・予算・資産集計表描画。
+     * 資産分析表（`assets`）における口座確定残高（`summary.confirmed_balances[a.id]`）の正確な反映、およびカテゴリ内訳リストでのカテゴリ名解決（内部ID直接露出の防止）。
+     * 設計書3.5節に基づき `external_assets` 関連の残存コードを完全整理。
    * **グラフ描画専任 (`js/ui/chart_controller.js`) - `ChartController`**:
-     * Chart.jsインスタンスの生成・破棄・再描画（日別・月別・年別バーチャート、予算消化累積軌跡ラインチャート、資産構成チャート）。
+     * Chart.jsインスタンスの生成・破棄・再描画（日別・月別・年別バーチャート、予算消化累積軌跡ラインチャート、資産構成ドーナツチャートにおける投資資産合計 `total_investment_assets` の正確な可視化）。
    * **マスタ管理制御 (`js/ui/master_controller.js`) - `MasterController`**:
-     * マスタ管理タブ、口座・大項目・中項目・定期ルール・祝日・資産の各一覧描画、追加・編集モーダル、祝日一括インポートモーダル、GAS設定マスタ同期。
+     * マスタ管理タブ、口座・大項目・中項目・定期ルール・祝日の各一覧描画、追加・編集モーダル（新規作成時の入力 `id` 保存の完全担保、モーダルDOM内の `escapeHtml()` による属性値エスケープ）、祝日一括インポートモーダル、GAS設定マスタ同期。
    * **設定・環境管理 (`js/ui/settings_controller.js`) - `SettingsController`**:
-     * 設定タブ（`#tab-settings`）、GAS接続設定、3分割鍵管理サブカード（PIN/WebAuthn/GAS公開鍵）、年間予算スケーラブルUI・自動試算反映、バックアップJSONエクスポート／インポート（堅牢なJSONパース）。
+     * 設定タブ（`#tab-settings`）、GAS接続設定、3分割鍵管理サブカード（PIN変更/WebAuthn PRF暗号化/GAS公開鍵）、年間予算スケーラブルUI・自動試算反映、バックアップJSONエクスポート／インポート（堅牢なJSONパース）。
    * **同期・ネットワーク状態監視 (`js/ui/sync_status_controller.js`) - `SyncStatusController`**:
      * オンライン/オフラインバッジ、未同期件数バッジのリアルタイム更新、手動差分同期、リモート全データ強制再取得。
 
@@ -499,19 +504,22 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * **非破壊ORマージ＆サニタイズエンジン (`js/db/backup_merger.js`) - `BackupMerger`**:
      * バックアップJSONインポート時のスキーマ検証、Prototype Pollution防御（`isSafeKey`）、年間予算エントリの正規化（`normalizeBudgetEntry`）、マスタ設定の非破壊和集合マージ（`mergeMasterConfig`）、およびスナップショットの非破壊マージ（`mergeSummarySnapshot`）を専門に担うドメインクラス。
    * **ドメインリポジトリ (`js/db/yose_db.js`) - `YoseDB extends StorageEngine`**:
-     * `StorageEngine` を継承し、`BackupMerger` と協調してアプリケーションへ統一的なドメインAPI（`getMasterConfig`, `saveMasterConfig`, `getSnapshot`, `saveSnapshot`, `getTransaction`, `putTransaction`, `putTransactions`, `deleteTransaction`, `getTransactions`, `getUnsyncedTransactions`, `markTransactionsSynced`, `getSecurityKey`, `saveSecurityKey`, `deleteSecurityKey`, `getSetting`, `setSetting`, `getAnnualBudget`, `saveAnnualBudget`, `exportFullData`, `importFullData`）を提供するリポジトリクラス。
+     * `StorageEngine` を継承し、`BackupMerger` と協調してアプリケーションへ統一的なドメインAPIを提供するリポジトリクラス。
+     * **平文メタデータ事前フィルタリングによる高速化**: `getTransactions(filter)` において、暗号化エンベロープの外側に付与された平文メタデータ（`target_month`, `sync_status`, `is_deleted`）により合致レコードのみを抽出してからAES-GCM復号を実行。大量データ蓄積時における復号オーバーヘッドを大幅削減。
    * **エントリーポイント Facade (`js/db.js`)**:
      * `js/db/*.js` の全公開クラス・定数を再エクスポート（Re-export）し、既存コードおよびテストスイートとの100%後方互換性を保証する。
 
 3. **純粋計算・ビジネスロジック層の分割構成 (`js/logic/` ディレクトリ配下)**
    * **日付・祝日・共通ユーティリティ (`js/logic/date_utils.js`)**:
-     * 日付フォーマット・パース（`formatDate`, `parseDate`, `addMonthsToMonthStr`, `getLastDayOfMonth`）、営業日・祝日判定と補正（`isWeekend`, `isHoliday`, `isBusinessDay`, `adjustDateForHoliday`）、内閣府祝日プリセット＆パーサー（`JAPANESE_HOLIDAYS_PRESET`, `parseHolidayTextOrCsv`, `groupHolidaysByYear`）、ID生成（`generateUUID`）、XSS防止エスケープ（`escapeHtml`）。
+     * 日付フォーマット・パース（`formatDate`, `parseDate`, `addMonthsToMonthStr`, `getLastDayOfMonth`）、営業日・祝日判定と補正（`isWeekend`, `isHoliday`, `isBusinessDay`, `adjustDateForHoliday`）、内閣府祝日プリセット＆パーサー（`JAPANESE_HOLIDAYS_PRESET`, `parseHolidayTextOrCsv`, `groupHolidaysByYear`）、暗号学的乱数を用いた高衝突耐性ID生成（`generateUUID`：`crypto.randomUUID()` 活用）、XSS防止エスケープ（`escapeHtml`）。
    * **税計算＆取引生成ファクトリ (`js/logic/transaction_factory.js`)**:
      * 消費税計算（`calculateTax`）、定期支出予定生成（`generateRecurringTransactions`）、前払費用月次分割償却生成（`createPrepaidAmortizationTransactions`）、立替払い・立替回収生成（`createAdvancePaymentTransactions`, `createAdvanceRepaymentTransaction`）、ポイント併用取引生成（`createPointPaymentTransactions`）。
    * **残高計算＆多粒度集計エンジン (`js/logic/aggregator.js`)**:
-     * 口座確定・予定残高および当月2軸集計（`calculateBalancesAndSummaries`）、日別集計（`aggregateDailySummaries`）、月別集計（`aggregateMonthlySummaries`）、年別集計（`aggregateYearlySummaries`）、総資産・純資産・負債集計（`calculateTotalAssetSummary`）。
+     * 口座確定・予定残高および当月2軸集計（`calculateBalancesAndSummaries`）、日別集計（`aggregateDailySummaries`）、月別集計（`aggregateMonthlySummaries`：過去月スナップショット形式正規化による型不整合防止）、年別集計（`aggregateYearlySummaries`）、総資産・純資産・負債集計（`calculateTotalAssetSummary`：口座残高保持）。
    * **年間予算・貯蓄目標＆推移エンジン (`js/logic/budget_engine.js`)**:
      * 段階的丸め計算（`roundTieredAmount`）、前年実績ベースの予算初期値算出（`calculateAnnualBudgetDefaults`）、年間予算消化率・貯蓄達成率・標準ペース判定・費目別進捗計算（`calculateAnnualBudgetProgress`）、12ヶ月累積推移データ生成（`generateAnnualTrajectory`）。
+   * **署名直列化のキー順序保証 (`js/crypto.js` & `gas/Code.gs`)**:
+     * `canonicalJsonStringify` によるキー昇順ソート直列化を導入し、PWAとGAS間での署名対象文字列の完全一致を保証。
    * **エントリーポイント Facade (`js/logic.js`)**:
      * `js/logic/*.js` の全関数・定数を再エクスポートし、既存コードおよびテストスイートとの100%後方互換性を保証する。
 

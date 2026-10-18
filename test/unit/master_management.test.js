@@ -393,6 +393,30 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 			assert.ok(storage.master_config.has('current'));
 			assert.ok(storage.summary_snapshot.has('current'));
 		});
+
+		it('pre-filters raw transactions by target_month, sync_status, and is_deleted before decryption', async () => {
+			const { generateDatabaseMasterKey } = await import('../../js/crypto.js');
+			const dmk = await generateDatabaseMasterKey();
+			db.setEncryptionKey(dmk);
+
+			await db.putTransactions([
+				{ id: 'tx_oct_1', target_month: '2026-10', date: '2026-10-01', amount: 1000, type: 'expense', sync_status: 'synced', is_deleted: false },
+				{ id: 'tx_oct_2', target_month: '2026-10', date: '2026-10-02', amount: 2000, type: 'expense', sync_status: 'unsynced', is_deleted: false },
+				{ id: 'tx_nov_1', target_month: '2026-11', date: '2026-11-01', amount: 3000, type: 'expense', sync_status: 'unsynced', is_deleted: false },
+				{ id: 'tx_del_1', target_month: '2026-10', date: '2026-10-05', amount: 4000, type: 'expense', sync_status: 'unsynced', is_deleted: true }
+			]);
+
+			const octTxs = await db.getTransactions({ target_month: '2026-10' });
+			assert.equal(octTxs.length, 2);
+			assert.deepEqual(octTxs.map(t => t.id).sort(), ['tx_oct_1', 'tx_oct_2']);
+
+			const unsyncedOct = await db.getTransactions({ target_month: '2026-10', sync_status: 'unsynced' });
+			assert.equal(unsyncedOct.length, 1);
+			assert.equal(unsyncedOct[0].id, 'tx_oct_2');
+
+			const withDeleted = await db.getTransactions({ target_month: '2026-10', includeDeleted: true });
+			assert.equal(withDeleted.length, 3);
+		});
 	});
 });
 

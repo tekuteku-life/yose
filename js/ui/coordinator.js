@@ -34,6 +34,7 @@ export class AppCoordinator {
 
 		this.swRegistration = null;
 		this.availableUpdateVersion = null;
+		this._domInitialized = false;
 
 		// Component Controllers (DI via Mediator)
 		this.authController = new AuthController(this);
@@ -89,21 +90,24 @@ export class AppCoordinator {
 		}
 
 		// 5. Setup DOM & Event Handlers
-		this.setupNavigation();
-		this.syncStatusController.setupListeners();
-		this.txInputController.setupInputForm();
-		this.txInputController.setupTaxModal();
-		this.txEditController.setupEditTransactionModal();
-		this.summaryController.setupSummaryView();
-		this.settingsController.setupSettingsView();
-		this.masterController.setupMasterTabs();
-		this.syncStatusController.updateNetworkBadge();
+		if (!this._domInitialized) {
+			this._domInitialized = true;
+			this.setupNavigation();
+			this.syncStatusController.setupListeners();
+			this.txInputController.setupInputForm();
+			this.txInputController.setupTaxModal();
+			this.txEditController.setupEditTransactionModal();
+			this.summaryController.setupSummaryView();
+			this.settingsController.setupSettingsView();
+			this.masterController.setupMasterTabs();
+			this.syncStatusController.updateNetworkBadge();
 
-		if (typeof window !== 'undefined') {
-			window.addEventListener('beforeunload', () => {
-				clearActiveSession();
-				this.db.clearEncryptionKey();
-			});
+			if (typeof window !== 'undefined') {
+				window.addEventListener('beforeunload', () => {
+					clearActiveSession();
+					this.db.clearEncryptionKey();
+				});
+			}
 		}
 
 		// 6. Initial Render

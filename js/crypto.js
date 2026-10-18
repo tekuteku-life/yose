@@ -216,10 +216,39 @@ export async function decryptPrivateKeyWithPin(encryptedData, pin) {
 }
 
 /**
+ * Canonical JSON serialization with deterministically sorted object keys
+ * @param {any} obj
+ * @returns {string}
+ */
+export function canonicalJsonStringify(obj) {
+	if (obj === null || typeof obj !== 'object') {
+		return JSON.stringify(obj);
+	}
+	if (Array.isArray(obj)) {
+		return '[' + obj.map(item => {
+			if (item === undefined || typeof item === 'function' || typeof item === 'symbol') {
+				return 'null';
+			}
+			return canonicalJsonStringify(item);
+		}).join(',') + ']';
+	}
+	const sortedKeys = Object.keys(obj).sort();
+	const keyValues = [];
+	for (const key of sortedKeys) {
+		const val = obj[key];
+		if (val === undefined || typeof val === 'function' || typeof val === 'symbol') {
+			continue;
+		}
+		keyValues.push(JSON.stringify(key) + ':' + canonicalJsonStringify(val));
+	}
+	return '{' + keyValues.join(',') + '}';
+}
+
+/**
  * Build canonical string representation for signing
  */
 export function buildSignString(action, timestamp, payload) {
-	return JSON.stringify({
+	return canonicalJsonStringify({
 		action,
 		timestamp,
 		payload
@@ -457,6 +486,11 @@ export const DEFAULT_WEBAUTHN_USER_ID = new Uint8Array([
 	0x79, 0x6f, 0x73, 0x65, 0x5f, 0x70, 0x61, 0x73, 0x73, 0x6b, 0x65, 0x79, 0x5f, 0x75, 0x73, 0x65, 0x72, 0x5f, 0x76, 0x31
 ]); // "yose_passkey_user_v1"
 
+export const DEFAULT_WEBAUTHN_PRF_SALT = new Uint8Array([
+	0x79, 0x6f, 0x73, 0x65, 0x5f, 0x70, 0x72, 0x66, 0x5f, 0x73, 0x61, 0x6c, 0x74, 0x5f, 0x76, 0x31,
+	0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
+]); // 32 bytes
+
 export async function registerWebAuthnCredential(username = 'よせあつめ家計簿', nav = (typeof globalThis !== 'undefined' ? globalThis.navigator : null), options = {}) {
 	if (!isWebAuthnSupported(nav)) {
 		throw new Error('WebAuthn is not supported in this environment');
@@ -464,6 +498,7 @@ export async function registerWebAuthnCredential(username = 'よせあつめ家�
 
 	const challenge = getRandomValues(new Uint8Array(32));
 	const userId = options.userId || DEFAULT_WEBAUTHN_USER_ID;
+	const prfSalt = options.prfSalt || DEFAULT_WEBAUTHN_PRF_SALT;
 
 	const cred = await nav.credentials.create({
 		publicKey: {
@@ -482,6 +517,13 @@ export async function registerWebAuthnCredential(username = 'よせあつめ家�
 				userVerification: 'preferred',
 				residentKey: 'preferred'
 			},
+			extensions: {
+				prf: {
+					eval: {
+						first: prfSalt
+					}
+				}
+			},
 			timeout: 60000
 		}
 	});
@@ -490,8 +532,16 @@ export async function registerWebAuthnCredential(username = 'よせあつめ家�
 		throw new Error('Failed to create WebAuthn credential');
 	}
 
+	let prfKeyRaw = null;
+	const extResults = typeof cred.getClientExtensionResults === 'function' ? cred.getClientExtensionResults() : null;
+	if (extResults?.prf?.results?.first) {
+		prfKeyRaw = new Uint8Array(extResults.prf.results.first);
+	}
+
 	return {
-		credentialId: bytesToBase64(new Uint8Array(cred.rawId))
+		credentialId: bytesToBase64(new Uint8Array(cred.rawId)),
+		prfSupported: Boolean(extResults?.prf?.enabled || prfKeyRaw),
+		prfKeyRaw
 	};
 }
 
@@ -499,18 +549,28 @@ export async function registerWebAuthnCredential(username = 'よせあつめ家�
  * Authenticate with existing WebAuthn Credential
  * @param {string} credentialIdBase64
  * @param {object} [nav]
- * @returns {Promise<{ success: boolean, credentialId: string }>}
+ * @param {object} [options]
+ * @returns {Promise<{ success: boolean, credentialId: string, prfKeyRaw: Uint8Array|null }>}
  */
-export async function authenticateWithWebAuthn(credentialIdBase64, nav = (typeof globalThis !== 'undefined' ? globalThis.navigator : null)) {
+export async function authenticateWithWebAuthn(credentialIdBase64, nav = (typeof globalThis !== 'undefined' ? globalThis.navigator : null), options = {}) {
 	if (!isWebAuthnSupported(nav)) {
 		throw new Error('WebAuthn is not supported in this environment');
 	}
 
 	const challenge = getRandomValues(new Uint8Array(32));
+	const prfSalt = options.prfSalt || DEFAULT_WEBAUTHN_PRF_SALT;
+
 	const getOptions = {
 		publicKey: {
 			challenge,
 			userVerification: 'preferred',
+			extensions: {
+				prf: {
+					eval: {
+						first: prfSalt
+					}
+				}
+			},
 			timeout: 60000
 		}
 	};
@@ -540,10 +600,93 @@ export async function authenticateWithWebAuthn(credentialIdBase64, nav = (typeof
 		? bytesToBase64(new Uint8Array(assertion.rawId))
 		: (assertion.id || credentialIdBase64 || '');
 
+	let prfKeyRaw = null;
+	const extResults = typeof assertion.getClientExtensionResults === 'function' ? assertion.getClientExtensionResults() : null;
+	if (extResults?.prf?.results?.first) {
+		prfKeyRaw = new Uint8Array(extResults.prf.results.first);
+	}
+
 	return {
 		success: true,
-		credentialId: returnedId
+		credentialId: returnedId,
+		prfKeyRaw
 	};
+}
+
+/**
+ * Encrypt master keys into webauthn_vault using PRF key
+ * @param {{ dmkRaw: Uint8Array, privateKeyPkcs8: Uint8Array }} keys
+ * @param {Uint8Array} prfKeyRaw
+ * @param {Uint8Array} [prfSalt]
+ * @returns {Promise<{ ciphertext: string, iv: string, prfSalt: string }>}
+ */
+export async function encryptWebAuthnVault({ dmkRaw, privateKeyPkcs8 }, prfKeyRaw, prfSalt = DEFAULT_WEBAUTHN_PRF_SALT) {
+	const subtle = getSubtle();
+	const iv = getRandomValues(new Uint8Array(12));
+	const prfAesKey = await subtle.importKey(
+		'raw',
+		prfKeyRaw,
+		{ name: 'AES-GCM' },
+		false,
+		['encrypt', 'decrypt']
+	);
+
+	const payload = JSON.stringify({
+		dmk: bytesToBase64(dmkRaw),
+		priv: bytesToBase64(privateKeyPkcs8)
+	});
+
+	const encryptedBuffer = await subtle.encrypt(
+		{ name: 'AES-GCM', iv },
+		prfAesKey,
+		new TextEncoder().encode(payload)
+	);
+
+	return {
+		ciphertext: bytesToBase64(encryptedBuffer),
+		iv: bytesToBase64(iv),
+		prfSalt: bytesToBase64(prfSalt)
+	};
+}
+
+/**
+ * Decrypt master keys from webauthn_vault using PRF key
+ * @param {{ ciphertext: string, iv: string, prfSalt?: string }} vault
+ * @param {Uint8Array} prfKeyRaw
+ * @returns {Promise<{ dmkRaw: Uint8Array, privateKeyPkcs8: Uint8Array }>}
+ */
+export async function decryptWebAuthnVault(vault, prfKeyRaw) {
+	if (!vault || !vault.ciphertext || !vault.iv) {
+		throw new Error('Invalid webauthn_vault payload');
+	}
+	const { ciphertext, iv } = vault;
+	const ivBytes = base64ToBytes(iv);
+	const cipherBytes = base64ToBytes(ciphertext);
+	const subtle = getSubtle();
+
+	const prfAesKey = await subtle.importKey(
+		'raw',
+		prfKeyRaw,
+		{ name: 'AES-GCM' },
+		false,
+		['encrypt', 'decrypt']
+	);
+
+	try {
+		const decryptedBuffer = await subtle.decrypt(
+			{ name: 'AES-GCM', iv: ivBytes },
+			prfAesKey,
+			cipherBytes
+		);
+		const jsonStr = new TextDecoder().decode(decryptedBuffer);
+		const parsed = JSON.parse(jsonStr);
+		return {
+			dmkRaw: base64ToBytes(parsed.dmk),
+			privateKeyPkcs8: base64ToBytes(parsed.priv)
+		};
+	} catch (err) {
+		throw new Error('WebAuthn PRF vault decryption failed: invalid key or corrupted vault');
+	}
 }
 
 /**

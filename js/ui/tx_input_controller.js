@@ -9,7 +9,9 @@ import {
 	createPrepaidAmortizationTransactions,
 	createAdvancePaymentTransactions,
 	createAdvanceRepaymentTransaction,
-	createPointPaymentTransactions
+	createPointPaymentTransactions,
+	generateUUID,
+	escapeHtml
 } from '../logic.js';
 
 export class TransactionInputController {
@@ -42,16 +44,25 @@ export class TransactionInputController {
 		// Type change
 		const typeSelect = document.getElementById('input-type');
 		if (typeSelect) {
-			typeSelect.addEventListener('change', () => {
+			typeSelect.addEventListener('change', async () => {
 				const val = typeSelect.value;
+				this.coordinator.currentTaxMeta = null;
 				if (['advance', 'repay', 'prepaid', 'point'].includes(val)) {
 					this.switchInputMode(val);
 				} else {
 					this.switchInputMode('normal');
 					this.updateFormFieldsForType(val);
 				}
+				await this.populateCategoryDropdowns(val);
 			});
 		}
+
+		// Clear taxMeta on manual amount input
+		const clearTaxMeta = () => { this.coordinator.currentTaxMeta = null; };
+		document.getElementById('input-amount')?.addEventListener('input', clearTaxMeta);
+		document.getElementById('input-self-amount')?.addEventListener('input', clearTaxMeta);
+		document.getElementById('input-adv-amount')?.addEventListener('input', clearTaxMeta);
+		document.getElementById('input-point-total')?.addEventListener('input', clearTaxMeta);
 
 		// Point dynamic calculation
 		const inputPointTotal = document.getElementById('input-point-total');
@@ -110,6 +121,7 @@ export class TransactionInputController {
 
 	switchInputMode(mode) {
 		this.coordinator.currentMode = mode;
+		this.coordinator.currentTaxMeta = null;
 
 		// Harmonize mode tab buttons
 		document.querySelectorAll('.mode-tab-btn').forEach(btn => {
@@ -196,7 +208,7 @@ export class TransactionInputController {
 		const activeAccounts = (config.accounts || []).filter(a => !a.is_archived);
 
 		const buildAccountOptions = () => activeAccounts.map(a =>
-			`<option value="${a.id}">${a.name} (${a.type})</option>`
+			`<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.type)})</option>`
 		).join('');
 
 		if (accSelect) accSelect.innerHTML = buildAccountOptions();
@@ -205,17 +217,29 @@ export class TransactionInputController {
 		if (pointAccSelect) {
 			pointAccSelect.innerHTML = [
 				'<option value="">ポイント相殺として計上（口座指定なし）</option>',
-				...activeAccounts.map(a => `<option value="${a.id}">${a.name} (${a.type})</option>`)
+				...activeAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.type)})</option>`)
 			].join('');
 		}
 
-		// Categories
+		// Categories filtered by current input-type
+		const currentType = document.getElementById('input-type')?.value || 'expense';
+		await this.populateCategoryDropdowns(currentType);
+	}
+
+	async populateCategoryDropdowns(type = 'expense') {
+		const config = await this.db.getMasterConfig();
+		if (!config) return;
+
 		const catSelect = document.getElementById('select-category');
 		const actCatSelect = document.getElementById('select-actual-category');
-		const activeCategories = (config.categories || []).filter(c => !c.is_archived);
+		const activeCategories = (config.categories || []).filter(c => {
+			if (c.is_archived) return false;
+			if (type === 'income') return c.type === 'income';
+			return !c.type || c.type === 'expense';
+		});
 
 		const buildCategoryOptions = () => activeCategories.map(c =>
-			`<option value="${c.id}">${c.name}</option>`
+			`<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`
 		).join('');
 
 		if (catSelect) catSelect.innerHTML = buildCategoryOptions();
@@ -224,6 +248,11 @@ export class TransactionInputController {
 		if (activeCategories.length > 0) {
 			await this.updateSubcategories(activeCategories[0].id, 'select-subcategory');
 			await this.updateSubcategories(activeCategories[0].id, 'select-actual-subcategory');
+		} else {
+			const subSelect = document.getElementById('select-subcategory');
+			const actSubSelect = document.getElementById('select-actual-subcategory');
+			if (subSelect) subSelect.innerHTML = '<option value="">なし</option>';
+			if (actSubSelect) actSubSelect.innerHTML = '<option value="">なし</option>';
 		}
 	}
 
@@ -238,7 +267,7 @@ export class TransactionInputController {
 		}
 		const activeSubs = cat.subcategories.filter(s => !s.is_archived);
 		select.innerHTML = activeSubs.map(s =>
-			`<option value="${s.id}">${s.name}</option>`
+			`<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`
 		).join('');
 	}
 
@@ -319,8 +348,8 @@ export class TransactionInputController {
 			}
 
 			const tx = {
-				id: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-				group_id: `grp_${Date.now()}`,
+				id: generateUUID('tx'),
+				group_id: generateUUID('grp'),
 				date: date,
 				target_month: date.slice(0, 7),
 				status: 'confirmed',

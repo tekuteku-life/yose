@@ -230,6 +230,19 @@ export function aggregateMonthlySummaries(transactions = [], targetYear = String
 	for (let m = 1; m <= 12; m++) {
 		const monthKey = `${targetYear}-${String(m).padStart(2, '0')}`;
 		const hist = historicalSummaries[monthKey];
+		const normalizedByCat = {};
+		if (hist?.by_category) {
+			for (const [cat, val] of Object.entries(hist.by_category)) {
+				normalizedByCat[cat] = typeof val === 'number' ? val : Number(val?.total ?? val?.confirmed ?? 0);
+			}
+		}
+		const normalizedByActCat = {};
+		if (hist?.by_actual_category) {
+			for (const [cat, val] of Object.entries(hist.by_actual_category)) {
+				normalizedByActCat[cat] = typeof val === 'number' ? val : Number(val?.total ?? val?.confirmed ?? 0);
+			}
+		}
+
 		months[monthKey] = {
 			month: monthKey,
 			income_confirmed: hist ? (hist.income_confirmed || hist.total_income || 0) : 0,
@@ -239,8 +252,8 @@ export function aggregateMonthlySummaries(transactions = [], targetYear = String
 			expense_planned: 0,
 			expense_total: hist ? (hist.expense_confirmed || hist.total_expense || 0) : 0,
 			net: 0,
-			by_category: hist?.by_category ? { ...hist.by_category } : {},
-			by_actual_category: hist?.by_actual_category ? { ...hist.by_actual_category } : {}
+			by_category: normalizedByCat,
+			by_actual_category: normalizedByActCat
 		};
 	}
 
@@ -455,6 +468,7 @@ export function calculateTotalAssetSummary(accountBalances = {}, accountsMaster 
 		total_investment_assets: totalInvestmentAssets,
 		total_liabilities: liabilities,
 		total_net_assets: netAssets,
+		confirmed_balances: accountBalances,
 		by_type: byType
 	};
 }

@@ -3,7 +3,7 @@
  * Manages transaction editing modal, past closed month retroactive updates, and deletion.
  */
 
-import { calculateTax } from '../logic.js';
+import { calculateTax, escapeHtml } from '../logic.js';
 
 export class TransactionEditController {
 	constructor(coordinator) {
@@ -98,14 +98,14 @@ export class TransactionEditController {
 		// Populate accounts
 		const accSelect = document.getElementById('edit-tx-account');
 		const toAccSelect = document.getElementById('edit-tx-to-account');
-		const accOptions = activeAccounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+		const accOptions = activeAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`).join('');
 		if (accSelect) accSelect.innerHTML = accOptions;
 		if (toAccSelect) toAccSelect.innerHTML = accOptions;
 
 		// Populate categories
 		const catSelect = document.getElementById('edit-tx-category');
 		const actCatSelect = document.getElementById('edit-tx-actual-category');
-		const catOptions = activeCats.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+		const catOptions = activeCats.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
 		if (catSelect) catSelect.innerHTML = catOptions;
 		if (actCatSelect) actCatSelect.innerHTML = catOptions;
 

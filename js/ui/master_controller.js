@@ -56,10 +56,6 @@ export class MasterController {
 			this.openMasterModal('recurring', null);
 		});
 
-		document.getElementById('btn-add-asset')?.addEventListener('click', () => {
-			this.openMasterModal('asset', null);
-		});
-
 		document.getElementById('btn-add-holiday')?.addEventListener('click', async () => {
 			const input = document.getElementById('input-new-holiday');
 			const val = input?.value;
@@ -149,22 +145,6 @@ export class MasterController {
 				await this.syncManager.sendAction('update_master', { master_config: config });
 			} catch (err) {
 				console.warn('Sync master config to GAS deferred:', err.message);
-			}
-		}
-		await this.coordinator.refreshAllViews();
-	}
-
-	async saveExternalAssetsAndSync(assets) {
-		const snapshot = await this.db.getSnapshot() || {};
-		snapshot.external_assets = assets;
-		snapshot.calculated_at = new Date().toISOString();
-		await this.db.saveSnapshot(snapshot);
-
-		if (this.syncManager?.gasUrl && this.syncManager?.privateKey) {
-			try {
-				await this.syncManager.sendAction('update_external_assets', { external_assets: assets });
-			} catch (err) {
-				console.warn('Sync external assets to GAS deferred:', err.message);
 			}
 		}
 		await this.coordinator.refreshAllViews();
@@ -403,11 +383,11 @@ export class MasterController {
 				<form id="form-master-account">
 					<div class="form-group">
 						<label class="form-label" for="m-acc-id">口座ID (英数記号)</label>
-						<input type="text" id="m-acc-id" class="form-control" value="${item?.id || 'acc_' + Date.now().toString(36)}" ${!isNew ? 'readonly' : ''} required>
+						<input type="text" id="m-acc-id" class="form-control" value="${escapeHtml(item?.id || 'acc_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''} required>
 					</div>
 					<div class="form-group">
 						<label class="form-label" for="m-acc-name">口座名・表記</label>
-						<input type="text" id="m-acc-name" class="form-control" value="${item?.name || ''}" placeholder="例: メイン銀行口座" required>
+						<input type="text" id="m-acc-name" class="form-control" value="${escapeHtml(item?.name || '')}" placeholder="例: メイン銀行口座" required>
 					</div>
 					<div class="form-row">
 						<div class="form-group">
@@ -471,11 +451,11 @@ export class MasterController {
 				<form id="form-master-category">
 					<div class="form-group">
 						<label class="form-label" for="m-cat-id">費目ID (英数記号)</label>
-						<input type="text" id="m-cat-id" class="form-control" value="${item?.id || 'cat_' + Date.now().toString(36)}" ${!isNew ? 'readonly' : ''} required>
+						<input type="text" id="m-cat-id" class="form-control" value="${escapeHtml(item?.id || 'cat_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''} required>
 					</div>
 					<div class="form-group">
 						<label class="form-label" for="m-cat-name">費目名</label>
-						<input type="text" id="m-cat-name" class="form-control" value="${item?.name || ''}" placeholder="例: 食費" required>
+						<input type="text" id="m-cat-name" class="form-control" value="${escapeHtml(item?.name || '')}" placeholder="例: 食費" required>
 					</div>
 					<div class="form-group">
 						<label class="form-label" for="m-cat-type">収支種別</label>
@@ -522,11 +502,11 @@ export class MasterController {
 				<form id="form-master-subcategory">
 					<div class="form-group">
 						<label class="form-label" for="m-sub-id">内訳ID (英数記号)</label>
-						<input type="text" id="m-sub-id" class="form-control" value="${item?.id || 'sub_' + Date.now().toString(36)}" ${!isNew ? 'readonly' : ''} required>
+						<input type="text" id="m-sub-id" class="form-control" value="${escapeHtml(item?.id || 'sub_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''} required>
 					</div>
 					<div class="form-group">
 						<label class="form-label" for="m-sub-name">内訳名</label>
-						<input type="text" id="m-sub-name" class="form-control" value="${item?.name || ''}" placeholder="例: 自炊食材" required>
+						<input type="text" id="m-sub-name" class="form-control" value="${escapeHtml(item?.name || '')}" placeholder="例: 自炊食材" required>
 					</div>
 					<div style="display: flex; gap: 8px; margin-top: 16px;">
 						<button type="submit" class="btn btn-primary btn-block">保存する</button>
@@ -568,11 +548,11 @@ export class MasterController {
 				<form id="form-master-recurring">
 					<div class="form-group">
 						<label class="form-label" for="m-rec-id">ルールID</label>
-						<input type="text" id="m-rec-id" class="form-control" value="${item?.id || 'rec_' + Date.now().toString(36)}" ${!isNew ? 'readonly' : ''} required>
+						<input type="text" id="m-rec-id" class="form-control" value="${escapeHtml(item?.id || 'rec_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''} required>
 					</div>
 					<div class="form-group">
 						<label class="form-label" for="m-rec-name">ルール名</label>
-						<input type="text" id="m-rec-name" class="form-control" value="${item?.name || ''}" placeholder="例: 家賃" required>
+						<input type="text" id="m-rec-name" class="form-control" value="${escapeHtml(item?.name || '')}" placeholder="例: 家賃" required>
 					</div>
 					<div class="form-row">
 						<div class="form-group">
@@ -592,13 +572,13 @@ export class MasterController {
 						<div class="form-group">
 							<label class="form-label" for="m-rec-account">決済口座</label>
 							<select id="m-rec-account" class="form-control" required>
-								${activeAccounts.map(a => `<option value="${a.id}" ${item?.account_id === a.id ? 'selected' : ''}>${a.name}</option>`).join('')}
+								${activeAccounts.map(a => `<option value="${escapeHtml(a.id)}" ${item?.account_id === a.id ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
 							</select>
 						</div>
 						<div class="form-group">
 							<label class="form-label" for="m-rec-cat">大項目</label>
 							<select id="m-rec-cat" class="form-control">
-								${activeCats.map(c => `<option value="${c.id}" ${item?.category_id === c.id ? 'selected' : ''}>${c.name}</option>`).join('')}
+								${activeCats.map(c => `<option value="${escapeHtml(c.id)}" ${item?.category_id === c.id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('')}
 							</select>
 						</div>
 					</div>
@@ -665,58 +645,6 @@ export class MasterController {
 
 				modal.classList.remove('active');
 				await this.saveMasterConfigAndSync(config);
-			});
-
-		} else if (type === 'asset') {
-			const isNew = !item;
-			title.textContent = isNew ? '📈 新規外部資産の追加' : `📈 外部資産の編集: ${item.name}`;
-			const val = item?.market_value ?? item?.current_value ?? 0;
-			body.innerHTML = `
-				<form id="form-master-asset">
-					<div class="form-group">
-						<label class="form-label" for="m-ast-id">資産ID</label>
-						<input type="text" id="m-ast-id" class="form-control" value="${item?.id || 'sec_' + Date.now().toString(36)}" ${!isNew ? 'readonly' : ''} required>
-					</div>
-					<div class="form-group">
-						<label class="form-label" for="m-ast-name">銘柄名・資産名</label>
-						<input type="text" id="m-ast-name" class="form-control" value="${item?.name || ''}" placeholder="例: 全世界株投信" required>
-					</div>
-					<div class="form-row">
-						<div class="form-group">
-							<label class="form-label" for="m-ast-val">最新評価額 (円)</label>
-							<input type="number" id="m-ast-val" class="form-control" value="${val}" step="1" required>
-						</div>
-					</div>
-					<div style="display: flex; gap: 8px; margin-top: 16px;">
-						<button type="submit" class="btn btn-primary btn-block">保存する</button>
-					</div>
-				</form>
-			`;
-
-			document.getElementById('form-master-asset')?.addEventListener('submit', async (e) => {
-				e.preventDefault();
-				const id = document.getElementById('m-ast-id').value.trim();
-				const name = document.getElementById('m-ast-name').value.trim();
-				const marketVal = Number(document.getElementById('m-ast-val').value) || 0;
-
-				const snapshot = await this.db.getSnapshot() || {};
-				const assets = snapshot.external_assets || [];
-
-				if (isNew) {
-					assets.push({
-						id,
-						name,
-						market_value: marketVal,
-						updated_at: new Date().toISOString()
-					});
-				} else {
-					item.name = name;
-					item.market_value = marketVal;
-					item.updated_at = new Date().toISOString();
-				}
-
-				modal.classList.remove('active');
-				await this.saveExternalAssetsAndSync(assets);
 			});
 		}
 

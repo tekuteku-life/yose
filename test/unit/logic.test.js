@@ -807,6 +807,32 @@ describe('js/logic.js - Unit Tests', () => {
 			assert.equal(res.total_assets, 2515000);
 			// Net assets: 2,515,000 - 30,000 = 2,485,000
 			assert.equal(res.net_assets, 2485000);
+			// Confirmed balances mapping included
+			assert.deepEqual(res.confirmed_balances, balances);
+		});
+
+		it('aggregateMonthlySummaries normalizes historical category objects to numeric amounts', () => {
+			const historicalSummaries = {
+				'2026-01': {
+					income_confirmed: 300000,
+					expense_confirmed: 200000,
+					by_category: {
+						cat_food: { total: 50000, confirmed: 50000 },
+						cat_util: 15000
+					},
+					by_actual_category: {
+						cat_food: { total: 50000 },
+						cat_util: 15000
+					}
+				}
+			};
+
+			const res = aggregateMonthlySummaries([], '2026', historicalSummaries);
+			const jan = res.months['2026-01'];
+			assert.equal(jan.by_category.cat_food, 50000);
+			assert.equal(jan.by_category.cat_util, 15000);
+			assert.equal(jan.by_actual_category.cat_food, 50000);
+			assert.equal(jan.by_actual_category.cat_util, 15000);
 		});
 	});
 

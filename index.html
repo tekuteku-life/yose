@@ -258,15 +258,15 @@
 			<!-- Total Assets & External Assets Summary Cards -->
 			<div class="summary-grid">
 				<div class="stat-card">
-					<div class="stat-label">総資産 (流動 + 外部)</div>
+					<div class="stat-label">総資産 (流動 + 投資)</div>
 					<div id="stat-total-assets" class="stat-value" style="color: var(--primary);">¥0</div>
 				</div>
 				<div class="stat-card">
-					<div class="stat-label">内部流動資産 (預貯金等)</div>
+					<div class="stat-label">流動資産 (預貯金等)</div>
 					<div id="stat-liquid-assets" class="stat-value confirmed">¥0</div>
 				</div>
 				<div class="stat-card">
-					<div class="stat-label">保有外部資産 (株式・投信等)</div>
+					<div class="stat-label">投資資産 (株式・投信等)</div>
 					<div id="stat-external-assets" class="stat-value" style="color: #10b981;">¥0</div>
 				</div>
 				<div class="stat-card">
@@ -396,17 +396,9 @@
 			<!-- Account Balances Breakdown -->
 			<div class="card">
 				<div class="card-title">
-					<span>内部口座別残高</span>
+					<span>口座別残高</span>
 				</div>
 				<div id="account-balances-list" class="tx-list"></div>
-			</div>
-
-			<!-- External Assets Breakdown -->
-			<div class="card">
-				<div class="card-title">
-					<span>保有外部資産一覧</span>
-				</div>
-				<div id="summary-external-assets-list" class="tx-list"></div>
 			</div>
 
 			<!-- Monthly Operations & Month Closing -->
@@ -476,11 +468,6 @@
 						<div id="pin-action-buttons" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
 							<button id="btn-lock-now" class="btn btn-secondary btn-sm" style="display: none;">🔒 今すぐ再ロック</button>
 							<button id="btn-unlock-pin" class="btn btn-success btn-sm" style="display: none;">🔓 PINでロック解除</button>
-						</div>
-						<!-- Dangerous Plaintext Reversion Warning Box -->
-						<div style="margin-top: 12px; padding: 10px 12px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: var(--radius-sm); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-							<div style="font-size: 0.8rem; color: var(--danger);">⚠️ 危険操作: PIN保護を解除すると、秘密鍵が端末内に平文で保存されます。</div>
-							<button id="btn-remove-pin" class="btn btn-danger btn-sm" style="display: none;">⚠️ PIN保護を解除 (平文に戻す)</button>
 						</div>
 					</div>
 

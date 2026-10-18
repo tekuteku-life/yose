@@ -210,10 +210,10 @@ export class ChartController {
 		const fallback = document.getElementById('chart-fallback');
 		if (!canvas) return;
 
-		const labels = ['流動資産 (預貯金等)', '保有外部資産', '負債 (カード等)'];
+		const labels = ['流動資産 (預貯金等)', '投資資産 (証券・投信等)', '負債 (カード等)'];
 		const values = [
 			totalAssetSummary.total_liquid_assets,
-			totalAssetSummary.total_external_assets,
+			totalAssetSummary.total_investment_assets,
 			totalAssetSummary.total_liabilities
 		];
 		const colors = ['#2563eb', '#10b981', '#ef4444'];

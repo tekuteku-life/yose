@@ -219,11 +219,14 @@ export class SummaryController {
 
 		if (statTotal) statTotal.textContent = `¥${totalAssetSummary.total_net_assets.toLocaleString()}`;
 		if (statLiquid) statLiquid.textContent = `¥${totalAssetSummary.total_liquid_assets.toLocaleString()}`;
-		if (statExt) statExt.textContent = `¥${totalAssetSummary.total_external_assets.toLocaleString()}`;
+		if (statExt) statExt.textContent = `¥${totalAssetSummary.total_investment_assets.toLocaleString()}`;
 		if (statLiab) statLiab.textContent = `¥${totalAssetSummary.total_liabilities.toLocaleString()}`;
 
-		// Render External Assets breakdown list
-		this.renderExternalAssetsBreakdown(snapshot?.external_assets || []);
+		// Render External Assets breakdown list if element exists
+		const extList = document.getElementById('summary-external-assets-list');
+		if (extList) {
+			this.renderExternalAssetsBreakdown(snapshot?.external_assets || []);
+		}
 
 		// Render Internal Account balances list
 		await this.renderAccountBalances(summary);
@@ -801,12 +804,16 @@ export class SummaryController {
 		this.chartController.renderChartForBudgetProgress(trajectory, currentYear, expenseBudget, savingsTarget);
 	}
 
-	renderAssetsAnalytics(totalAssetSummary, config, externalAssets) {
+	renderAssetsAnalytics(totalAssetSummary, config, externalAssets = []) {
 		const tableContainer = document.getElementById('breakdown-table-container');
 		if (!tableContainer) return;
 
 		const totalNet = totalAssetSummary.total_net_assets || 1;
 		const accounts = config?.accounts || [];
+		const investmentTypes = new Set(['investment', 'asset', 'stock', 'mutual_fund', 'crypto']);
+
+		const liquidAccounts = accounts.filter(a => !a.is_archived && a.type !== 'credit_card' && !investmentTypes.has(a.type));
+		const investmentAccounts = accounts.filter(a => !a.is_archived && investmentTypes.has(a.type));
 
 		tableContainer.innerHTML = `
 			<table class="summary-table">
@@ -820,29 +827,41 @@ export class SummaryController {
 				</thead>
 				<tbody>
 					<tr style="background: #f8fafc; font-weight: 700;">
-						<td colspan="4">内部流動資産 (預貯金・現金等)</td>
+						<td colspan="4">流動資産 (預貯金・現金等)</td>
 					</tr>
-					${accounts.filter(a => !a.is_archived && a.type !== 'credit_card').map(a => {
-						const bal = totalAssetSummary.by_type[a.type] !== undefined ? (totalAssetSummary.confirmed_balances?.[a.id] || 0) : 0;
+					${liquidAccounts.map(a => {
+						const bal = totalAssetSummary.confirmed_balances?.[a.id] || 0;
 						const pct = Math.round((Math.max(0, bal) / Math.max(1, totalNet)) * 1000) / 10;
 						return `
 							<tr>
-								<td>${a.name}</td>
-								<td>${a.type}</td>
+								<td>${escapeHtml(a.name)}</td>
+								<td>${escapeHtml(a.type)}</td>
 								<td style="font-weight: 600; color: var(--primary);">¥${bal.toLocaleString()}</td>
 								<td>${pct}%</td>
 							</tr>
 						`;
-					}).join('')}
+					}).join('') || '<tr><td colspan="4" style="color:var(--text-muted); text-align:center;">登録なし</td></tr>'}
 					<tr style="background: #f8fafc; font-weight: 700;">
-						<td colspan="4">保有外部資産 (株式・投資信託等)</td>
+						<td colspan="4">投資資産 (証券・投信・NISA等)</td>
 					</tr>
+					${investmentAccounts.map(a => {
+						const bal = totalAssetSummary.confirmed_balances?.[a.id] || 0;
+						const pct = Math.round((Math.max(0, bal) / Math.max(1, totalNet)) * 1000) / 10;
+						return `
+							<tr>
+								<td>${escapeHtml(a.name)}</td>
+								<td>${escapeHtml(a.type)}</td>
+								<td style="font-weight: 600; color: #10b981;">¥${bal.toLocaleString()}</td>
+								<td>${pct}%</td>
+							</tr>
+						`;
+					}).join('')}
 					${externalAssets.map(ast => {
 						const val = Number(ast.market_value ?? ast.current_value ?? ast.amount ?? 0);
 						const pct = Math.round((val / Math.max(1, totalNet)) * 1000) / 10;
 						return `
 							<tr>
-								<td>${ast.name}</td>
+								<td>${escapeHtml(ast.name)}</td>
 								<td>外部資産</td>
 								<td style="font-weight: 600; color: #10b981;">¥${val.toLocaleString()}</td>
 								<td>${pct}%</td>
@@ -866,9 +885,20 @@ export class SummaryController {
 		this.chartController.renderChartForAssets(totalAssetSummary);
 	}
 
-	renderCategoryBreakdownList(categoriesData) {
+	async renderCategoryBreakdownList(categoriesData) {
 		const list = document.getElementById('category-breakdown-list');
 		if (!list) return;
+
+		const config = await this.db.getMasterConfig();
+		const catMap = new Map();
+		for (const c of config?.categories || []) {
+			catMap.set(c.id, c.name);
+			if (c.subcategories) {
+				for (const s of c.subcategories) {
+					catMap.set(s.id, s.name);
+				}
+			}
+		}
 
 		const entries = Object.entries(categoriesData || {});
 		if (entries.length === 0) {
@@ -883,10 +913,11 @@ export class SummaryController {
 			.map(([catId, data]) => {
 				const amt = data.total || 0;
 				const pct = totalExpense > 0 ? Math.round((amt / totalExpense) * 1000) / 10 : 0;
+				const catName = catMap.get(catId) || catId;
 				return `
 					<div class="tx-item">
 						<div class="tx-info">
-							<span class="tx-title">${catId}</span>
+							<span class="tx-title">${escapeHtml(catName)}</span>
 							<span class="tx-meta">構成比: ${pct}%</span>
 						</div>
 						<div style="text-align: right; font-weight: 700; color: var(--primary);">
@@ -909,8 +940,8 @@ export class SummaryController {
 			return `
 				<div class="tx-item">
 					<div class="tx-info">
-						<span class="tx-title">${acc.name}</span>
-						<span class="tx-meta">${acc.type}</span>
+						<span class="tx-title">${escapeHtml(acc.name)}</span>
+						<span class="tx-meta">${escapeHtml(acc.type)}</span>
 					</div>
 					<div style="text-align: right;">
 						<div style="font-weight: 700; color: var(--primary);">¥${conf.toLocaleString()}</div>
