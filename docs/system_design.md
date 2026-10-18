@@ -483,6 +483,89 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * Vanilla ES Modules（ノーバンドラー）アーキテクチャを維持するため、新設される `js/ui/*.js` の全10ファイルを `sw.js` の `ASSETS_TO_CACHE` 配列へ厳格に追加する。
    * これにより、オフライン環境下でも全UIモジュールが確実にCacheStorageから即座に提供され、画面停止やロード漏れを根絶する。
 
+### 4.7 コアエンジン・モジュラーアーキテクチャ（`js/db/` ストレージ層 & `js/logic/` 計算エンジン層のクラス・ファイル分割設計）
+
+1. **背景と課題（肥大化した `js/db.js` および `js/logic.js` の責務分離）**
+   * 機能拡張に伴い、`js/db.js`（約930行）には初期マスタ定義、インメモリフォールバックDB、IndexedDB低レイヤI/O、AES-GCM-256暗号化ラッパー、ドメインリポジトリ操作、およびバックアップJSONの非破壊ORマージ処理が混在していた。
+   * 同様に、`js/logic.js`（約1,500行）には日付・祝日ユーティリティ、消費税計算、複雑な取引生成ファクトリ（定期・前払分割・立替・ポイント連動）、残高・多粒度集計エンジン（日次・月次・年次・純資産）、および年間予算・貯蓄進捗エンジンが単一ファイルに集約されていた。
+   * これらを単一責任の原則（SRP）および高凝集・疎結合の原則に基づき、`js/db/` および `js/logic/` 配下の専門モジュール・クラス群へと分割する。
+
+2. **ストレージ・リポジトリ層の分割構成 (`js/db/` ディレクトリ配下)**
+   * **初期スキーマ・定数定義 (`js/db/defaults.js`)**:
+     * `DB_NAME`, `DB_VERSION`, `FORBIDDEN_PROTOTYPE_KEYS`, `DEFAULT_MASTER_CONFIG`, `DEFAULT_SUMMARY_SNAPSHOT` を定義する純粋定数モジュール（外部依存ゼロ）。
+   * **低レイヤストレージ＆暗号化エンジン (`js/db/storage_engine.js`) - `MemoryDatabase` & `StorageEngine`**:
+     * `MemoryDatabase`: IndexedDB非対応環境（Node.js単体テスト等）向けのインメモリストア実装。
+     * `StorageEngine`: IndexedDBのオープン・マイグレーション（`onupgradeneeded`）、初期データの安全なシード処理、汎用ストアI/O（`getRaw`, `putRaw`, `deleteRaw`, `getAllRaw`）、およびDMKを用いた透過的AES-GCM-256暗号化／復号ラッパー（`encryptRecord`, `decryptRecord`）を提供する基底エンジンクラス。
+   * **非破壊ORマージ＆サニタイズエンジン (`js/db/backup_merger.js`) - `BackupMerger`**:
+     * バックアップJSONインポート時のスキーマ検証、Prototype Pollution防御（`isSafeKey`）、年間予算エントリの正規化（`normalizeBudgetEntry`）、マスタ設定の非破壊和集合マージ（`mergeMasterConfig`）、およびスナップショットの非破壊マージ（`mergeSummarySnapshot`）を専門に担うドメインクラス。
+   * **ドメインリポジトリ (`js/db/yose_db.js`) - `YoseDB extends StorageEngine`**:
+     * `StorageEngine` を継承し、`BackupMerger` と協調してアプリケーションへ統一的なドメインAPI（`getMasterConfig`, `saveMasterConfig`, `getSnapshot`, `saveSnapshot`, `getTransaction`, `putTransaction`, `putTransactions`, `deleteTransaction`, `getTransactions`, `getUnsyncedTransactions`, `markTransactionsSynced`, `getSecurityKey`, `saveSecurityKey`, `deleteSecurityKey`, `getSetting`, `setSetting`, `getAnnualBudget`, `saveAnnualBudget`, `exportFullData`, `importFullData`）を提供するリポジトリクラス。
+   * **エントリーポイント Facade (`js/db.js`)**:
+     * `js/db/*.js` の全公開クラス・定数を再エクスポート（Re-export）し、既存コードおよびテストスイートとの100%後方互換性を保証する。
+
+3. **純粋計算・ビジネスロジック層の分割構成 (`js/logic/` ディレクトリ配下)**
+   * **日付・祝日・共通ユーティリティ (`js/logic/date_utils.js`)**:
+     * 日付フォーマット・パース（`formatDate`, `parseDate`, `addMonthsToMonthStr`, `getLastDayOfMonth`）、営業日・祝日判定と補正（`isWeekend`, `isHoliday`, `isBusinessDay`, `adjustDateForHoliday`）、内閣府祝日プリセット＆パーサー（`JAPANESE_HOLIDAYS_PRESET`, `parseHolidayTextOrCsv`, `groupHolidaysByYear`）、ID生成（`generateUUID`）、XSS防止エスケープ（`escapeHtml`）。
+   * **税計算＆取引生成ファクトリ (`js/logic/transaction_factory.js`)**:
+     * 消費税計算（`calculateTax`）、定期支出予定生成（`generateRecurringTransactions`）、前払費用月次分割償却生成（`createPrepaidAmortizationTransactions`）、立替払い・立替回収生成（`createAdvancePaymentTransactions`, `createAdvanceRepaymentTransaction`）、ポイント併用取引生成（`createPointPaymentTransactions`）。
+   * **残高計算＆多粒度集計エンジン (`js/logic/aggregator.js`)**:
+     * 口座確定・予定残高および当月2軸集計（`calculateBalancesAndSummaries`）、日別集計（`aggregateDailySummaries`）、月別集計（`aggregateMonthlySummaries`）、年別集計（`aggregateYearlySummaries`）、総資産・純資産・負債集計（`calculateTotalAssetSummary`）。
+   * **年間予算・貯蓄目標＆推移エンジン (`js/logic/budget_engine.js`)**:
+     * 段階的丸め計算（`roundTieredAmount`）、前年実績ベースの予算初期値算出（`calculateAnnualBudgetDefaults`）、年間予算消化率・貯蓄達成率・標準ペース判定・費目別進捗計算（`calculateAnnualBudgetProgress`）、12ヶ月累積推移データ生成（`generateAnnualTrajectory`）。
+   * **エントリーポイント Facade (`js/logic.js`)**:
+     * `js/logic/*.js` の全関数・定数を再エクスポートし、既存コードおよびテストスイートとの100%後方互換性を保証する。
+
+4. **コアエンジンの有向非巡回グラフ (DAG) 依存構造**
+
+```mermaid
+flowchart TD
+    subgraph FacadeLayer ["Facade Layer (100% Backward Compatible)"]
+        DB_FACADE["js/db.js (Facade)"]
+        LOGIC_FACADE["js/logic.js (Facade)"]
+    end
+
+    subgraph DBModules ["Storage & Repository Modules (js/db/*.js)"]
+        YOSE_DB["js/db/yose_db.js (YoseDB)"]
+        STORAGE["js/db/storage_engine.js (StorageEngine & MemoryDatabase)"]
+        MERGER["js/db/backup_merger.js (BackupMerger)"]
+        DEFAULTS["js/db/defaults.js (Schema Constants)"]
+    end
+
+    subgraph LogicModules ["Pure Calculation Modules (js/logic/*.js)"]
+        TX_FACTORY["js/logic/transaction_factory.js"]
+        AGGREGATOR["js/logic/aggregator.js"]
+        BUDGET["js/logic/budget_engine.js"]
+        DATE_UTILS["js/logic/date_utils.js"]
+    end
+
+    subgraph CryptoModule ["Cryptography Layer"]
+        CRYPTO["js/crypto.js (AES-GCM-256 & Ed25519)"]
+    end
+
+    DB_FACADE --> YOSE_DB
+    DB_FACADE --> STORAGE
+    DB_FACADE --> MERGER
+    DB_FACADE --> DEFAULTS
+
+    YOSE_DB --> STORAGE
+    YOSE_DB --> MERGER
+    YOSE_DB --> DEFAULTS
+    STORAGE --> DEFAULTS
+    STORAGE --> CRYPTO
+    MERGER --> DEFAULTS
+
+    LOGIC_FACADE --> DATE_UTILS
+    LOGIC_FACADE --> TX_FACTORY
+    LOGIC_FACADE --> AGGREGATOR
+    LOGIC_FACADE --> BUDGET
+
+    TX_FACTORY --> DATE_UTILS
+    AGGREGATOR --> DATE_UTILS
+```
+
+5. **PWA Service Worker (`sw.js`) キャッシュ整合性更新**
+   * `CACHE_NAME` を `'yose-cache-v1.3.0'` に更新し、`js/db/*.js`（4ファイル）および `js/logic/*.js`（4ファイル）の計8モジュールを `ASSETS_TO_CACHE` に追加することで、オフライン起動時のモジュール解決を100%保証する。
+
 ---
 
 ## 5. JSONデータスキーマ定義（Version 2）
@@ -1247,6 +1330,7 @@ flowchart TD
 | **4.4** | 決定論的User IDによるPasskey上書き・更新（1Password等重複防止） | `js/crypto.js`, `js/app.js`, `index.html` | - | `security_keys` (`webauthn_vault`) | `test/unit/crypto.test.js` |
 | **4.5** | 設定画面におけるセキュリティ・鍵管理操作の明確なグルーピングと視覚的分離 | `js/app.js`, `index.html` | - | `security_keys` | `test/unit/crypto.test.js` |
 | **4.6** | モジュラーUIアーキテクチャ（AppCoordinator調停者 & 9コンポーネントコントローラー分割） | `js/app.js`, `js/ui/*.js`, `sw.js` | - | - | `test/system/e2e_scenario.test.js`, `npm test` |
+| **4.7** | コアエンジン・モジュラーアーキテクチャ（`js/db/` ストレージ層 & `js/logic/` 計算エンジン分割） | `js/db.js`, `js/db/*.js`, `js/logic.js`, `js/logic/*.js`, `sw.js` | - | - | `test/unit/db.test.js`, `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
 
 ### 8.2 設計整合性および仕様乖離監査結果
 1. **仕様乖離の有無**: 要件定義（第1章〜第5章）と設計図・開発注意点（第6章〜第7章）の間で用語、データスキーマ、フローの乖離がないことを確認済み。

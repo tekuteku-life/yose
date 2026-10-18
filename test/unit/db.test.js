@@ -592,4 +592,81 @@ describe('js/db.js - Unit Tests', () => {
 			);
 		});
 	});
+
+	describe('Modular Sub-Modules & BackupMerger Defensive Edge Cases (Section 4.7)', () => {
+		it('verifies direct sub-module exports from js/db/* and js/logic/* match facade exports', async () => {
+			const defaultsMod = await import('../../js/db/defaults.js');
+			const storageMod = await import('../../js/db/storage_engine.js');
+			const mergerMod = await import('../../js/db/backup_merger.js');
+			const yoseDbMod = await import('../../js/db/yose_db.js');
+
+			const dateMod = await import('../../js/logic/date_utils.js');
+			const factoryMod = await import('../../js/logic/transaction_factory.js');
+			const aggMod = await import('../../js/logic/aggregator.js');
+			const budgetMod = await import('../../js/logic/budget_engine.js');
+
+			assert.equal(defaultsMod.DB_NAME, 'yose_kakeibo_db');
+			assert.equal(typeof storageMod.StorageEngine, 'function');
+			assert.equal(typeof mergerMod.BackupMerger.mergeMasterConfig, 'function');
+			assert.equal(yoseDbMod.YoseDB, YoseDB);
+
+			assert.equal(typeof dateMod.formatDate, 'function');
+			assert.equal(typeof factoryMod.calculateTax, 'function');
+			assert.equal(typeof aggMod.calculateBalancesAndSummaries, 'function');
+			assert.equal(typeof budgetMod.calculateAnnualBudgetProgress, 'function');
+		});
+
+		it('handles missing subcategories, missing annual_budgets, and missing monthly_summaries during merge and saveAnnualBudget', async () => {
+			const { BackupMerger } = await import('../../js/db/backup_merger.js');
+
+			// 1. mergeMasterConfig when target category lacks subcategories array and localConfig lacks annual_budgets
+			const sparseLocalConfig = {
+				categories: [{ id: 'cat_food', name: 'Food' }] // no subcategories property, no annual_budgets property
+			};
+			const importedConfig = {
+				categories: [{
+					id: 'cat_food',
+					name: 'Food',
+					subcategories: [{ id: 'sub_lunch', name: 'Lunch' }]
+				}],
+				annual_budgets: {
+					'2026': { expense_budget: 1200000, category_budgets: { cat_food: 300000 } }
+				}
+			};
+			const stats = {
+				addedAccounts: 0,
+				addedCategories: 0,
+				addedSubcategories: 0,
+				addedRecurringRules: 0,
+				addedHolidays: 0,
+				addedBudgets: 0
+			};
+			BackupMerger.mergeMasterConfig(sparseLocalConfig, importedConfig, stats);
+			assert.equal(sparseLocalConfig.categories[0].subcategories.length, 1);
+			assert.equal(sparseLocalConfig.annual_budgets['2026'].expense_budget, 1200000);
+
+			// Also test merging category_budgets when existing year entry lacks category_budgets object
+			sparseLocalConfig.annual_budgets['2026'].category_budgets = null;
+			BackupMerger.mergeMasterConfig(sparseLocalConfig, {
+				annual_budgets: {
+					'2026': { expense_budget: 1500000, category_budgets: { cat_food: 400000 } }
+				}
+			}, stats);
+			assert.equal(sparseLocalConfig.annual_budgets['2026'].category_budgets.cat_food, 400000);
+
+			// 2. mergeSummarySnapshot when localSnapshot lacks monthly_summaries object
+			const sparseSnap = { schema_version: 2 };
+			BackupMerger.mergeSummarySnapshot(sparseSnap, {
+				last_closed_month: '2026-09',
+				monthly_summaries: { '2026-09': { income_confirmed: 300000 } }
+			});
+			assert.equal(sparseSnap.monthly_summaries['2026-09'].income_confirmed, 300000);
+			assert.equal(sparseSnap.last_closed_month, '2026-09');
+
+			// 3. YoseDB.saveAnnualBudget when existing master_config lacks annual_budgets property
+			await db.saveMasterConfig({ schema_version: 2, accounts: [], categories: [] });
+			const savedBudget = await db.saveAnnualBudget('2027', { expense_budget: 2000000 });
+			assert.equal(savedBudget.expense_budget, 2000000);
+		});
+	});
 });
