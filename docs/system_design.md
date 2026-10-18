@@ -1398,12 +1398,18 @@ flowchart TD
 
 ### 7.7 PWA・Service Workerのキャッシュ設計とネットワーク分離・強制更新機構
 * **キャッシュ戦略**: Service Worker（`sw.js`）は、UI表示に必要な静的アセット（HTML, CSS, JS, アイコン）のみをキャッシュします（Cache-First戦略）。
+* **スキーム制限と拡張機能リクエストのバイパス**:
+  * Cache Storage APIは `http:` および `https:` スキームのみをサポートします。
+  * ブラウザ拡張機能（1Password, Bitwarden等の `chrome-extension://`）や `blob:`, `data:` スキームのリクエストをService Workerが傍受して `cache.put` を実行すると `TypeError: Request scheme 'chrome-extension' is unsupported` が発生するため、`sw.js` の `fetch` リスナー冒頭で `http://` または `https://` で始まらないリクエストは即座に早期リターン（バイパス）させ、ブラウザに直接処理させます。
+  * さらに `cache.put` 呼び出しには `.catch()` ハンドラを付与し、キャッシュ容量逼迫等の例外時にもネットワーク応答の返却を阻害しません。
 * **API通信の分離**: GAS Web AppへのAPIリクエスト（`script.google.com`）はService Workerのキャッシュ対象から完全に除外し、常にネットワークへ直接送信（Network-Only）させます。
 * **HTTPキャッシュバイパス**: Service Worker登録時に `{ updateViaCache: 'none' }` を指定し、ブラウザによる `sw.js` のHTTPキャッシュを完全抑止します。
 * **バージョン検知と即時パージ**:
   * オリジン直下の `version.json` は Service Worker のキャッシュ対象から除外し、常に `cache: 'no-store'` かつタイムスタンプクエリ（`?_t=${Date.now()}`）でフェッチします。
   * `sw.js` はクライアントからの `SKIP_WAITING` および `CLEAR_ALL_CACHES` メッセージを受信した際、全CacheStorageインスタンスを破棄して最新版のダウンロードと即時アクティベーションを保証します。
   * クライアント側（`AppController`）は起動時自動チェックおよび設定画面の手動更新ボタンからキャッシュクリアと強制リロード（Hard Reload）を実行します。
+* **フォームセマンティクスとパスワードフィールド標準準拠**:
+  * ブラウザおよびパスワードマネージャーの「Password field is not contained in a form」警告を抑止しアクセシビリティを確保するため、アプリ内の全4箇所の `<input type="password">`（初回セットアップ、ロック解除、設定画面PIN保護、PIN解除モーダル）は、すべてセマンティックな `<form onsubmit="return false;">` 要素で包含し、適切な `autocomplete` 属性（`current-password` / `new-password`）を付与します。
 
 ### 7.8 浮動小数点誤差の完全排除と整数計算（日本円・税計算・端数按分）
 * **金額の整数原則**: 通貨金額（`amount`, `initial_balance` 等）はすべて日本円の整数値（`Integer`）として保持・計算し、JavaScriptの浮動小数点演算誤差（例: `0.1 + 0.2 !== 0.3`）を完全に排除します。

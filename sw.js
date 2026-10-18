@@ -70,6 +70,11 @@ self.addEventListener('fetch', (event) => {
 		return;
 	}
 
+	// Ignore non-http/https schemes (e.g. chrome-extension://, moz-extension://, blob:, data:)
+	if (!event.request.url.startsWith('http://') && !event.request.url.startsWith('https://')) {
+		return;
+	}
+
 	const url = new URL(event.request.url);
 
 	// Network-Only: version.json (must always be live) and GAS API endpoints
@@ -88,8 +93,8 @@ self.addEventListener('fetch', (event) => {
 				}
 				const responseToCache = networkResponse.clone();
 				caches.open(CACHE_NAME).then((cache) => {
-					cache.put(event.request, responseToCache);
-				});
+					cache.put(event.request, responseToCache).catch(() => {});
+				}).catch(() => {});
 				return networkResponse;
 			}).catch(() => {
 				// Fallback for HTML documents
