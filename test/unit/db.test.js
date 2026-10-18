@@ -669,4 +669,210 @@ describe('js/db.js - Unit Tests', () => {
 			assert.equal(savedBudget.expense_budget, 2000000);
 		});
 	});
+
+	describe('Various JSON Export and Auto-Detect Import (Requirement 3.26)', () => {
+		it('exports individual datasets with standard metadata and pretty print format', async () => {
+			await db.init();
+			await db.putTransaction({
+				id: 'tx_export_test_1',
+				target_month: '2026-10',
+				amount: 5000,
+				is_deleted: false
+			});
+			await db.saveAnnualBudget('2026', {
+				expense_budget: 2500000,
+				savings_target_amount: 800000,
+				savings_target_rate: 24,
+				category_budgets: { cat_food: 400000 }
+			});
+
+			// 1. Transactions only export
+			const txExport = await db.exportTransactionsData();
+			assert.equal(txExport.schema_version, 2);
+			assert.equal(txExport.export_type, 'transactions');
+			assert.ok(txExport.exported_at);
+			assert.ok(Array.isArray(txExport.transactions));
+			assert.ok(txExport.transactions.some(t => t.id === 'tx_export_test_1'));
+			assert.equal(txExport.master_config, undefined);
+			assert.equal(txExport.summary_snapshot, undefined);
+
+			// 2. Master config only export
+			const masterExport = await db.exportMasterConfigData();
+			assert.equal(masterExport.schema_version, 2);
+			assert.equal(masterExport.export_type, 'master_config');
+			assert.ok(masterExport.exported_at);
+			assert.ok(masterExport.master_config);
+			assert.ok(Array.isArray(masterExport.master_config.accounts));
+			assert.equal(masterExport.transactions, undefined);
+
+			// 3. Annual budgets only export
+			const budgetExport = await db.exportAnnualBudgetsData();
+			assert.equal(budgetExport.schema_version, 2);
+			assert.equal(budgetExport.export_type, 'annual_budgets');
+			assert.ok(budgetExport.exported_at);
+			assert.ok(budgetExport.annual_budgets);
+			assert.equal(budgetExport.annual_budgets['2026'].expense_budget, 2500000);
+			assert.equal(budgetExport.transactions, undefined);
+			assert.equal(budgetExport.master_config, undefined);
+
+			// 4. Summary snapshot only export
+			const snapExport = await db.exportSummarySnapshotData();
+			assert.equal(snapExport.schema_version, 2);
+			assert.equal(snapExport.export_type, 'summary_snapshot');
+			assert.ok(snapExport.exported_at);
+			assert.ok(snapExport.summary_snapshot);
+			assert.equal(snapExport.transactions, undefined);
+
+			// 5. Full backup export
+			const fullExport = await db.exportFullData();
+			assert.equal(fullExport.schema_version, 2);
+			assert.equal(fullExport.export_type, 'full_backup');
+			assert.ok(fullExport.master_config);
+			assert.ok(fullExport.summary_snapshot);
+			assert.ok(Array.isArray(fullExport.transactions));
+		});
+
+		it('auto-detects and imports individual transaction JSON, master config, budgets, and snapshots', async () => {
+			await db.init();
+
+			// 1. Transactions only import
+			const txPayload = {
+				schema_version: 2,
+				export_type: 'transactions',
+				exported_at: new Date().toISOString(),
+				transactions: [
+					{ id: 'tx_auto_1', target_month: '2026-10', amount: 1200, is_deleted: false, updated_at: '2026-10-18T10:00:00Z' }
+				]
+			};
+			const resTx = await db.importFullData(txPayload);
+			assert.equal(resTx.success, true);
+			assert.equal(resTx.detectedType, 'transactions');
+			assert.equal(resTx.stats.addedTransactions, 1);
+			const tx1 = await db.getTransaction('tx_auto_1');
+			assert.equal(tx1.amount, 1200);
+
+			// 2. Raw array transactions import (auto-wrap)
+			const rawTxs = [
+				{ id: 'tx_raw_auto_2', target_month: '2026-10', amount: 3400, is_deleted: false, updated_at: '2026-10-18T11:00:00Z' }
+			];
+			const resRaw = await db.importFullData(rawTxs);
+			assert.equal(resRaw.success, true);
+			assert.equal(resRaw.detectedType, 'transactions');
+			assert.equal(resRaw.stats.addedTransactions, 1);
+			const tx2 = await db.getTransaction('tx_raw_auto_2');
+			assert.equal(tx2.amount, 3400);
+
+			// 3. Master config only import
+			const masterPayload = {
+				schema_version: 2,
+				export_type: 'master_config',
+				master_config: {
+					accounts: [{ id: 'acc_auto_bank', name: '自動判別銀行', is_archived: false }],
+					categories: [{ id: 'cat_auto_special', name: '特別費', subcategories: [] }]
+				}
+			};
+			const resMaster = await db.importFullData(masterPayload);
+			assert.equal(resMaster.success, true);
+			assert.equal(resMaster.detectedType, 'master_config');
+			assert.equal(resMaster.stats.addedAccounts, 1);
+			assert.equal(resMaster.stats.addedCategories, 1);
+			const cfg = await db.getMasterConfig();
+			assert.ok(cfg.accounts.some(a => a.id === 'acc_auto_bank'));
+
+			// 4. Annual budgets only import
+			const budgetPayload = {
+				schema_version: 2,
+				export_type: 'annual_budgets',
+				annual_budgets: {
+					'2029': {
+						expense_budget: 4200000,
+						savings_target_amount: 1500000,
+						savings_target_rate: 26,
+						category_budgets: { cat_auto_special: 300000 }
+					}
+				}
+			};
+			const resBudget = await db.importFullData(budgetPayload);
+			assert.equal(resBudget.success, true);
+			assert.equal(resBudget.detectedType, 'annual_budgets');
+			assert.equal(resBudget.stats.addedBudgets, 1);
+			const b2029 = await db.getAnnualBudget('2029');
+			assert.equal(b2029.expense_budget, 4200000);
+			assert.equal(b2029.category_budgets.cat_auto_special, 300000);
+
+			// 5. Summary snapshot only import
+			const snapPayload = {
+				schema_version: 2,
+				export_type: 'summary_snapshot',
+				summary_snapshot: {
+					last_closed_month: '2026-11',
+					monthly_summaries: {
+						'2026-11': { total_expense: 150000, total_income: 250000 }
+					}
+				}
+			};
+			const resSnap = await db.importFullData(snapPayload);
+			assert.equal(resSnap.success, true);
+			assert.equal(resSnap.detectedType, 'summary_snapshot');
+			const snap = await db.getSnapshot();
+			assert.equal(snap.last_closed_month, '2026-11');
+			assert.equal(snap.monthly_summaries['2026-11'].total_expense, 150000);
+
+			// 6. Full backup import detection
+			const fullPayload = {
+				schema_version: 2,
+				master_config: { accounts: [] },
+				summary_snapshot: {},
+				transactions: []
+			};
+			const resFull = await db.importFullData(fullPayload);
+			assert.equal(resFull.success, true);
+			assert.equal(resFull.detectedType, 'full_backup');
+		});
+
+		it('handles defensive edge cases and security protections during import', async () => {
+			await db.init();
+
+			// Prototype pollution rejection in standalone budgets
+			const maliciousBudget = {
+				schema_version: 2,
+				export_type: 'annual_budgets',
+				annual_budgets: {
+					'__proto__': { expense_budget: 999999 },
+					'constructor': { expense_budget: 999999 },
+					'2030': {
+						expense_budget: 1000000,
+						category_budgets: {
+							'__proto__': 888888,
+							'cat_valid': 200000
+						}
+					}
+				}
+			};
+			const resSec = await db.importFullData(maliciousBudget);
+			assert.equal(resSec.success, true);
+			assert.equal(Object.prototype.hasOwnProperty.call(Object.prototype, 'expense_budget'), false);
+			const b2030 = await db.getAnnualBudget('2030');
+			assert.equal(b2030.expense_budget, 1000000);
+			assert.equal(b2030.category_budgets.cat_valid, 200000);
+			assert.equal(Object.prototype.hasOwnProperty.call(b2030.category_budgets, '__proto__'), false);
+
+			// Invalid schema version and malformed payload rejection
+			await assert.rejects(async () => {
+				await db.importFullData({ schema_version: 3 });
+			}, /Invalid data schema version/);
+
+			await assert.rejects(async () => {
+				await db.importFullData('invalid_string');
+			}, /Invalid data schema or payload/);
+
+			await assert.rejects(async () => {
+				await db.importFullData(12345);
+			}, /Invalid data schema or payload/);
+
+			await assert.rejects(async () => {
+				await db.importFullData(null);
+			}, /Invalid data schema version/);
+		});
+	});
 });
