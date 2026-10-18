@@ -473,3 +473,157 @@ export function calculateTotalAssetSummary(accountBalances = {}, accountsMaster 
 	};
 }
 
+/**
+ * Calculate Tag Summary and breakdown (Requirement 3.18)
+ * @param {Array} transactions - transaction records
+ * @param {object} [options]
+ * @param {boolean} [options.includePlanned=true] - include planned items
+ * @param {string} [options.searchQuery] - optional search filter
+ * @param {string} [options.targetMonth] - optional target_month filter
+ * @returns {{ tags: object, total_expense: number, total_income: number, total_count: number }}
+ */
+export function calculateTagSummary(transactions = [], options = {}) {
+	const includePlanned = options.includePlanned !== false;
+	const searchQuery = (options.searchQuery || options.filterTag || '').trim().toLowerCase();
+	const targetMonth = options.targetMonth || null;
+
+	const activeTxs = transactions.filter(t => {
+		if (t.is_deleted) return false;
+		if (!includePlanned && t.status === 'planned') return false;
+		if (targetMonth && t.target_month !== targetMonth) return false;
+		return true;
+	});
+
+	const tagsMap = {};
+	let totalExpense = 0;
+	let totalIncome = 0;
+	let totalCount = 0;
+
+	for (const tx of activeTxs) {
+		const amt = Number(tx.amount) || 0;
+		if (tx.type === 'expense') totalExpense += amt;
+		if (tx.type === 'income') totalIncome += amt;
+		totalCount++;
+
+		const rawTags = Array.isArray(tx.tags) && tx.tags.length > 0 ? tx.tags : ['(未設定)'];
+		for (const tag of rawTags) {
+			const cleanTag = String(tag || '').trim();
+			if (!cleanTag) continue;
+
+			if (!tagsMap[cleanTag]) {
+				tagsMap[cleanTag] = {
+					name: cleanTag,
+					tag: cleanTag,
+					expense: 0,
+					expense_total: 0,
+					income: 0,
+					income_total: 0,
+					net: 0,
+					net_total: 0,
+					count: 0
+				};
+			}
+
+			if (tx.type === 'expense') {
+				tagsMap[cleanTag].expense += amt;
+				tagsMap[cleanTag].expense_total += amt;
+				tagsMap[cleanTag].net -= amt;
+				tagsMap[cleanTag].net_total -= amt;
+			} else if (tx.type === 'income') {
+				tagsMap[cleanTag].income += amt;
+				tagsMap[cleanTag].income_total += amt;
+				tagsMap[cleanTag].net += amt;
+				tagsMap[cleanTag].net_total += amt;
+			}
+			tagsMap[cleanTag].count += 1;
+		}
+	}
+
+	// Filter by search query if present
+	let filteredTags = tagsMap;
+	if (searchQuery) {
+		filteredTags = {};
+		for (const [tag, data] of Object.entries(tagsMap)) {
+			if (tag.toLowerCase().includes(searchQuery)) {
+				filteredTags[tag] = data;
+			}
+		}
+	}
+
+	const tagList = Object.values(filteredTags).sort((a, b) => b.expense - a.expense);
+
+	return {
+		tags: filteredTags,
+		tagList,
+		total_expense: totalExpense,
+		total_income: totalIncome,
+		total_count: totalCount
+	};
+}
+
+/**
+ * Calculate Accrual vs Actual Cross-Aggregation Matrix (Requirement 3.23)
+ * @param {Array} transactions - transaction records
+ * @param {string|Array|null} [targetMonthOrCategories=null] - filter by YYYY-MM string or categories master array
+ * @param {boolean} [includePlanned=true] - include planned items
+ * @returns {{ matrix: object, rowTotals: object, accrualTotals: object, colTotals: object, actualTotals: object, grandTotal: number, categories: any[], actualCategories: string[] }}
+ */
+export function calculateCrossAccrualActualSummary(transactions = [], targetMonthOrCategories = null, includePlanned = true) {
+	let targetMonth = null;
+	let categoriesList = null;
+
+	if (Array.isArray(targetMonthOrCategories)) {
+		categoriesList = targetMonthOrCategories;
+	} else if (typeof targetMonthOrCategories === 'string') {
+		targetMonth = targetMonthOrCategories;
+	}
+
+	const activeTxs = (transactions || []).filter(t => {
+		if (t.is_deleted) return false;
+		if (t.type !== 'expense') return false; // Focus on expense cross-matrix
+		if (!includePlanned && t.status === 'planned') return false;
+		if (targetMonth && t.target_month !== targetMonth) return false;
+		return true;
+	});
+
+	const matrix = {};
+	const rowTotals = {};
+	const colTotals = {};
+	let grandTotal = 0;
+	const catSet = new Set();
+	const actCatSet = new Set();
+
+	for (const tx of activeTxs) {
+		const amt = Number(tx.amount) || 0;
+		const catId = tx.category_id || 'cat_unclassified';
+		const actCatId = tx.actual_category_id || catId;
+
+		catSet.add(catId);
+		actCatSet.add(actCatId);
+
+		if (!matrix[catId]) {
+			matrix[catId] = { _total: 0 };
+		}
+		matrix[catId][actCatId] = (matrix[catId][actCatId] || 0) + amt;
+		matrix[catId]._total += amt;
+
+		rowTotals[catId] = (rowTotals[catId] || 0) + amt;
+		colTotals[actCatId] = (colTotals[actCatId] || 0) + amt;
+		grandTotal += amt;
+	}
+
+	return {
+		matrix,
+		rowTotals,
+		accrualTotals: rowTotals,
+		colTotals,
+		actualTotals: colTotals,
+		grandTotal,
+		categories: categoriesList && categoriesList.length > 0
+			? categoriesList.filter(c => !c.is_archived && c.type !== 'income')
+			: Array.from(catSet),
+		categoryIds: Array.from(catSet),
+		actualCategories: Array.from(actCatSet)
+	};
+}
+

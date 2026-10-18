@@ -49,26 +49,7 @@ export class TransactionEditController {
 		});
 
 		btnTaxCalc?.addEventListener('click', () => {
-			const currentAmt = document.getElementById('edit-tx-amount')?.value;
-			const baseInput = document.getElementById('tax-base-amount');
-			if (baseInput) baseInput.value = currentAmt || '';
-			const taxModal = document.getElementById('modal-tax');
-			if (taxModal) taxModal.classList.add('active');
-
-			const btnApply = document.getElementById('btn-apply-tax');
-			if (btnApply) {
-				const origOnClick = btnApply.onclick;
-				btnApply.onclick = () => {
-					const base = Number(baseInput?.value) || 0;
-					const rate = Number(document.getElementById('tax-rate-select')?.value) || 0.10;
-					const rounding = document.getElementById('tax-rounding-select')?.value || 'floor';
-					const res = calculateTax(base, rate, rounding);
-					const editAmtInput = document.getElementById('edit-tx-amount');
-					if (editAmtInput) editAmtInput.value = res.amount;
-					taxModal.classList.remove('active');
-					btnApply.onclick = origOnClick;
-				};
-			}
+			this.coordinator.txInputController.openCalculatorFor('edit-tx-amount');
 		});
 
 		form?.addEventListener('submit', async (e) => {
@@ -168,6 +149,32 @@ export class TransactionEditController {
 		const editMemo = document.getElementById('edit-tx-memo')?.value || '';
 		const editTags = (document.getElementById('edit-tx-tags')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
 		const editStatus = document.getElementById('edit-tx-status')?.value || 'confirmed';
+
+		if (tx.group_id) {
+			const shouldCascade = confirm('この取引は分割計上（または連動グループ）の一部です。\n他の関連する明細も連動更新しますか？\n（YES: 費目・メモ・タグ・金額按分を全期間に連動更新 / NO: この明細のみ修正）');
+			if (shouldCascade) {
+				const groupTxs = await this.db.getTransactionsByGroupId(tx.group_id);
+				const amortCount = groupTxs.filter(t => t.id !== tx.group_id).length || 1;
+				const isMainPayment = tx.id === tx.group_id;
+				const newTotal = isMainPayment ? editAmount : (editAmount * amortCount);
+
+				await this.db.updateInstallmentGroup(tx.group_id, {
+					amount: newTotal,
+					total_amount: newTotal,
+					category_id: editType === 'transfer' ? null : editCat,
+					subcategory_id: editType === 'transfer' ? null : editSub,
+					actual_category_id: editType === 'transfer' ? null : editActCat,
+					actual_subcategory_id: editType === 'transfer' ? null : editActSub,
+					memo: editMemo,
+					tags: editTags
+				});
+
+				document.getElementById('modal-edit-tx')?.classList.remove('active');
+				this.syncManager?.syncPendingDiffs().catch(e => console.log('Sync deferred:', e.message));
+				await this.coordinator.refreshAllViews();
+				return;
+			}
+		}
 
 		tx.date = editDate;
 		tx.target_month = editDate.slice(0, 7);

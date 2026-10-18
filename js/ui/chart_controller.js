@@ -7,12 +7,26 @@ export class ChartController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
 		this.chart = null;
+		this.tagChart = null;
+		this.isDark = false;
 	}
 
 	destroy() {
 		if (this.chart) {
 			this.chart.destroy();
 			this.chart = null;
+		}
+		if (this.tagChart) {
+			this.tagChart.destroy();
+			this.tagChart = null;
+		}
+	}
+
+	updateThemeMode(isDark) {
+		this.isDark = isDark;
+		if (typeof window !== 'undefined' && window.Chart) {
+			window.Chart.defaults.color = isDark ? '#94a3b8' : '#64748b';
+			window.Chart.defaults.borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)';
 		}
 	}
 
@@ -238,6 +252,63 @@ export class ChartController {
 			canvas.style.display = 'none';
 			fallback.style.display = 'block';
 			fallback.innerHTML = `<div>総資産: ¥${totalAssetSummary.total_assets.toLocaleString()} (純資産: ¥${totalAssetSummary.total_net_assets.toLocaleString()})</div>`;
+		}
+	}
+
+	renderChartForTags(tagSummary) {
+		const canvas = document.getElementById('tag-chart');
+		if (!canvas) return;
+
+		if (this.tagChart) {
+			this.tagChart.destroy();
+			this.tagChart = null;
+		}
+
+		const tagsList = tagSummary?.tagList || (Array.isArray(tagSummary?.tags) ? tagSummary.tags : Object.values(tagSummary?.tags || {}));
+
+		if (!tagsList || tagsList.length === 0) {
+			canvas.style.display = 'none';
+			return;
+		}
+
+		const topTags = tagsList.filter(t => (t.expense ?? t.expense_total ?? 0) > 0).slice(0, 8);
+		if (topTags.length === 0) {
+			canvas.style.display = 'none';
+			return;
+		}
+		canvas.style.display = 'block';
+
+		const labels = topTags.map(t => t.tag || t.name);
+		const data = topTags.map(t => t.expense ?? t.expense_total ?? 0);
+		const palette = [
+			'#3b82f6', '#10b981', '#f59e0b', '#ef4444',
+			'#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
+		];
+
+		if (typeof window !== 'undefined' && window.Chart) {
+			this.tagChart = new window.Chart(canvas, {
+				type: 'doughnut',
+				data: {
+					labels,
+					datasets: [{
+						data,
+						backgroundColor: palette.slice(0, topTags.length)
+					}]
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					plugins: {
+						legend: {
+							position: 'right',
+							labels: {
+								color: this.isDark ? '#e2e8f0' : '#334155',
+								font: { size: 11 }
+							}
+						}
+					}
+				}
+			});
 		}
 	}
 }

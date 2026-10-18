@@ -408,11 +408,46 @@ export class MasterController {
 							<input type="number" id="m-acc-init-bal" class="form-control" value="${item?.initial_balance ?? 0}" step="1">
 						</div>
 					</div>
+					<div id="m-acc-cc-fields" style="display: ${item?.type === 'credit_card' ? 'block' : 'none'}; border-top: 1px dashed var(--border); margin-top: 12px; padding-top: 12px;">
+						<div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 8px;">💳 クレジットカード引き落とし連携設定</div>
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="m-acc-closing-day">締め日 (1〜28、99=末日)</label>
+								<input type="number" id="m-acc-closing-day" class="form-control" value="${item?.closing_day ?? ''}" placeholder="例: 15 (末日: 99)" min="1" max="99">
+							</div>
+							<div class="form-group">
+								<label class="form-label" for="m-acc-debit-day">引き落とし日 (1〜28、99=末日)</label>
+								<input type="number" id="m-acc-debit-day" class="form-control" value="${item?.debit_day ?? ''}" placeholder="例: 10 (末日: 99)" min="1" max="99">
+							</div>
+						</div>
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="m-acc-debit-offset">引き落とし月</label>
+								<select id="m-acc-debit-offset" class="form-control">
+									<option value="1" ${item?.debit_month_offset === 1 ? 'selected' : ''}>翌月 (標準)</option>
+									<option value="2" ${item?.debit_month_offset === 2 ? 'selected' : ''}>翌々月</option>
+									<option value="0" ${item?.debit_month_offset === 0 ? 'selected' : ''}>当月</option>
+								</select>
+							</div>
+							<div class="form-group">
+								<label class="form-label" for="m-acc-debit-account">引き落とし口座 (銀行)</label>
+								<select id="m-acc-debit-account" class="form-control">
+									<option value="">設定なし (自動振替オフ)</option>
+									${(config.accounts || []).filter(a => a.type === 'bank' && a.id !== item?.id).map(a => `<option value="${escapeHtml(a.id)}" ${item?.debit_account_id === a.id ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
+								</select>
+							</div>
+						</div>
+					</div>
 					<div style="display: flex; gap: 8px; margin-top: 16px;">
 						<button type="submit" class="btn btn-primary btn-block">保存する</button>
 					</div>
 				</form>
 			`;
+
+			document.getElementById('m-acc-type')?.addEventListener('change', (e) => {
+				const ccFields = document.getElementById('m-acc-cc-fields');
+				if (ccFields) ccFields.style.display = e.target.value === 'credit_card' ? 'block' : 'none';
+			});
 
 			document.getElementById('form-master-account')?.addEventListener('submit', async (e) => {
 				e.preventDefault();
@@ -420,6 +455,13 @@ export class MasterController {
 				const name = document.getElementById('m-acc-name').value.trim();
 				const accType = document.getElementById('m-acc-type').value;
 				const initBal = Number(document.getElementById('m-acc-init-bal').value) || 0;
+
+				const closingDayVal = document.getElementById('m-acc-closing-day')?.value;
+				const debitDayVal = document.getElementById('m-acc-debit-day')?.value;
+				const closingDay = closingDayVal ? Number(closingDayVal) : null;
+				const debitDay = debitDayVal ? Number(debitDayVal) : null;
+				const debitOffset = Number(document.getElementById('m-acc-debit-offset')?.value) || 1;
+				const debitAccId = document.getElementById('m-acc-debit-account')?.value || null;
 
 				config.accounts = config.accounts || [];
 				if (isNew) {
@@ -430,6 +472,10 @@ export class MasterController {
 						currency: 'JPY',
 						initial_balance: initBal,
 						is_asset: accType !== 'credit_card',
+						closing_day: accType === 'credit_card' ? closingDay : null,
+						debit_day: accType === 'credit_card' ? debitDay : null,
+						debit_month_offset: accType === 'credit_card' ? debitOffset : 1,
+						debit_account_id: accType === 'credit_card' ? debitAccId : null,
 						sort_order: config.accounts.length + 1,
 						is_archived: false
 					});
@@ -438,6 +484,10 @@ export class MasterController {
 					item.type = accType;
 					item.initial_balance = initBal;
 					item.is_asset = accType !== 'credit_card';
+					item.closing_day = accType === 'credit_card' ? closingDay : null;
+					item.debit_day = accType === 'credit_card' ? debitDay : null;
+					item.debit_month_offset = accType === 'credit_card' ? debitOffset : 1;
+					item.debit_account_id = accType === 'credit_card' ? debitAccId : null;
 				}
 
 				modal.classList.remove('active');

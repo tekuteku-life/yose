@@ -418,5 +418,211 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 			assert.equal(withDeleted.length, 3);
 		});
 	});
+
+	describe('YoseDB Advanced Query & Operations (Requirements 3.18 - 3.24)', () => {
+		it('saves and retrieves credit card debit settings and theme in master config', async () => {
+			const config = await db.getMasterConfig();
+			config.theme = 'dark';
+			const card = config.accounts.find(a => a.id === 'acc_card_a');
+			assert.ok(card);
+			card.closing_day = 15;
+			card.debit_day = 10;
+			card.debit_month_offset = 1;
+			card.debit_account_id = 'acc_bank_main';
+			await db.saveMasterConfig(config);
+
+			const updated = await db.getMasterConfig();
+			assert.equal(updated.theme, 'dark');
+			const updatedCard = updated.accounts.find(a => a.id === 'acc_card_a');
+			assert.equal(updatedCard.closing_day, 15);
+			assert.equal(updatedCard.debit_day, 10);
+			assert.equal(updatedCard.debit_month_offset, 1);
+			assert.equal(updatedCard.debit_account_id, 'acc_bank_main');
+		});
+
+		it('getUnsettledAdvancePayments returns only unsettled advance transactions', async () => {
+			await db.putTransactions([
+				{ id: 'adv_1', type: 'advance_payment', amount: 5000, settlement_status: 'unsettled', memo: '立替A', is_deleted: false, date: '2026-10-01', target_month: '2026-10' },
+				{ id: 'adv_2', type: 'advance_payment', amount: 3000, settlement_status: 'settled', memo: '立替B (回収済)', is_deleted: false, date: '2026-10-02', target_month: '2026-10' },
+				{ id: 'adv_3', type: 'advance_payment', amount: 4000, settlement_status: 'unsettled', memo: '立替C (削除)', is_deleted: true, date: '2026-10-03', target_month: '2026-10' },
+				{ id: 'tx_normal', type: 'expense', amount: 1000, is_deleted: false, date: '2026-10-04', target_month: '2026-10' }
+			]);
+
+			const unsettled = await db.getUnsettledAdvancePayments();
+			assert.equal(unsettled.length, 1);
+			assert.equal(unsettled[0].id, 'adv_1');
+			assert.equal(unsettled[0].memo, '立替A');
+		});
+
+		it('getUniqueTags returns sorted unique tags list', async () => {
+			await db.putTransactions([
+				{ id: 't1', type: 'expense', amount: 100, tags: ['スーパー', '食料品'], is_deleted: false, date: '2026-10-01', target_month: '2026-10' },
+				{ id: 't2', type: 'expense', amount: 200, tags: ['食料品', 'ディナー'], is_deleted: false, date: '2026-10-02', target_month: '2026-10' },
+				{ id: 't3', type: 'expense', amount: 300, tags: ['日用品'], is_deleted: true, date: '2026-10-03', target_month: '2026-10' }
+			]);
+
+			const tags = await db.getUniqueTags();
+			assert.deepEqual(tags, ['スーパー', 'ディナー', '食料品']);
+		});
+
+		it('getMemoHistory returns memo mapping with category and subcategory', async () => {
+			await db.putTransactions([
+				{ id: 'm1', memo: 'セブンイレブン', category_id: 'cat_food', subcategory_id: 'sub_groceries', date: '2026-10-01', is_deleted: false, target_month: '2026-10' },
+				{ id: 'm2', memo: 'セブンイレブン', category_id: 'cat_food', subcategory_id: 'sub_snack', date: '2026-10-10', is_deleted: false, target_month: '2026-10' },
+				{ id: 'm3', memo: 'ガソリンスタンド', category_id: 'cat_transport', subcategory_id: 'sub_gas', date: '2026-10-05', is_deleted: false, target_month: '2026-10' }
+			]);
+
+			const history = await db.getMemoHistory();
+			assert.ok(history['セブンイレブン']);
+			// Latest one (2026-10-10) should win
+			assert.equal(history['セブンイレブン'].subcategory_id, 'sub_snack');
+			assert.ok(history['ガソリンスタンド']);
+			assert.equal(history['ガソリンスタンド'].category_id, 'cat_transport');
+		});
+
+		it('processCreditCardAutoSettlements generates settlement and prevents duplicates', async () => {
+			// Setup credit card account with auto debit
+			const config = await db.getMasterConfig();
+			const card = config.accounts.find(a => a.id === 'acc_card_a');
+			assert.ok(card);
+			card.closing_day = 15;
+			card.debit_day = 10;
+			card.debit_month_offset = 1;
+			card.debit_account_id = 'acc_bank_main';
+			await db.saveMasterConfig(config);
+
+			// Add card expenses in period 2026-09-16 to 2026-10-15 (cycle 2026-10)
+			await db.putTransactions([
+				{ id: 'c_tx_1', type: 'expense', account_id: 'acc_card_a', amount: 30000, date: '2026-09-20', target_month: '2026-09', is_deleted: false },
+				{ id: 'c_tx_2', type: 'expense', account_id: 'acc_card_a', amount: 25000, date: '2026-10-05', target_month: '2026-10', is_deleted: false },
+				{ id: 'c_tx_3', type: 'expense', account_id: 'acc_card_a', amount: 10000, date: '2026-10-20', target_month: '2026-10', is_deleted: false } // next cycle
+			]);
+
+			// Process settlements on debit day 2026-11-10
+			const generated = await db.processCreditCardAutoSettlements('2026-11-10');
+			assert.equal(generated.length, 1);
+			assert.equal(generated[0].amount, 55000); // 30000 + 25000
+			assert.equal(generated[0].account_id, 'acc_bank_main');
+			assert.equal(generated[0].to_account_id, 'acc_card_a');
+			assert.equal(generated[0].type, 'transfer');
+			assert.equal(generated[0].auto_settlement_meta.billing_cycle, '2026-10');
+
+			// Running again on same or later date should produce 0 duplicates
+			const secondRun = await db.processCreditCardAutoSettlements('2026-11-10');
+			assert.equal(secondRun.length, 0);
+
+			const thirdRun = await db.processCreditCardAutoSettlements('2026-11-15');
+			assert.equal(thirdRun.length, 0);
+		});
+
+		it('updateInstallmentGroup cascades updates across all records in group', async () => {
+			const groupId = 'grp_inst_test_1';
+			await db.putTransactions([
+				{ id: 'pay_1', group_id: groupId, type: 'transfer', amount: 12000, memo: '年額契約', tags: ['前払'], is_deleted: false, amortization_meta: { is_payment_record: true, total_amount: 12000, amortize_months: 3 } },
+				{ id: 'amort_1', group_id: groupId, type: 'expense', amount: 4000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次償却1', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 0 } },
+				{ id: 'amort_2', group_id: groupId, type: 'expense', amount: 4000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次償却2', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 1 } },
+				{ id: 'amort_3', group_id: groupId, type: 'expense', amount: 4000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次償却3', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 2 } }
+			]);
+
+			// Update category to housing, memo, tags, and new total amount 15000 (15000 / 3 = 5000 each)
+			const updatedCount = await db.updateInstallmentGroup(groupId, {
+				category_id: 'cat_housing',
+				subcategory_id: 'sub_rent',
+				memo: '[変更] 家賃年払',
+				tags: ['固定費', '年払']
+			}, { newTotalAmount: 15000 });
+
+			assert.equal(updatedCount, 4);
+
+			const txs = await db.getTransactions();
+			const groupTxs = txs.filter(t => t.group_id === groupId);
+			const payTx = groupTxs.find(t => t.id === 'pay_1');
+			assert.equal(payTx.amount, 15000);
+
+			const amortTxs = groupTxs.filter(t => t.id.startsWith('amort_'));
+			for (const a of amortTxs) {
+				assert.equal(a.category_id, 'cat_housing');
+				assert.equal(a.subcategory_id, 'sub_rent');
+				assert.equal(a.amount, 5000);
+				assert.ok(a.tags.includes('固定費'));
+			}
+		});
+
+		it('processCreditCardAutoSettlements handles empty credit cards and default todayStr', async () => {
+			const emptyDb = new YoseDB(null);
+			await emptyDb.init();
+			// No credit cards configured with debit_account_id
+			const res = await emptyDb.processCreditCardAutoSettlements();
+			assert.deepEqual(res, []);
+		});
+
+		it('updateInstallmentGroup handles amount in updates and updates without amountAdjustment', async () => {
+			const groupId = 'grp_inst_test_2';
+			await db.putTransactions([
+				{ id: 'pay_2', group_id: groupId, type: 'transfer', amount: 30000, memo: '一括', tags: ['前払'], is_deleted: false, amortization_meta: { is_payment_record: true, total_amount: 30000, amortize_months: 2 } },
+				{ id: 'amort_2_1', group_id: groupId, type: 'expense', amount: 15000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次1', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 0 } },
+				{ id: 'amort_2_2', group_id: groupId, type: 'expense', amount: 15000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次2', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 1 } }
+			]);
+
+			const count = await db.updateInstallmentGroup(groupId, { amount: 36000, memo: '新メモ' });
+			assert.equal(count, 3);
+			const txs = await db.getTransactions({ group_id: groupId });
+			const pay = txs.find(t => t.id === 'pay_2');
+			assert.equal(pay.amount, 36000);
+			const amorts = txs.filter(t => t.id.startsWith('amort_2_'));
+			for (const a of amorts) {
+				assert.equal(a.amount, 18000);
+				assert.equal(a.memo, '新メモ');
+			}
+
+			// Also supports total_amount property
+			await db.updateInstallmentGroup(groupId, { total_amount: 40000 });
+			const txs2 = await db.getTransactions({ group_id: groupId });
+			assert.equal(txs2.find(t => t.id === 'pay_2').amount, 40000);
+		});
+
+		it('updateInstallmentGroup returns 0 for empty or invalid groupId or deleted group', async () => {
+			assert.equal(await db.updateInstallmentGroup(null), 0);
+			assert.equal(await db.updateInstallmentGroup(''), 0);
+			assert.equal(await db.updateInstallmentGroup('non_existent_group'), 0);
+
+			await db.putTransaction({ id: 'del_1', group_id: 'grp_all_deleted', is_deleted: true });
+			assert.equal(await db.updateInstallmentGroup('grp_all_deleted'), 0);
+		});
+
+		it('updateInstallmentGroup allocates remainder to first month and updates actual categories', async () => {
+			const groupId = 'grp_inst_test_3';
+			await db.putTransactions([
+				{ id: 'amort_3_1', group_id: groupId, type: 'expense', amount: 3000, target_month: '2026-01', is_deleted: false },
+				{ id: 'amort_3_2', group_id: groupId, type: 'expense', amount: 3000, target_month: '2026-02', is_deleted: false },
+				{ id: 'amort_3_3', group_id: groupId, type: 'expense', amount: 3000, target_month: '2026-03', is_deleted: false }
+			]);
+
+			const count = await db.updateInstallmentGroup(groupId, {
+				actual_category_id: 'act_cat_1',
+				actual_subcategory_id: 'act_sub_1'
+			}, { newTotalAmount: 10000 });
+
+			assert.equal(count, 3);
+			const txs = await db.getTransactions({ group_id: groupId });
+			const sorted = txs.sort((a, b) => a.target_month.localeCompare(b.target_month));
+			assert.equal(sorted[0].amount, 3334); // 3333 + 1 remainder
+			assert.equal(sorted[1].amount, 3333);
+			assert.equal(sorted[2].amount, 3333);
+			assert.equal(sorted[0].actual_category_id, 'act_cat_1');
+			assert.equal(sorted[0].actual_subcategory_id, 'act_sub_1');
+		});
+
+		it('getTransactionsByGroupId retrieves transactions belonging to groupId', async () => {
+			const groupId = 'grp_query_test';
+			await db.putTransactions([
+				{ id: 'q1', group_id: groupId, type: 'expense', amount: 1000, date: '2026-10-01', target_month: '2026-10', is_deleted: false },
+				{ id: 'q2', group_id: groupId, type: 'expense', amount: 2000, date: '2026-10-02', target_month: '2026-10', is_deleted: false }
+			]);
+			const res = await db.getTransactionsByGroupId(groupId);
+			assert.equal(res.length, 2);
+			assert.deepEqual(res.map(r => r.id).sort(), ['q1', 'q2']);
+		});
+	});
 });
 

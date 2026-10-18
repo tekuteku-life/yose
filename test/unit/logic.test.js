@@ -27,7 +27,12 @@ import {
 	roundTieredAmount,
 	calculateAnnualBudgetDefaults,
 	escapeHtml,
-	JAPANESE_HOLIDAYS_PRESET
+	JAPANESE_HOLIDAYS_PRESET,
+	calculateCreditCardDebitDate,
+	createCreditCardSettlementTransaction,
+	evaluateCalculatorExpression,
+	calculateTagSummary,
+	calculateCrossAccrualActualSummary
 } from '../../js/logic.js';
 
 describe('js/logic.js - Unit Tests', () => {
@@ -112,6 +117,7 @@ describe('js/logic.js - Unit Tests', () => {
 			const res = calculateTax(999, 0.10, 'floor');
 			assert.equal(res.amount, 1098);
 			assert.equal(res.tax_meta.base_amount, 999);
+			assert.equal(res.tax_meta.tax_amount, 99);
 			assert.equal(res.tax_meta.tax_rate, 0.10);
 			assert.equal(res.tax_meta.rounding, 'floor');
 		});
@@ -120,6 +126,7 @@ describe('js/logic.js - Unit Tests', () => {
 			// base 995: 995 * 0.10 = 99.5 -> round 100 -> total 1095
 			const res = calculateTax(995, 0.10, 'round');
 			assert.equal(res.amount, 1095);
+			assert.equal(res.tax_meta.tax_amount, 100);
 			assert.equal(res.tax_meta.rounding, 'round');
 		});
 
@@ -127,6 +134,7 @@ describe('js/logic.js - Unit Tests', () => {
 			// base 1000 * 0.08 = 80 -> total 1080
 			const res = calculateTax(1000, 0.08, 'floor');
 			assert.equal(res.amount, 1080);
+			assert.equal(res.tax_meta.tax_amount, 80);
 			assert.equal(res.tax_meta.tax_rate, 0.08);
 		});
 
@@ -134,6 +142,7 @@ describe('js/logic.js - Unit Tests', () => {
 			const res = calculateTax('invalid', 0.10, 'floor');
 			assert.equal(res.amount, 0);
 			assert.equal(res.tax_meta.base_amount, 0);
+			assert.equal(res.tax_meta.tax_amount, 0);
 		});
 	});
 
@@ -1810,6 +1819,278 @@ describe('js/logic.js - Unit Tests', () => {
 			});
 			assert.equal(Object.prototype.hasOwnProperty.call(hackedProgress.category_progress, '__proto__'), false);
 			assert.equal(hackedProgress.category_progress.cat_normal.budget, 50000);
+		});
+	});
+
+	describe('Tag Analytics & Summary (Requirement 3.18)', () => {
+		const sampleTxs = [
+			{ id: 'tx_1', type: 'expense', amount: 3000, status: 'confirmed', target_month: '2026-10', tags: ['ランチ', '外食'], is_deleted: false },
+			{ id: 'tx_2', type: 'expense', amount: 5000, status: 'confirmed', target_month: '2026-10', tags: ['外食', '飲み会'], is_deleted: false },
+			{ id: 'tx_3', type: 'expense', amount: 2000, status: 'planned', target_month: '2026-10', tags: ['ランチ'], is_deleted: false },
+			{ id: 'tx_4', type: 'income', amount: 20000, status: 'confirmed', target_month: '2026-10', tags: ['副業'], is_deleted: false },
+			{ id: 'tx_5', type: 'expense', amount: 1500, status: 'confirmed', target_month: '2026-10', tags: [], is_deleted: false },
+			{ id: 'tx_del', type: 'expense', amount: 9999, status: 'confirmed', target_month: '2026-10', tags: ['外食'], is_deleted: true }
+		];
+
+		it('aggregates expense, income, and count by tag', () => {
+			const res = calculateTagSummary(sampleTxs, { includePlanned: true });
+			assert.ok(res.tags['外食']);
+			assert.equal(res.tags['外食'].expense_total, 8000); // 3000 + 5000
+			assert.equal(res.tags['外食'].count, 2);
+
+			assert.ok(res.tags['ランチ']);
+			assert.equal(res.tags['ランチ'].expense_total, 5000); // 3000 + 2000 (planned)
+			assert.equal(res.tags['ランチ'].count, 2);
+
+			assert.ok(res.tags['副業']);
+			assert.equal(res.tags['副業'].income_total, 20000);
+			assert.equal(res.tags['副業'].count, 1);
+
+			// Untagged
+			assert.ok(res.tags['(未設定)']);
+			assert.equal(res.tags['(未設定)'].expense_total, 1500);
+
+			assert.equal(res.total_expense, 11500);
+			assert.equal(res.total_income, 20000);
+		});
+
+		it('excludes planned transactions when includePlanned is false', () => {
+			const res = calculateTagSummary(sampleTxs, { includePlanned: false });
+			assert.equal(res.tags['ランチ'].expense_total, 3000);
+			assert.equal(res.tags['ランチ'].count, 1);
+			assert.equal(res.total_expense, 9500);
+		});
+
+		it('filters tags by searchQuery and filterTag alias and provides sorted tagList', () => {
+			const res = calculateTagSummary(sampleTxs, { filterTag: '食' });
+			assert.ok(res.tags['外食']);
+			assert.equal(Object.keys(res.tags).length, 1);
+			assert.ok(Array.isArray(res.tagList));
+			assert.equal(res.tagList.length, 1);
+			assert.equal(res.tagList[0].tag, '外食');
+			assert.equal(res.tagList[0].expense, 8000);
+		});
+
+		it('handles empty transactions list cleanly', () => {
+			const res = calculateTagSummary([]);
+			assert.deepEqual(res.tags, {});
+			assert.deepEqual(res.tagList, []);
+			assert.equal(res.total_expense, 0);
+			assert.equal(res.total_income, 0);
+		});
+	});
+
+	describe('Accrual vs Actual Cross-Aggregation Matrix (Requirement 3.23)', () => {
+		const sampleCrossTxs = [
+			{ id: 'c1', type: 'expense', amount: 5000, status: 'confirmed', target_month: '2026-10', category_id: 'cat_social', actual_category_id: 'cat_food', is_deleted: false },
+			{ id: 'c2', type: 'expense', amount: 3000, status: 'confirmed', target_month: '2026-10', category_id: 'cat_food', actual_category_id: 'cat_food', is_deleted: false },
+			{ id: 'c3', type: 'expense', amount: 10000, status: 'confirmed', target_month: '2026-10', category_id: 'cat_housing', actual_category_id: 'cat_fixed', is_deleted: false },
+			{ id: 'c4', type: 'expense', amount: 4000, status: 'planned', target_month: '2026-10', category_id: 'cat_social', actual_category_id: 'cat_entertainment', is_deleted: false },
+			{ id: 'c5', type: 'income', amount: 200000, status: 'confirmed', target_month: '2026-10', category_id: 'cat_salary', actual_category_id: 'cat_salary', is_deleted: false },
+			{ id: 'cdel', type: 'expense', amount: 99999, status: 'confirmed', target_month: '2026-10', category_id: 'cat_social', actual_category_id: 'cat_food', is_deleted: true }
+		];
+
+		it('calculates 2D pivot matrix, row totals, column totals, and grand total', () => {
+			const res = calculateCrossAccrualActualSummary(sampleCrossTxs, '2026-10', true);
+
+			assert.ok(res.matrix.cat_social);
+			assert.equal(res.matrix.cat_social.cat_food, 5000);
+			assert.equal(res.matrix.cat_social.cat_entertainment, 4000);
+			assert.equal(res.matrix.cat_social._total, 9000);
+			assert.equal(res.rowTotals.cat_social, 9000);
+
+			assert.equal(res.matrix.cat_food.cat_food, 3000);
+			assert.equal(res.rowTotals.cat_food, 3000);
+
+			assert.equal(res.matrix.cat_housing.cat_fixed, 10000);
+			assert.equal(res.rowTotals.cat_housing, 10000);
+
+			// Column totals
+			assert.equal(res.colTotals.cat_food, 8000); // 5000 + 3000
+			assert.equal(res.colTotals.cat_entertainment, 4000);
+			assert.equal(res.colTotals.cat_fixed, 10000);
+
+			// Grand total (5000 + 3000 + 10000 + 4000)
+			assert.equal(res.grandTotal, 22000);
+
+			// Categories list
+			assert.deepEqual(res.categories.sort(), ['cat_food', 'cat_housing', 'cat_social'].sort());
+			assert.deepEqual(res.actualCategories.sort(), ['cat_entertainment', 'cat_fixed', 'cat_food'].sort());
+		});
+
+		it('excludes planned transactions when includePlanned is false', () => {
+			const res = calculateCrossAccrualActualSummary(sampleCrossTxs, '2026-10', false);
+			assert.equal(res.rowTotals.cat_social, 5000);
+			assert.equal(res.grandTotal, 18000);
+			assert.equal(res.actualCategories.includes('cat_entertainment'), false);
+		});
+
+		it('handles missing categories with unclassified fallback', () => {
+			const untypedTx = [{ id: 'u1', type: 'expense', amount: 1200, status: 'confirmed', target_month: '2026-10', category_id: null, actual_category_id: null, is_deleted: false }];
+			const res = calculateCrossAccrualActualSummary(untypedTx);
+			assert.equal(res.matrix.cat_unclassified.cat_unclassified, 1200);
+			assert.equal(res.grandTotal, 1200);
+		});
+
+		it('returns clean zero state for empty list', () => {
+			const res = calculateCrossAccrualActualSummary([]);
+			assert.deepEqual(res.matrix, {});
+			assert.equal(res.grandTotal, 0);
+		});
+
+		it('supports categories list as second argument for UI controller matrix rendering', () => {
+			const categoriesMaster = [
+				{ id: 'cat_social', name: '交際費', type: 'expense', is_archived: false },
+				{ id: 'cat_food', name: '食費', type: 'expense', is_archived: false },
+				{ id: 'cat_salary', name: '給与', type: 'income', is_archived: false }
+			];
+			const res = calculateCrossAccrualActualSummary(sampleCrossTxs, categoriesMaster, true);
+			assert.ok(res.accrualTotals);
+			assert.ok(res.actualTotals);
+			assert.equal(res.accrualTotals.cat_social, 9000);
+			assert.equal(res.actualTotals.cat_food, 8000);
+			assert.equal(res.categories.length, 2); // Excludes income category
+			assert.equal(res.categories[0].name, '交際費');
+		});
+	});
+
+	describe('Credit Card Debit Date & Settlement (Requirement 3.21)', () => {
+		const holidays = ['2026-10-12', '2026-11-23']; // 10-12 Sports day, 11-23 Labor day
+
+		it('calculates billing cycle and debit date for 15th closing, 10th debit, offset 1', () => {
+			// Date <= 15: inside current cycle
+			const res1 = calculateCreditCardDebitDate('2026-10-14', 15, 10, 1, holidays);
+			assert.equal(res1.billingCycle, '2026-10');
+			assert.equal(res1.billingPeriodStart, '2026-09-16');
+			assert.equal(res1.billingPeriodEnd, '2026-10-15');
+			// Nov 10, 2026 is Tuesday (business day)
+			assert.equal(res1.debitDate, '2026-11-10');
+
+			// Date > 15: inside next cycle
+			const res2 = calculateCreditCardDebitDate('2026-10-16', 15, 10, 1, holidays);
+			assert.equal(res2.billingCycle, '2026-11');
+			assert.equal(res2.billingPeriodStart, '2026-10-16');
+			assert.equal(res2.billingPeriodEnd, '2026-11-15');
+			assert.equal(res2.debitDate, '2026-12-10');
+		});
+
+		it('handles month-end (99) closing and debit dates across month lengths', () => {
+			// Month-end closing (99) and month-end debit (99)
+			const resFeb = calculateCreditCardDebitDate('2026-02-10', 99, 99, 1, holidays);
+			assert.equal(resFeb.billingCycle, '2026-02');
+			assert.equal(resFeb.billingPeriodEnd, '2026-02-28');
+			// March 31, 2026 is Tuesday
+			assert.equal(resFeb.debitDate, '2026-03-31');
+
+			const resApr = calculateCreditCardDebitDate('2026-04-10', 99, 99, 1, holidays);
+			assert.equal(resApr.billingPeriodEnd, '2026-04-30');
+			// May 31, 2026 is Sunday -> shifts to June 1 (Monday)
+			assert.equal(resApr.debitDate, '2026-06-01');
+		});
+
+		it('shifts debit date to next business day on weekend and holiday', () => {
+			// Jan 2026: Closing 15, Debit 10, Offset 1 -> Feb 10
+			// Suppose debit day is 10, and Oct 10, 2026 is Saturday -> shifts to Monday 12 (holiday) -> Tuesday 13
+			const resSat = calculateCreditCardDebitDate('2026-09-05', 15, 10, 1, holidays);
+			// 09-05 <= 15 -> cycle 2026-09 -> debit Oct 10, 2026
+			// Oct 10 is Saturday -> Oct 11 is Sunday -> Oct 12 is holiday -> shifts to Oct 13!
+			assert.equal(resSat.rawDebitDate, '2026-10-10');
+			assert.equal(resSat.debitDate, '2026-10-13');
+		});
+
+		it('creates valid credit card settlement transfer transaction', () => {
+			const tx = createCreditCardSettlementTransaction({
+				payingAccountId: 'acc_bank_main',
+				creditCardId: 'acc_card_a',
+				amount: 75400,
+				debitDate: '2026-11-10',
+				billingCycle: '2026-10',
+				todayStr: '2026-10-18'
+			});
+
+			assert.equal(tx.type, 'transfer');
+			assert.equal(tx.account_id, 'acc_bank_main');
+			assert.equal(tx.to_account_id, 'acc_card_a');
+			assert.equal(tx.amount, 75400);
+			assert.equal(tx.date, '2026-11-10');
+			assert.equal(tx.target_month, '2026-11');
+			assert.equal(tx.status, 'confirmed');
+			assert.ok(tx.auto_settlement_meta);
+			assert.equal(tx.auto_settlement_meta.card_id, 'acc_card_a');
+			assert.equal(tx.auto_settlement_meta.billing_cycle, '2026-10');
+		});
+	});
+
+	describe('Integrated Quick Calculator Evaluation (Requirement 3.25)', () => {
+		it('evaluates simple and chained arithmetic operations', () => {
+			assert.equal(evaluateCalculatorExpression('1500 + 500').amount, 2000);
+			assert.equal(evaluateCalculatorExpression('3000 - 1200').amount, 1800);
+			assert.equal(evaluateCalculatorExpression('250 * 4').amount, 1000);
+			assert.equal(evaluateCalculatorExpression('250 × 4').amount, 1000);
+			assert.equal(evaluateCalculatorExpression('1000 / 4').amount, 250);
+			assert.equal(evaluateCalculatorExpression('1000 ÷ 4').amount, 250);
+			assert.equal(evaluateCalculatorExpression('100 + 200 * 2').amount, 500);
+		});
+
+		it('applies tax actions correctly (+10%, +8%, inc10%, inc8%) with floor and round', () => {
+			// +10%
+			const tax10 = evaluateCalculatorExpression('1000', '+10%', 'floor');
+			assert.equal(tax10.amount, 1100);
+			assert.equal(tax10.tax_meta.tax_rate, 0.10);
+			assert.equal(tax10.tax_meta.base_amount, 1000);
+			assert.equal(tax10.tax_meta.tax_amount, 100);
+
+			// +8%
+			const tax8 = evaluateCalculatorExpression('1000', '+8%', 'floor');
+			assert.equal(tax8.amount, 1080);
+			assert.equal(tax8.tax_meta.tax_rate, 0.08);
+			assert.equal(tax8.tax_meta.tax_amount, 80);
+
+			// inc10% (内税10%: 1100 -> tax 100, base 1000)
+			const inc10 = evaluateCalculatorExpression('1100', 'inc10%', 'floor');
+			assert.equal(inc10.amount, 1100);
+			assert.equal(inc10.base_amount, 1000);
+			assert.equal(inc10.tax_meta.tax_amount, 100);
+
+			// Keypad button data attributes: add10, add8, sub10, sub8
+			const add10 = evaluateCalculatorExpression('2000', 'add10', 'floor');
+			assert.equal(add10.amount, 2200);
+			assert.equal(add10.result, 2200);
+			assert.equal(add10.tax_meta.base_amount, 2000);
+			assert.equal(add10.tax_meta.tax_amount, 200);
+
+			const sub10 = evaluateCalculatorExpression('2200', 'sub10', 'floor');
+			assert.equal(sub10.amount, 2200);
+			assert.equal(sub10.result, 2200);
+			assert.equal(sub10.base_amount, 2000);
+			assert.equal(sub10.tax_meta.tax_amount, 200);
+
+			const add8 = evaluateCalculatorExpression('1000', 'add8', 'floor');
+			assert.equal(add8.amount, 1080);
+			assert.equal(add8.result, 1080);
+			assert.equal(add8.tax_meta.tax_amount, 80);
+
+			const sub8 = evaluateCalculatorExpression('1080', 'sub8', 'floor');
+			assert.equal(sub8.amount, 1080);
+			assert.equal(sub8.result, 1080);
+			assert.equal(sub8.tax_meta.tax_amount, 80);
+		});
+
+		it('handles division by zero and malformed input safely without crashing', () => {
+			const divZero = evaluateCalculatorExpression('1000 / 0');
+			assert.equal(divZero.success, false);
+			assert.equal(divZero.amount, 0);
+
+			const empty = evaluateCalculatorExpression('');
+			assert.equal(empty.amount, 0);
+
+			const malformed = evaluateCalculatorExpression('++--');
+			assert.equal(malformed.amount, 0);
+
+			const invalidChars = evaluateCalculatorExpression('100 + abc');
+			assert.equal(invalidChars.success, false);
+			assert.equal(invalidChars.amount, 0);
+			assert.equal(invalidChars.error, 'Invalid characters in expression');
 		});
 	});
 });

@@ -217,3 +217,56 @@ export function escapeHtml(str) {
 		.replace(/'/g, '&#39;');
 }
 
+/**
+ * Calculate Credit Card billing period and debit date (Requirement 3.21)
+ * @param {string} currentDate - YYYY-MM-DD
+ * @param {number} closingDay - 1 to 28, or 99 (month end)
+ * @param {number} debitDay - 1 to 28, or 99 (month end)
+ * @param {number} debitMonthOffset - 1 (next month) or 2 (month after next)
+ * @param {string[]} [holidays] - array of YYYY-MM-DD strings
+ * @returns {{ billingCycle: string, billingPeriodStart: string, billingPeriodEnd: string, debitDate: string, rawDebitDate: string }}
+ */
+export function calculateCreditCardDebitDate(currentDate, closingDay = 15, debitDay = 10, debitMonthOffset = 1, holidays = []) {
+	const [y, m, d] = currentDate.split('-').map(Number);
+	const effClosingDayThisMonth = (closingDay >= 29 || closingDay > getLastDayOfMonth(y, m)) ? getLastDayOfMonth(y, m) : closingDay;
+
+	let cycleYear = y;
+	let cycleMonth = m;
+	if (d > effClosingDayThisMonth) {
+		const nextMonthStr = addMonthsToMonthStr(`${y}-${String(m).padStart(2, '0')}`, 1);
+		const [ny, nm] = nextMonthStr.split('-').map(Number);
+		cycleYear = ny;
+		cycleMonth = nm;
+	}
+
+	const effClosingDay = (closingDay >= 29 || closingDay > getLastDayOfMonth(cycleYear, cycleMonth)) ? getLastDayOfMonth(cycleYear, cycleMonth) : closingDay;
+	const billingPeriodEnd = `${cycleYear}-${String(cycleMonth).padStart(2, '0')}-${String(effClosingDay).padStart(2, '0')}`;
+
+	// Billing period start is 1 day after previous month's closing date
+	const prevMonthStr = addMonthsToMonthStr(`${cycleYear}-${String(cycleMonth).padStart(2, '0')}`, -1);
+	const [py, pm] = prevMonthStr.split('-').map(Number);
+	const prevEffClosingDay = (closingDay >= 29 || closingDay > getLastDayOfMonth(py, pm)) ? getLastDayOfMonth(py, pm) : closingDay;
+
+	// Previous closing date + 1 day
+	const prevClosingDate = new Date(py, pm - 1, prevEffClosingDay);
+	prevClosingDate.setDate(prevClosingDate.getDate() + 1);
+	const billingPeriodStart = formatDate(prevClosingDate);
+
+	// Debit date
+	const debitMonthStr = addMonthsToMonthStr(`${cycleYear}-${String(cycleMonth).padStart(2, '0')}`, debitMonthOffset);
+	const [dy, dm] = debitMonthStr.split('-').map(Number);
+	const effDebitDay = (debitDay >= 29 || debitDay > getLastDayOfMonth(dy, dm)) ? getLastDayOfMonth(dy, dm) : debitDay;
+	const rawDebitDate = `${dy}-${String(dm).padStart(2, '0')}-${String(effDebitDay).padStart(2, '0')}`;
+
+	// In Japan, credit card debits on weekend/holiday shift to next business day ('after')
+	const adjustedDebitDate = adjustDateForHoliday(rawDebitDate, 'after', holidays);
+
+	return {
+		billingCycle: `${cycleYear}-${String(cycleMonth).padStart(2, '0')}`,
+		billingPeriodStart,
+		billingPeriodEnd,
+		debitDate: adjustedDebitDate,
+		rawDebitDate
+	};
+}
+

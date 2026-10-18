@@ -342,6 +342,88 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * グラフカード右上の分類軸切替ボタン（`#btn-toggle-axis`）において、初期表示時（「計上分類」）とクリック後のトグル時（「実態分類ベース」「計上分類ベース」）で語尾の「ベース」の有無による表記揺れが生じていた。
    * 初期HTMLおよびスクリプト制御を完全に統一し、初期状態からアイコン付きの `🏷️ 計上分類ベース` と表示し、トグル時も `🏷️ 計上分類ベース` $\longleftrightarrow$ `📦 実態分類ベース` の一貫したラベルで状態を明示する。
 
+### 3.18 タグのチップUIおよび集計・検索・グラフ表示要件
+
+1. **入力時のチップUI & 候補サジェスト**
+   * 過去の入力履歴（DB内の全アクティブ取引）からユニークなタグ文字列を抽出して `<datalist id="tags-history-list">` に供給。
+   * 入力ボックス（`#input-tags`）で文字入力中にサジェスト表示。Enterキー、カンマ（`,`）、またはサジェスト選択によりタグを確定し、確定したタグは入力中のテキストとは視覚的に分離された独立のチップ（タグバッジ、削除ボタン `×` 付き）として描画。
+   * 各チップの `×` ボタン押下、または入力欄が空の状態でBackspaceキーを押下することで末尾のチップを安全に削除可能。
+2. **集計・グラフ画面（`#tab-summary`）でのタグ分析**
+   * タグ別集計エンジン（`calculateTagSummary`）により、指定期間（当月・当年・全期間）におけるタグごとの確定支出・収入、件数、構成比を算出。
+   * タグ検索・フィルタ機能（`#input-tag-search`）により目的のタグを素早くインクリメンタル検索。
+   * 上位タグの支出構成比をドーナツチャートまたはバーチャートで視覚化し、タグ別内訳リストを表示。
+
+### 3.19 メモ入力サジェスチョンおよび費目・中項目の自動連動補完要件
+
+1. **過去入力履歴からのインクリメンタルサジェスチョン**
+   * 過去の取引履歴からユニークなメモ文字列、およびそのメモが最後に使用された際の「計上大項目（`category_id`）」「計中項目（`subcategory_id`）」のマッピングを抽出・保持。
+   * メモ入力欄（`#input-memo`）に `<datalist id="memo-history-list">` をバインドし、入力時に過去のメモ候補をドロップダウン表示。
+2. **候補選択時の費目・中項目の自動補完**
+   * ユーザーがサジェスト候補を選択（または入力値が既存履歴メモと完全一致）した際、自動的に紐づく計上大項目（`#select-category`）および中項目（`#select-subcategory`）を選択状態へと連動更新。入力の手間を大幅に削減。
+
+### 3.20 立替払い未回収リストおよびワンクリック返済精算要件
+
+1. **未回収立替金リスト（`#unsettled-advance-container`）の可視化**
+   * 取引入力画面の「立替返済（`#mode-repay`）」モード選択時、未精算の立替取引（`type === 'advance_payment'` かつ `settlement_status !== 'settled'`）を一覧カードとして表示。
+   * 各明細に対象日付、立替相手・メモ、立替金額、および「回収・精算」ボタンを配置。
+2. **ワンクリック返済確定と未回収リストからの自動除外**
+   * 「回収・精算」ボタンを押下すると、回収額入力欄（`#input-repay-amount`）に立替額を自動セットし、メモ欄に `[立替回収] ${元メモ}` を補完。
+   * そのまま登録を実行することで、返済取引（`createAdvanceRepaymentTransaction`）が即座に生成・保存され、元の立替取引の `settlement_status` が `'settled'` に更新されて未回収リストから自動的に消去・相殺される。
+
+### 3.21 クレジットカード締め日・口座引き落とし日設定および自動引き落とし相殺要件
+
+1. **口座マスタ（クレジットカード）設定項目の拡張**
+   * クレジットカード口座（`type: 'credit_card'`）に以下の設定プロパティを追加：
+     * `closing_day`: 締め日（1〜28、または 99: 月末）
+     * `debit_day`: 口座引き落とし日（1〜28、または 99: 月末）
+     * `debit_month_offset`: 引き落とし月オフセット（1: 翌月引き落とし、2: 翌々月引き落とし）
+     * `debit_account_id`: 引き落とし元銀行口座のID（例: `acc_bank_main`）
+2. **自動引き落とし振替取引の生成と負債残高の自動相殺**
+   * 日付計算ユーティリティ（`calculateCreditCardDebitDate`）に基づき、現在日付が引き落とし日以降であり、未処理の締め対象期間が存在する場合に、引き落とし元口座からクレカ口座への振替取引（`type: 'transfer'`, `from: debit_account_id`, `to: card.id`, 金額: 締め期間のカード支出確定額）を自動生成。
+   * 重複相殺を防止するため、生成取引に `auto_settlement_meta: { card_id, billing_cycle }` を付与。これにより銀行口座残高が減少し、クレジットカードの負債残高が自動的に相殺・ゼロクリアされる。
+
+### 3.22 分割計上取引（Installment / Prepaid Amortization）の一括連動更新要件
+
+1. **編集時の分割計上グループ検知と確認ダイアログ**
+   * 明細編集モーダル（`#modal-edit-tx`）で取引を開いた際、該当レコードが分割計上グループ（`group_id.startsWith('grp_prepaid')` または `amortization_meta` 保持）に属しているかを判定。
+   * 保存ボタン押下時、同一グループに属する他の関連明細が存在する場合、「この分割計上の関連する他の $N$ 件の明細（全 $M$ ヶ月分）も一括で修正しますか？」という確認ダイアログ（YES/NO）を提示。
+2. **関連レコードへの連動反映とスナップショット再計算**
+   * ユーザーが「YES」を選択した場合、費目（`category_id`）、中項目（`subcategory_id`）、実態分類、メモ、タグを同一グループ内の全償却明細に一括同期。
+   * 金額が変更された場合は、分割月数に応じた月次償却額の均等再配分（端数は初月集約ルール維持）を行い、全関連レコードをアトミックにDB保存。過去締め月を含む場合はスナップショットの再計算カスケードをトリガー。
+
+### 3.23 計上分類×実態分類のクロス集計（マトリクス/ピボット）要件
+
+1. **二次元ピボットマトリクス（`#card-cross-matrix`）の提供**
+   * 集計・グラフ画面（`#tab-summary`）に「計上×実態クロス集計」ビューを新設。
+   * 行（Rows）＝ 計上大項目（予算・集計分類）、列（Columns）＝ 実態大項目（支出の性質分類）。
+   * 各交差セルに対象期間（指定月または年）における「計上分類 $C_i$ かつ 実態分類 $A_j$」の合計金額を表示。
+   * 各行の右端に行合計（計上分類合計）、各列の最下部に列合計（実態分類合計）、右下に対角総合計（Grand Total）を算出・表示。
+2. **マトリクス集計エンジン (`calculateCrossAccrualActualSummary`)**
+   * `aggregator.js` 内で二次元マトリクスを高速に算出。空セルは0円表示、各行・列をクリックすることで内訳明細へのドリルダウンや構成比率の直感的な比較を可能とする。
+
+### 3.24 ダークテーマ対応（システム追従・ライト・ダーク）要件
+
+1. **CSS変数によるカラーパレット完全抽象化およびネイティブ `color-scheme` 適用**
+   * 背景色、カード背景、テキスト主要色、ミュート色、ボーダー色、各種バッジ背景をCSS変数（`--bg-main`, `--bg-card`, `--text-main`, `--border` 等）で定義。
+   * `[data-theme="dark"]` セレクタにより、高コントラストかつ目に優しいダークパレットを完全適用。
+   * ブラウザのネイティブコントロール（`<input type="month">` 年月ピッカー、スクロールバー、フォーム入力欄）をダークモードと完全連動させるため、`:root` に `color-scheme: light`、`[data-theme="dark"]` に `color-scheme: dark` を指定し、カレンダーポップアップがライトモードのまま残存する不整合を根絶。
+   * 表見出し（`summary-table th`）、テーブルホバー（`tr:hover td`）、費目カテゴリヘッダー（`.summary-category-header`）、明細リスト（`.tx-item`）、モード切替タブ（`.mode-tabs`, `.mode-tab-btn.active`）、アコーディオン要約（`.holiday-year-group summary`）における白背景ハードコード（`#fff`, `#f8fafc`, `#f1f5f9`）を完全撤廃し、セマンティックなCSS変数へ統一。
+2. **テーマ選択肢と即時適用・システム追従**
+   * 設定画面（`#tab-settings`）に「🌓 テーマ設定」コントロールを追加し、`system`（OS設定・`prefers-color-scheme` 追従）、`light`（ライト固定）、`dark`（ダーク固定）を選択可能とする。
+   * 選択されたテーマは `master_config.theme`（およびローカルストレージ）に保存され、起動時のチラつき（FOUC）を完全防止するためDOM解析直後に `html` 要素の `data-theme` 属性へ即時反映。
+   * `system` 選択時は `window.matchMedia('(prefers-color-scheme: dark)')` の変更リスナーにより、OSのダークモード切替にリアルタイム連動。
+   * Chart.js のグリッド線色（`rgba(255,255,255,0.1)`）およびテキストフォント色（`#f8fafc`）もテーマ状態を検知して動的に同期描画。
+
+### 3.25 金額入力欄の簡易電卓機能統合要件（四則演算・8%・10%・税抜統合）
+
+1. **金額入力直結の統合簡易電卓モーダル（`#modal-tax` / `#modal-quick-calc`）**
+   * 金額入力欄および明細修正モーダル横のボタン（ラベル: `🧮 簡易電卓`）から、フル機能の簡易電卓キーパッドを起動。旧表記（「税抜計算」）を完全刷新。
+   * 従来の単なる税率セレクト方式から、四則演算（`+`, `-`, `×`, `÷`）キー、数字キー（0〜9, 00, `.`）、クリア（`C`）、バックスペース（`⌫`）、計算実行（`=`）を備えた統合電卓UIへと進化。
+2. **消費税計算機能のシームレス統合と堅牢性保証**
+   * 電卓キーパッド内に `+10%`, `+8%`（外税加算）、`内税10%`, `内税8%`（税込から本体抽出）のワンタップボタンを統合。
+   * 四則演算の途中結果に対しても直接消費税率を乗除算可能とし、計算結果は整数端数処理（切捨て `floor` / 四捨五入 `round`）を経て金額入力欄へ反映。
+   * `calculateTax` および `evaluateCalculatorExpression` において、`tax_meta` オブジェクトに必ず `tax_amount`（税額）を含めて返却し、UI描画（`updateCalculatorDisplay`）における `tax_amount.toLocaleString()` の未定義プロパティ参照（`TypeError`）を防御的フォールバックと共に根絶。計算過程は `tax_meta` として取引に安全に引き継がれる。
+
 ---
 
 ## 4. 同期トリガー・通信・セキュリティ要件
@@ -442,6 +524,8 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
      * **③ ☁️ GAS登録用 Ed25519 公開鍵管理 (GAS Public Key)**:
        * 公開鍵Base64テキストエリア
        * アクションボタン: `[⚡ GASへワンクリック登録]`, `[公開鍵をコピー]`, `[新しい鍵ペアを生成]`
+       * 初回概要サマリ領域（カード最上部）の重複ボタンを完全廃止し、本Subcard 3の `[⚡ GASへワンクリック登録]` へ操作を集約。
+       * 注記の明記: ワンクリック自動登録（`register_initial_key`）が利用可能なのはGAS側のスクリプトプロパティ（`USER_PUBLIC_KEYS`）が未設定（初回プロビジョニング前）の場合のみであり、既に登録済みの環境ではGAS側で保護されるためエディタ等で手動更新が必要である旨の注意書きをボタン直下に常時明示。
 
 ### 4.6 モジュラーUIアーキテクチャ（AppCoordinator & UIコンポーネントコントローラー分割設計）
 
@@ -455,24 +539,37 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
      * `_domInitialized` フラグによるガード制御：端末の再ロック・解除時にDOMイベントリスナーが多重登録され取引が重複送信されるバグを完全防止。
      * 各コンポーネントコントローラーのインスタンス化と依存性注入（DI: `db`, `syncManager`, コールバック関数群）。
      * コンポーネント間連携の調停（イベント通知 ➔ 画面全体の更新 `refreshAllViews()` や特定モーダルの展開）。
+     * **テーマ管理と起動時相殺調停**: テーマ設定（`system` / `light` / `dark`）の一元管理と即時適用（`applyTheme`）、およびアプリ起動・データ更新時におけるクレジットカード自動引き落とし相殺処理（`checkCreditCardAutoSettlement`）の呼び出し調停。
    * **認証・セキュリティゲート (`js/ui/auth_controller.js`) - `AuthController`**:
      * 起動時ロック画面（`#auth-screen`）、WebAuthn PRF暗号化/PIN認証ゲートの制御、DMK＆秘密鍵アトミック再ラップ、アクティブセッション破棄。
    * **取引入力制御 (`js/ui/tx_input_controller.js`) - `TransactionInputController`**:
-     * 取引入力フォーム（通常・ポイント・定期・前払・立替の5モード）、動的フィールド切替、取引種別（`#input-type` 支出/収入）に応じた大項目費目の動的フィルタリング、税額計算モーダル連携（モード切替時や金額手入力時の `currentTaxMeta` 自動クリアによる消費税二重加算防止）、新規取引保存（`generateUUID` による暗号学的衝突防止）。
+     * 取引入力フォーム（通常・ポイント・定期・前払・立替の5モード）、動的フィールド切替、取引種別（`#input-type` 支出/収入）に応じた大項目費目の動的フィルタリング。
+     * **タグチップUI**: 過去履歴サジェスト（`<datalist>`）、確定タグのチップバッジ化、`×` ボタン・Backspaceによる削除。
+     * **メモ入力サジェスチョン＆費目自動連動**: 過去メモ履歴サジェスト、候補選択時の大項目・中項目自動選択。
+     * **立替払い未回収リスト**: 立替返済モード時の未精算立替金一覧描画、ワンクリックでの回収額・メモ補完および返済確定。
+     * **統合簡易電卓モーダル連携**: 四則演算キーパッド（`+`, `-`, `×`, `÷`）、消費税率（`+10%`, `+8%`, `内税10%`, `内税8%`）、端数処理統合。
+     * 新規取引保存（`generateUUID` による暗号学的衝突防止）。
    * **明細編集・遡及更新 (`js/ui/tx_edit_controller.js`) - `TransactionEditController`**:
      * 取引編集モーダル（`#modal-edit-tx`）の開閉・初期値セット、過去締め月遡及更新判定、明細更新、明細削除。
+     * **分割計上の一括連動更新**: 同一 `group_id` を持つ前払分割明細の検知、連動確認ダイアログ（YES/NO）、関連全レコードの費目・メモ・タグおよび均等再配分金額のアトミック一括保存。
+     * 編集モーダル内でのタグチップUIおよび統合電卓キーパッド連携。
    * **取引一覧描画 (`js/ui/tx_list_controller.js`) - `TransactionListController`**:
      * 「当月の明細一覧」および「最近の入力」のDOMレンダリング、編集モーダル呼出イベント伝達。全動的出力での `escapeHtml()` 徹底。
    * **集計・ダッシュボード制御 (`js/ui/summary_controller.js`) - `SummaryController`**:
      * 集計タブ（`#tab-summary`）のKPIカード、期間ナビゲーション、ネイティブ年月ピッカー（`showPicker`）、分類軸切替、日別・月別・年別・予算・資産集計表描画。
+     * **タグ別集計・検索ビュー**: `calculateTagSummary` によるタグ別支出・収入集計、インクリメンタル検索フィルター、内訳一覧。
+     * **計上×実態クロス集計マトリクス**: `calculateCrossAccrualActualSummary` による二次元ピボットテーブル（行＝計上分類、列＝実態分類、行計・列計・総合計）描画。
      * 資産分析表（`assets`）における口座確定残高（`summary.confirmed_balances[a.id]`）の正確な反映、およびカテゴリ内訳リストでのカテゴリ名解決（内部ID直接露出の防止）。
-     * 設計書3.5節に基づき `external_assets` 関連の残存コードを完全整理。
    * **グラフ描画専任 (`js/ui/chart_controller.js`) - `ChartController`**:
-     * Chart.jsインスタンスの生成・破棄・再描画（日別・月別・年別バーチャート、予算消化累積軌跡ラインチャート、資産構成ドーナツチャートにおける投資資産合計 `total_investment_assets` の正確な可視化）。
+     * Chart.jsインスタンスの生成・破棄・再描画（日別・月別・年別バーチャート、予算消化累積軌跡ラインチャート、資産構成ドーナツチャート、および上位タグ別支出構成比チャート）。
+     * **ダークテーマ対応**: アクティブなテーマ状態に応じたグリッド線（`rgba(255,255,255,0.1)`）およびフォント色（`#f8fafc`）の動的適応。
    * **マスタ管理制御 (`js/ui/master_controller.js`) - `MasterController`**:
-     * マスタ管理タブ、口座・大項目・中項目・定期ルール・祝日の各一覧描画、追加・編集モーダル（新規作成時の入力 `id` 保存の完全担保、モーダルDOM内の `escapeHtml()` による属性値エスケープ）、祝日一括インポートモーダル、GAS設定マスタ同期。
+     * マスタ管理タブ、口座・大項目・中項目・定期ルール・祝日の各一覧描画、追加・編集モーダル。
+     * **クレジットカード引き落とし設定**: 口座編集モーダルでの締め日（`closing_day`）、引き落とし日（`debit_day`）、引き落とし月オフセット（`debit_month_offset`）、引き落とし元口座（`debit_account_id`）の入力・保存UI。
    * **設定・環境管理 (`js/ui/settings_controller.js`) - `SettingsController`**:
-     * 設定タブ（`#tab-settings`）、GAS接続設定、3分割鍵管理サブカード（PIN変更/WebAuthn PRF暗号化/GAS公開鍵）、年間予算スケーラブルUI・自動試算反映、バックアップJSONエクスポート／インポート（堅牢なJSONパース）。
+     * 設定タブ（`#tab-settings`）、GAS接続設定、3分割鍵管理サブカード（PIN変更/WebAuthn PRF暗号化/GAS公開鍵）、年間予算スケーラブルUI・自動試算反映。
+     * **テーマ設定UI**: `system`（OS追従）/ `light` / `dark` の選択コントロールおよび即時切り替え。
+     * バックアップJSONエクスポート／インポート（堅牢なJSONパース）。
    * **同期・ネットワーク状態監視 (`js/ui/sync_status_controller.js`) - `SyncStatusController`**:
      * オンライン/オフラインバッジ、未同期件数バッジのリアルタイム更新、手動差分同期、リモート全データ強制再取得。
 
@@ -486,7 +583,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 5. **PWAオフラインキャッシュ完全整合性保証 (`sw.js`)**
    * Vanilla ES Modules（ノーバンドラー）アーキテクチャを維持するため、新設される `js/ui/*.js` の全10ファイルを `sw.js` の `ASSETS_TO_CACHE` 配列へ厳格に追加する。
-   * これにより、オフライン環境下でも全UIモジュールが確実にCacheStorageから即座に提供され、画面停止やロード漏れを根絶する。
+   * これにより、オフライン環境下でも全UIモジュールが確実にCacheStorageから即座に提供され、画面停止やロード漏れを根脱する。
 
 ### 4.7 コアエンジン・モジュラーアーキテクチャ（`js/db/` ストレージ層 & `js/logic/` 計算エンジン層のクラス・ファイル分割設計）
 
@@ -506,16 +603,17 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * **ドメインリポジトリ (`js/db/yose_db.js`) - `YoseDB extends StorageEngine`**:
      * `StorageEngine` を継承し、`BackupMerger` と協調してアプリケーションへ統一的なドメインAPIを提供するリポジトリクラス。
      * **平文メタデータ事前フィルタリングによる高速化**: `getTransactions(filter)` において、暗号化エンベロープの外側に付与された平文メタデータ（`target_month`, `sync_status`, `is_deleted`）により合致レコードのみを抽出してからAES-GCM復号を実行。大量データ蓄積時における復号オーバーヘッドを大幅削減。
+     * **未回収立替金・タグ・履歴クエリAPI**: `getUnsettledAdvancePayments()`（未回収立替リスト）、`getUniqueTags()`（既存タグ一覧）、`getMemoHistory()`（メモと直近費目のマップ）、`processCreditCardAutoSettlements()`（クレカ自動相殺振替の一括生成）、`updateInstallmentGroup()`（分割計上の一括連動更新）を提供。
    * **エントリーポイント Facade (`js/db.js`)**:
      * `js/db/*.js` の全公開クラス・定数を再エクスポート（Re-export）し、既存コードおよびテストスイートとの100%後方互換性を保証する。
 
 3. **純粋計算・ビジネスロジック層の分割構成 (`js/logic/` ディレクトリ配下)**
    * **日付・祝日・共通ユーティリティ (`js/logic/date_utils.js`)**:
-     * 日付フォーマット・パース（`formatDate`, `parseDate`, `addMonthsToMonthStr`, `getLastDayOfMonth`）、営業日・祝日判定と補正（`isWeekend`, `isHoliday`, `isBusinessDay`, `adjustDateForHoliday`）、内閣府祝日プリセット＆パーサー（`JAPANESE_HOLIDAYS_PRESET`, `parseHolidayTextOrCsv`, `groupHolidaysByYear`）、暗号学的乱数を用いた高衝突耐性ID生成（`generateUUID`：`crypto.randomUUID()` 活用）、XSS防止エスケープ（`escapeHtml`）。
+     * 日付フォーマット・パース（`formatDate`, `parseDate`, `addMonthsToMonthStr`, `getLastDayOfMonth`）、営業日・祝日判定と補正（`isWeekend`, `isHoliday`, `isBusinessDay`, `adjustDateForHoliday`）、内閣府祝日プリセット＆パーサー（`JAPANESE_HOLIDAYS_PRESET`, `parseHolidayTextOrCsv`, `groupHolidaysByYear`）、クレジットカード締め日・引き落とし日算出（`calculateCreditCardDebitDate`）、暗号学的乱数を用いた高衝突耐性ID生成（`generateUUID`：`crypto.randomUUID()` 活用）、XSS防止エスケープ（`escapeHtml`）。
    * **税計算＆取引生成ファクトリ (`js/logic/transaction_factory.js`)**:
-     * 消費税計算（`calculateTax`）、定期支出予定生成（`generateRecurringTransactions`）、前払費用月次分割償却生成（`createPrepaidAmortizationTransactions`）、立替払い・立替回収生成（`createAdvancePaymentTransactions`, `createAdvanceRepaymentTransaction`）、ポイント併用取引生成（`createPointPaymentTransactions`）。
+     * 消費税計算（`calculateTax`）、定期支出予定生成（`generateRecurringTransactions`）、前払費用月次分割償却生成（`createPrepaidAmortizationTransactions`）、立替払い・立替回収生成（`createAdvancePaymentTransactions`, `createAdvanceRepaymentTransaction`）、ポイント併用取引生成（`createPointPaymentTransactions`）、クレジットカード自動引き落とし振替生成（`createCreditCardSettlementTransaction`）。
    * **残高計算＆多粒度集計エンジン (`js/logic/aggregator.js`)**:
-     * 口座確定・予定残高および当月2軸集計（`calculateBalancesAndSummaries`）、日別集計（`aggregateDailySummaries`）、月別集計（`aggregateMonthlySummaries`：過去月スナップショット形式正規化による型不整合防止）、年別集計（`aggregateYearlySummaries`）、総資産・純資産・負債集計（`calculateTotalAssetSummary`：口座残高保持）。
+     * 口座確定・予定残高および当月2軸集計（`calculateBalancesAndSummaries`）、日別集計（`aggregateDailySummaries`）、月別集計（`aggregateMonthlySummaries`）、年別集計（`aggregateYearlySummaries`）、総資産・純資産・負債集計（`calculateTotalAssetSummary`）、タグ別集計（`calculateTagSummary`）、計上分類×実態分類クロス集計マトリクス（`calculateCrossAccrualActualSummary`）。
    * **年間予算・貯蓄目標＆推移エンジン (`js/logic/budget_engine.js`)**:
      * 段階的丸め計算（`roundTieredAmount`）、前年実績ベースの予算初期値算出（`calculateAnnualBudgetDefaults`）、年間予算消化率・貯蓄達成率・標準ペース判定・費目別進捗計算（`calculateAnnualBudgetProgress`）、12ヶ月累積推移データ生成（`generateAnnualTrajectory`）。
    * **署名直列化のキー順序保証 (`js/crypto.js` & `gas/Code.gs`)**:
@@ -583,6 +681,7 @@ flowchart TD
 ```json
 {
   "schema_version": 2,
+  "theme": "system",
   "updated_at": "2026-10-16T09:30:00Z",
   "accounts": [
     {
@@ -610,6 +709,10 @@ flowchart TD
       "initial_balance": 0,
       "is_asset": false,
       "settlement_account_id": "acc_bank_main",
+      "closing_day": 15,
+      "debit_day": 10,
+      "debit_month_offset": 1,
+      "debit_account_id": "acc_bank_main",
       "sort_order": 3,
       "is_archived": false
     },
@@ -1332,6 +1435,14 @@ flowchart TD
 | **3.15** | バックアップJSONインポート時の非破壊・差分マージ（ORマージ） | `js/db.js`, `js/app.js` | - | IndexedDB全ストア | `test/unit/db.test.js` |
 | **3.16** | 集計・グラフ画面における迅速年月選択（年月ピッカー `showPicker`） | `js/app.js`, `index.html` | - | - | `test/unit/logic.test.js` |
 | **3.17** | 集計分類・実態分類の軸切替UI表記統一 | `js/app.js`, `index.html` | - | - | `test/unit/logic.test.js` |
+| **3.18** | タグのチップUIおよび集計・検索・グラフ表示 | `js/ui/tx_input_controller.js`, `js/ui/summary_controller.js`, `js/ui/chart_controller.js`, `js/logic/aggregator.js` | - | `pending_diffs` (`tags`) | `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
+| **3.19** | メモ入力サジェスチョンおよび費目・中項目の自動連動補完 | `js/ui/tx_input_controller.js`, `js/db/yose_db.js`, `index.html` | - | `pending_diffs` (`memo`) | `test/unit/master_management.test.js` |
+| **3.20** | 立替払い未回収リストおよびワンクリック返済精算 | `js/ui/tx_input_controller.js`, `js/db/yose_db.js`, `js/logic/transaction_factory.js` | `gas/Code.gs` | `pending_diffs` | `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
+| **3.21** | クレジットカード締め日・口座引き落とし日設定および自動引き落とし相殺 | `js/ui/master_controller.js`, `js/ui/coordinator.js`, `js/db/yose_db.js`, `js/logic/date_utils.js` | `gas/Code.gs` | `master_config`, `pending_diffs` | `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
+| **3.22** | 分割計上取引（Installment）の一括連動更新 | `js/ui/tx_edit_controller.js`, `js/db/yose_db.js` | `gas/Code.gs` (`retroactive_update`) | `pending_diffs`, `arch_YYYY-MM` | `test/unit/tx_edit.test.js`, `test/unit/master_management.test.js` |
+| **3.23** | 計上分類×実態分類のクロス集計（マトリクス/ピボット） | `js/ui/summary_controller.js`, `js/logic/aggregator.js`, `index.html` | - | - | `test/unit/logic.test.js` |
+| **3.24** | ダークテーマ対応（システム追従・ライト・ダーク） | `js/ui/coordinator.js`, `js/ui/settings_controller.js`, `js/ui/chart_controller.js`, `css/style.css` | - | `master_config` (`theme`) | `test/unit/master_management.test.js` |
+| **3.25** | 金額入力欄の簡易電卓機能統合（四則演算・8%・10%・税抜統合） | `js/ui/tx_input_controller.js`, `js/ui/tx_edit_controller.js`, `js/logic/transaction_factory.js`, `index.html` | - | `pending_diffs` (`tax_meta`) | `test/unit/logic.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |
