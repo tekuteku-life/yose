@@ -30,6 +30,7 @@ export function calculateTax(baseAmount, taxRate = 0.10, rounding = 'floor') {
 		tax_meta: {
 			input_mode: 'tax_excluded',
 			base_amount: numBase,
+			tax_amount: tax,
 			tax_rate: taxRate,
 			rounding: rounding
 		}

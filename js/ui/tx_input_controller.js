@@ -493,8 +493,12 @@ export class TransactionInputController {
 
 		if (this.calcTaxMeta) {
 			if (taxSummary) taxSummary.style.display = 'block';
-			if (baseEl) baseEl.textContent = `¥${this.calcTaxMeta.base_amount.toLocaleString()}`;
-			if (amtEl) amtEl.textContent = `¥${this.calcTaxMeta.tax_amount.toLocaleString()} (${Math.round(this.calcTaxMeta.tax_rate * 100)}%)`;
+			const base = Number(this.calcTaxMeta.base_amount) || 0;
+			const taxAmt = this.calcTaxMeta.tax_amount !== undefined
+				? Number(this.calcTaxMeta.tax_amount)
+				: (this.calcTaxMeta.base_amount ? Math.round(base * (this.calcTaxMeta.tax_rate || 0)) : 0);
+			if (baseEl) baseEl.textContent = `¥${base.toLocaleString()}`;
+			if (amtEl) amtEl.textContent = `¥${taxAmt.toLocaleString()} (${Math.round((this.calcTaxMeta.tax_rate || 0) * 100)}%)`;
 		} else {
 			if (taxSummary) taxSummary.style.display = 'none';
 		}

@@ -117,6 +117,7 @@ describe('js/logic.js - Unit Tests', () => {
 			const res = calculateTax(999, 0.10, 'floor');
 			assert.equal(res.amount, 1098);
 			assert.equal(res.tax_meta.base_amount, 999);
+			assert.equal(res.tax_meta.tax_amount, 99);
 			assert.equal(res.tax_meta.tax_rate, 0.10);
 			assert.equal(res.tax_meta.rounding, 'floor');
 		});
@@ -125,6 +126,7 @@ describe('js/logic.js - Unit Tests', () => {
 			// base 995: 995 * 0.10 = 99.5 -> round 100 -> total 1095
 			const res = calculateTax(995, 0.10, 'round');
 			assert.equal(res.amount, 1095);
+			assert.equal(res.tax_meta.tax_amount, 100);
 			assert.equal(res.tax_meta.rounding, 'round');
 		});
 
@@ -132,6 +134,7 @@ describe('js/logic.js - Unit Tests', () => {
 			// base 1000 * 0.08 = 80 -> total 1080
 			const res = calculateTax(1000, 0.08, 'floor');
 			assert.equal(res.amount, 1080);
+			assert.equal(res.tax_meta.tax_amount, 80);
 			assert.equal(res.tax_meta.tax_rate, 0.08);
 		});
 
@@ -139,6 +142,7 @@ describe('js/logic.js - Unit Tests', () => {
 			const res = calculateTax('invalid', 0.10, 'floor');
 			assert.equal(res.amount, 0);
 			assert.equal(res.tax_meta.base_amount, 0);
+			assert.equal(res.tax_meta.tax_amount, 0);
 		});
 	});
 
@@ -2034,35 +2038,42 @@ describe('js/logic.js - Unit Tests', () => {
 			assert.equal(tax10.amount, 1100);
 			assert.equal(tax10.tax_meta.tax_rate, 0.10);
 			assert.equal(tax10.tax_meta.base_amount, 1000);
+			assert.equal(tax10.tax_meta.tax_amount, 100);
 
 			// +8%
 			const tax8 = evaluateCalculatorExpression('1000', '+8%', 'floor');
 			assert.equal(tax8.amount, 1080);
 			assert.equal(tax8.tax_meta.tax_rate, 0.08);
+			assert.equal(tax8.tax_meta.tax_amount, 80);
 
 			// inc10% (内税10%: 1100 -> tax 100, base 1000)
 			const inc10 = evaluateCalculatorExpression('1100', 'inc10%', 'floor');
 			assert.equal(inc10.amount, 1100);
 			assert.equal(inc10.base_amount, 1000);
+			assert.equal(inc10.tax_meta.tax_amount, 100);
 
 			// Keypad button data attributes: add10, add8, sub10, sub8
 			const add10 = evaluateCalculatorExpression('2000', 'add10', 'floor');
 			assert.equal(add10.amount, 2200);
 			assert.equal(add10.result, 2200);
 			assert.equal(add10.tax_meta.base_amount, 2000);
+			assert.equal(add10.tax_meta.tax_amount, 200);
 
 			const sub10 = evaluateCalculatorExpression('2200', 'sub10', 'floor');
 			assert.equal(sub10.amount, 2200);
 			assert.equal(sub10.result, 2200);
 			assert.equal(sub10.base_amount, 2000);
+			assert.equal(sub10.tax_meta.tax_amount, 200);
 
 			const add8 = evaluateCalculatorExpression('1000', 'add8', 'floor');
 			assert.equal(add8.amount, 1080);
 			assert.equal(add8.result, 1080);
+			assert.equal(add8.tax_meta.tax_amount, 80);
 
 			const sub8 = evaluateCalculatorExpression('1080', 'sub8', 'floor');
 			assert.equal(sub8.amount, 1080);
 			assert.equal(sub8.result, 1080);
+			assert.equal(sub8.tax_meta.tax_amount, 80);
 		});
 
 		it('handles division by zero and malformed input safely without crashing', () => {

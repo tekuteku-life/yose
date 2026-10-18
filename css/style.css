@@ -3,6 +3,7 @@
  */
 
 :root {
+	color-scheme: light;
 	--primary: #2563eb;
 	--primary-hover: #1d4ed8;
 	--primary-light: #dbeafe;
@@ -24,6 +25,7 @@
 }
 
 [data-theme="dark"] {
+	color-scheme: dark;
 	--primary: #3b82f6;
 	--primary-hover: #60a5fa;
 	--primary-light: #1e293b;
@@ -316,12 +318,12 @@ header {
 	padding: 12px;
 	border: 1px solid var(--border);
 	border-radius: 8px;
-	background: #fff;
+	background: var(--bg-card);
 }
 
 .tx-item.planned {
 	border-style: dashed;
-	background: #fafafa;
+	background: var(--bg-main);
 }
 
 .tx-info {
@@ -355,7 +357,7 @@ header {
 /* Mode selector */
 .mode-tabs {
 	display: flex;
-	background: #f1f5f9;
+	background: var(--bg-hover);
 	padding: 4px;
 	border-radius: 8px;
 	margin-bottom: 12px;
@@ -375,7 +377,7 @@ header {
 }
 
 .mode-tab-btn.active {
-	background: #fff;
+	background: var(--bg-card);
 	color: var(--primary);
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
@@ -400,7 +402,7 @@ header {
 }
 
 .modal {
-	background: #fff;
+	background: var(--bg-card);
 	border-radius: var(--radius);
 	max-width: 500px;
 	width: 100%;
@@ -455,7 +457,7 @@ header {
 
 .tx-item.clickable:hover {
 	border-color: var(--primary);
-	background-color: #f0f7ff;
+	background-color: var(--bg-hover);
 	transform: translateY(-1px);
 	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
@@ -600,7 +602,7 @@ header {
 }
 
 .summary-table th {
-	background: #f8fafc;
+	background: var(--bg-hover);
 	color: var(--text-muted);
 	font-weight: 600;
 	position: sticky;
@@ -608,7 +610,12 @@ header {
 }
 
 .summary-table tr:hover td {
-	background: #f8fafc;
+	background: var(--bg-hover);
+}
+
+.summary-category-header td {
+	background: var(--bg-hover);
+	color: var(--text-main);
 }
 
 .summary-table .col-num {
@@ -650,9 +657,9 @@ header {
 }
 
 .security-banner.unprotected {
-	background: #f1f5f9;
-	color: #475569;
-	border: 1px solid #e2e8f0;
+	background: var(--bg-hover);
+	color: var(--text-muted);
+	border: 1px solid var(--border);
 }
 
 /* Auth Screen Full-Page Overlay */
@@ -726,7 +733,8 @@ header {
 
 .holiday-year-group summary {
 	padding: 10px 14px;
-	background: #f8fafc;
+	background: var(--bg-card);
+	color: var(--text-main);
 	cursor: pointer;
 	font-weight: 600;
 	user-select: none;
@@ -736,7 +744,7 @@ header {
 }
 
 .holiday-year-group[open] summary {
-	background: var(--primary-light);
+	background: var(--bg-hover);
 	color: var(--primary);
 	border-bottom: 1px solid var(--border);
 }

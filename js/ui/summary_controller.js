@@ -948,7 +948,7 @@ export class SummaryController {
 					</tr>
 				</thead>
 				<tbody>
-					<tr style="background: #f8fafc; font-weight: 700;">
+					<tr class="summary-category-header" style="font-weight: 700;">
 						<td colspan="4">流動資産 (預貯金・現金等)</td>
 					</tr>
 					${liquidAccounts.map(a => {
@@ -963,7 +963,7 @@ export class SummaryController {
 							</tr>
 						`;
 					}).join('') || '<tr><td colspan="4" style="color:var(--text-muted); text-align:center;">登録なし</td></tr>'}
-					<tr style="background: #f8fafc; font-weight: 700;">
+					<tr class="summary-category-header" style="font-weight: 700;">
 						<td colspan="4">投資資産 (証券・投信・NISA等)</td>
 					</tr>
 					${investmentAccounts.map(a => {
@@ -990,7 +990,7 @@ export class SummaryController {
 							</tr>
 						`;
 					}).join('')}
-					<tr style="background: #f8fafc; font-weight: 700;">
+					<tr class="summary-category-header" style="font-weight: 700;">
 						<td colspan="4">負債・立替金等</td>
 					</tr>
 					<tr>

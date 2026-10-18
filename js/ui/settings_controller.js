@@ -204,7 +204,6 @@ export class SettingsController {
 				alert(`公開鍵登録エラー: ${err.message}`);
 			}
 		};
-		document.getElementById('btn-register-initial-key-gas')?.addEventListener('click', registerInitialKeyHandler);
 		document.getElementById('btn-register-key-gas-direct')?.addEventListener('click', registerInitialKeyHandler);
 
 		// Toggle key details

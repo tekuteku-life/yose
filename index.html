@@ -124,7 +124,7 @@
 					<div class="form-group" id="group-normal-amount">
 						<label class="form-label" for="input-amount">
 							金額 (円)
-							<button type="button" id="btn-open-tax-calc" class="btn btn-secondary btn-sm" style="float: right;">🧮 税抜計算</button>
+							<button type="button" id="btn-open-tax-calc" class="btn btn-secondary btn-sm" style="float: right;">🧮 簡易電卓</button>
 						</label>
 						<input type="number" id="input-amount" class="form-control" placeholder="例: 1500" min="0" step="1">
 					</div>
@@ -495,8 +495,7 @@
 					<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px;">
 						認証鍵（Ed25519 + WebAuthn + At-Rest AES-GCM）は正常に設定されています。
 					</p>
-					<div style="display: flex; gap: 8px; flex-wrap: wrap;">
-						<button id="btn-register-initial-key-gas" class="btn btn-primary btn-sm">⚡ GASへ公開鍵を一発自動登録</button>
+					<div>
 						<button id="btn-toggle-key-details" class="btn btn-secondary btn-sm">⚙️ 鍵管理の詳細を表示</button>
 					</div>
 				</div>
@@ -553,6 +552,9 @@
 							<button id="btn-register-key-gas-direct" class="btn btn-primary btn-sm">⚡ GASへワンクリック登録</button>
 							<button id="btn-copy-public-key" class="btn btn-secondary btn-sm">公開鍵をコピー</button>
 							<button id="btn-generate-key" class="btn btn-secondary btn-sm">新しい鍵ペアを生成</button>
+						</div>
+						<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">
+							※ ワンクリック登録が有効なのは、GAS側のスクリプトプロパティ（<code>USER_PUBLIC_KEYS</code>）が未設定（初回プロビジョニング前）の場合のみです。すでに設定済みの場合はGAS側で直接更新してください。
 						</div>
 					</div>
 				</div>
@@ -799,7 +801,7 @@
 				<div class="form-group">
 					<label class="form-label" for="edit-tx-amount">
 						金額 (円)
-						<button type="button" id="btn-edit-open-tax-calc" class="btn btn-secondary btn-sm" style="float: right;">🧮 税抜計算</button>
+						<button type="button" id="btn-edit-open-tax-calc" class="btn btn-secondary btn-sm" style="float: right;">🧮 簡易電卓</button>
 					</label>
 					<input type="number" id="edit-tx-amount" class="form-control" required min="0" step="1">
 				</div>
