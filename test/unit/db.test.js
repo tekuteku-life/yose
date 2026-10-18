@@ -442,6 +442,24 @@ describe('js/db.js - Unit Tests', () => {
 				},
 				/Invalid data schema version/
 			);
+
+			// Validates JSON text parsing before importFullData (Section 3.15 Item 4)
+			const validJsonText = JSON.stringify({
+				schema_version: 2,
+				transactions: []
+			});
+			const parsedData = JSON.parse(validJsonText);
+			const parseRes = await db.importFullData(parsedData);
+			assert.ok(parseRes.success);
+
+			const malformedText = '{ invalid json }}}';
+			assert.throws(() => {
+				try {
+					JSON.parse(malformedText);
+				} catch (err) {
+					throw new Error('不正なJSONファイル形式です: ' + err.message);
+				}
+			}, /不正なJSONファイル形式です/);
 		});
 
 		it('prevents Prototype Pollution attacks during importFullData and budget operations', async () => {

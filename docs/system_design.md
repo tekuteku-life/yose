@@ -324,6 +324,8 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
      * 過去締め月の月次集計（`monthly_summaries`）を月キー（`YYYY-MM`）でマージ。
 3. **処理結果の通知**
    * インポート完了時、追加された取引件数、更新された取引件数、追加された口座・費目・祝日数等の詳細なマージ統計をダイアログ表示し、ユーザーが差分取り込み結果を明確に確認できる設計とする。
+4. **堅牢なパースと例外処理**
+   * ファイル入力ハンドラにおいて、テキスト読み出し（`file.text()`）後に必ず `JSON.parse(text)` によるオブジェクト復元を実施してから `db.importFullData(data)` へ渡すこと。不正なJSONや破損ファイルの場合はわかりやすいエラーダイアログを表示し、クラッシュを完全に防止する。
 
 ### 3.16 集計・グラフ画面における迅速年月選択（年月ピッカー）要件
 
@@ -438,6 +440,48 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
      * **③ ☁️ GAS登録用 Ed25519 公開鍵管理 (GAS Public Key)**:
        * 公開鍵Base64テキストエリア
        * アクションボタン: `[⚡ GASへワンクリック登録]`, `[公開鍵をコピー]`, `[新しい鍵ペアを生成]`
+
+### 4.6 モジュラーUIアーキテクチャ（AppCoordinator & UIコンポーネントコントローラー分割設計）
+
+1. **背景と課題（God Class `AppController` の解消）**
+   * 単一ファイル `js/app.js` および単一クラス `AppController` に約3,870行の処理（認証ゲート、入力フォーム制御、税額電卓、編集モーダル、集計ダッシュボード、Chart.js描画、マスタ管理5種、設定画面、PWAバージョン確認等）が集中し、単一責任の原則（SRP）を逸脱して保守性・可読性・テスト容易性を阻害していた。
+   * これを全面的に刷新し、**調停者パターン（Mediator / Coordinator Pattern）** に基づく高凝集・疎結合なモジュラーアーキテクチャへと分割・再編する。
+
+2. **モジュール構成と責務分離 (`js/ui/` ディレクトリ配下)**
+   * **全体調停 (`js/ui/coordinator.js`) - `AppCoordinator`**:
+     * アプリケーション全体のライフサイクル管理、共有状態（`currentMonth`, `selectedYear`, `analyticsTarget`, `useActualCategoryAxis` 等）の一元保持。
+     * 各コンポーネントコントローラーのインスタンス化と依存性注入（DI: `db`, `syncManager`, コールバック関数群）。
+     * コンポーネント間連携の調停（イベント通知 ➔ 画面全体の更新 `refreshAllViews()` や特定モーダルの展開）。
+   * **認証・セキュリティゲート (`js/ui/auth_controller.js`) - `AuthController`**:
+     * 起動時ロック画面（`#auth-screen`）、WebAuthn/PIN認証ゲートの制御、秘密鍵アンラップ、PINロック/解除、平文復帰、アクティブセッション破棄。
+   * **取引入力制御 (`js/ui/tx_input_controller.js`) - `TransactionInputController`**:
+     * 取引入力フォーム（通常・ポイント・定期・前払・立替の5モード）、動的フィールド切替、マスタドロップダウン生成、税額計算モーダル連携、新規取引保存。
+   * **明細編集・遡及更新 (`js/ui/tx_edit_controller.js`) - `TransactionEditController`**:
+     * 取引編集モーダル（`#modal-edit-tx`）の開閉・初期値セット、過去締め月遡及更新判定、明細更新、明細削除。
+   * **取引一覧描画 (`js/ui/tx_list_controller.js`) - `TransactionListController`**:
+     * 「当月の明細一覧」および「最近の入力」のDOMレンダリング、編集モーダル呼出イベント伝達。
+   * **集計・ダッシュボード制御 (`js/ui/summary_controller.js`) - `SummaryController`**:
+     * 集計タブ（`#tab-summary`）のKPIカード、期間ナビゲーション、ネイティブ年月ピッカー（`showPicker`）、分類軸切替、日別・月別・年別・予算・資産集計表描画。
+   * **グラフ描画専任 (`js/ui/chart_controller.js`) - `ChartController`**:
+     * Chart.jsインスタンスの生成・破棄・再描画（日別・月別・年別バーチャート、予算消化累積軌跡ラインチャート、資産構成チャート）。
+   * **マスタ管理制御 (`js/ui/master_controller.js`) - `MasterController`**:
+     * マスタ管理タブ、口座・大項目・中項目・定期ルール・祝日・資産の各一覧描画、追加・編集モーダル、祝日一括インポートモーダル、GAS設定マスタ同期。
+   * **設定・環境管理 (`js/ui/settings_controller.js`) - `SettingsController`**:
+     * 設定タブ（`#tab-settings`）、GAS接続設定、3分割鍵管理サブカード（PIN/WebAuthn/GAS公開鍵）、年間予算スケーラブルUI・自動試算反映、バックアップJSONエクスポート／インポート（堅牢なJSONパース）。
+   * **同期・ネットワーク状態監視 (`js/ui/sync_status_controller.js`) - `SyncStatusController`**:
+     * オンライン/オフラインバッジ、未同期件数バッジのリアルタイム更新、手動差分同期、リモート全データ強制再取得。
+
+3. **エントリーポイント (`js/app.js`) の軽量Facade化**
+   * `js/app.js` は `AppCoordinator` をラップして従来の `AppController` クラスとして公開し、ブラウザ起動コード（DOMReady監視・インスタンス化）を提供する軽量なエントリーポイント（Facade）とする。
+   * これにより `index.html`（`<script type="module" src="js/app.js"></script>`）および既存コードとの100%の後方互換性を保証する。
+
+4. **依存関係の有向非巡回グラフ (DAG) と循環参照の完全防止**
+   * 各サブコントローラー同士は絶対に直接 `import` せず、すべての相互作用は `AppCoordinator` が仲介する。
+   * これにより、Vanilla ES Modules環境下におけるモジュール循環依存による実行時 `undefined` エラーを100%防止する。
+
+5. **PWAオフラインキャッシュ完全整合性保証 (`sw.js`)**
+   * Vanilla ES Modules（ノーバンドラー）アーキテクチャを維持するため、新設される `js/ui/*.js` の全10ファイルを `sw.js` の `ASSETS_TO_CACHE` 配列へ厳格に追加する。
+   * これにより、オフライン環境下でも全UIモジュールが確実にCacheStorageから即座に提供され、画面停止やロード漏れを根絶する。
 
 ---
 
@@ -1202,6 +1246,7 @@ flowchart TD
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |
 | **4.4** | 決定論的User IDによるPasskey上書き・更新（1Password等重複防止） | `js/crypto.js`, `js/app.js`, `index.html` | - | `security_keys` (`webauthn_vault`) | `test/unit/crypto.test.js` |
 | **4.5** | 設定画面におけるセキュリティ・鍵管理操作の明確なグルーピングと視覚的分離 | `js/app.js`, `index.html` | - | `security_keys` | `test/unit/crypto.test.js` |
+| **4.6** | モジュラーUIアーキテクチャ（AppCoordinator調停者 & 9コンポーネントコントローラー分割） | `js/app.js`, `js/ui/*.js`, `sw.js` | - | - | `test/system/e2e_scenario.test.js`, `npm test` |
 
 ### 8.2 設計整合性および仕様乖離監査結果
 1. **仕様乖離の有無**: 要件定義（第1章〜第5章）と設計図・開発注意点（第6章〜第7章）の間で用語、データスキーマ、フローの乖離がないことを確認済み。

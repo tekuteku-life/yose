@@ -2,7 +2,7 @@
  * Yoseatsume Kakeibo - Service Worker (Offline Cache Control & Forced Update)
  */
 
-const CACHE_NAME = 'yose-cache-v1.1.0';
+const CACHE_NAME = 'yose-cache-v1.2.0';
 const ASSETS_TO_CACHE = [
 	'./',
 	'./index.html',
@@ -13,6 +13,16 @@ const ASSETS_TO_CACHE = [
 	'./js/crypto.js',
 	'./js/sync.js',
 	'./js/version.js',
+	'./js/ui/coordinator.js',
+	'./js/ui/auth_controller.js',
+	'./js/ui/sync_status_controller.js',
+	'./js/ui/chart_controller.js',
+	'./js/ui/tx_list_controller.js',
+	'./js/ui/tx_edit_controller.js',
+	'./js/ui/tx_input_controller.js',
+	'./js/ui/summary_controller.js',
+	'./js/ui/master_controller.js',
+	'./js/ui/settings_controller.js',
 	'./manifest.json'
 ];
 
