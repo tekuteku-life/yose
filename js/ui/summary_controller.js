@@ -128,6 +128,18 @@ export class SummaryController {
 			this.coordinator.txListController.renderMonthTransactions();
 		});
 
+		document.getElementById('select-category-filter')?.addEventListener('change', () => {
+			this.coordinator.txListController.renderMonthTransactions();
+		});
+
+		document.getElementById('select-tag-filter')?.addEventListener('change', () => {
+			this.coordinator.txListController.renderMonthTransactions();
+		});
+
+		document.getElementById('input-tx-search')?.addEventListener('input', () => {
+			this.coordinator.txListController.renderMonthTransactions();
+		});
+
 		// Recurring generation button
 		document.getElementById('btn-generate-recurring')?.addEventListener('click', async () => {
 			await this.handleGenerateRecurring();
@@ -1024,14 +1036,22 @@ export class SummaryController {
 
 		const entries = Object.entries(categoriesData || {});
 		if (entries.length === 0) {
+			this.chartController.renderChartForCategoryBreakdown([]);
 			list.innerHTML = '<div style="color: var(--text-muted); padding: 12px; text-align: center;">内訳データはありません</div>';
 			return;
 		}
 
-		const totalExpense = entries.reduce((sum, [, data]) => sum + (data.total || 0), 0);
+		const sortedEntries = entries.sort((a, b) => (b[1].total || 0) - (a[1].total || 0));
+		const totalExpense = sortedEntries.reduce((sum, [, data]) => sum + (data.total || 0), 0);
 
-		list.innerHTML = entries
-			.sort((a, b) => (b[1].total || 0) - (a[1].total || 0))
+		const chartItems = sortedEntries.map(([catId, data]) => ({
+			id: catId,
+			name: catMap.get(catId) || catId,
+			amount: data.total || 0
+		}));
+		this.chartController.renderChartForCategoryBreakdown(chartItems);
+
+		list.innerHTML = sortedEntries
 			.map(([catId, data]) => {
 				const amt = data.total || 0;
 				const pct = totalExpense > 0 ? Math.round((amt / totalExpense) * 1000) / 10 : 0;
