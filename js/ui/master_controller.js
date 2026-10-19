@@ -500,7 +500,7 @@ export class MasterController {
 
 			document.getElementById('form-master-account')?.addEventListener('submit', async (e) => {
 				e.preventDefault();
-				const id = document.getElementById('m-acc-id').value.trim();
+				const id = document.getElementById('m-acc-id')?.value.trim() || item?.id || ('acc_' + Date.now().toString(36));
 				const name = document.getElementById('m-acc-name').value.trim();
 				const accType = document.getElementById('m-acc-type').value;
 				const initBal = Number(document.getElementById('m-acc-init-bal').value) || 0;
@@ -548,6 +548,7 @@ export class MasterController {
 					};
 					config.accounts.push(targetAccount);
 				} else {
+					item.id = item.id || id;
 					item.name = name;
 					item.type = accType;
 					item.initial_balance = initBal;
@@ -599,7 +600,7 @@ export class MasterController {
 
 			document.getElementById('form-master-category')?.addEventListener('submit', async (e) => {
 				e.preventDefault();
-				const id = document.getElementById('m-cat-id').value.trim();
+				const id = document.getElementById('m-cat-id')?.value.trim() || item?.id || ('cat_' + Date.now().toString(36));
 				const name = document.getElementById('m-cat-name').value.trim();
 				const catType = document.getElementById('m-cat-type').value;
 
@@ -614,6 +615,7 @@ export class MasterController {
 						subcategories: []
 					});
 				} else {
+					item.id = item.id || id;
 					item.name = name;
 					item.type = catType;
 				}
@@ -643,7 +645,7 @@ export class MasterController {
 
 			document.getElementById('form-master-subcategory')?.addEventListener('submit', async (e) => {
 				e.preventDefault();
-				const id = document.getElementById('m-sub-id').value.trim();
+				const id = document.getElementById('m-sub-id')?.value.trim() || item?.id || ('sub_' + Date.now().toString(36));
 				const name = document.getElementById('m-sub-name').value.trim();
 
 				if (parentItem) {
@@ -656,6 +658,7 @@ export class MasterController {
 							is_archived: false
 						});
 					} else {
+						item.id = item.id || id;
 						item.name = name;
 					}
 				}
@@ -731,7 +734,7 @@ export class MasterController {
 
 			document.getElementById('form-master-recurring')?.addEventListener('submit', async (e) => {
 				e.preventDefault();
-				const id = document.getElementById('m-rec-id').value.trim();
+				const id = document.getElementById('m-rec-id')?.value.trim() || item?.id || ('rec_' + Date.now().toString(36));
 				const name = document.getElementById('m-rec-name').value.trim();
 				const recType = document.getElementById('m-rec-type').value;
 				const amount = Number(document.getElementById('m-rec-amount').value) || 0;
@@ -761,6 +764,7 @@ export class MasterController {
 						subcategory_id: null
 					});
 				} else {
+					item.id = item.id || id;
 					item.name = name;
 					item.type = recType;
 					item.amount = amount;

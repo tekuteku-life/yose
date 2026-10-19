@@ -1055,11 +1055,12 @@ export class SummaryController {
 					</tr>
 					${liabilityAccounts.map(a => {
 						const bal = totalAssetSummary.confirmed_balances?.[a.id] || 0;
+						const formattedBal = `${bal < 0 ? '-' : ''}¥${Math.abs(bal).toLocaleString()}`;
 						return `
 							<tr>
 								<td>${escapeHtml(a.name)}</td>
 								<td>負債 (${escapeHtml(a.type)})</td>
-								<td style="font-weight: 600; color: var(--danger);">¥${bal.toLocaleString()}</td>
+								<td style="font-weight: 600; color: var(--danger);">${formattedBal}</td>
 								<td>-</td>
 							</tr>
 						`;

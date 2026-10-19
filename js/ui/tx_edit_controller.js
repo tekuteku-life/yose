@@ -154,8 +154,8 @@ export class TransactionEditController {
 			const shouldCascade = confirm('この取引は分割計上（または連動グループ）の一部です。\n他の関連する明細も連動更新しますか？\n（YES: 費目・メモ・タグ・金額按分を全期間に連動更新 / NO: この明細のみ修正）');
 			if (shouldCascade) {
 				const groupTxs = await this.db.getTransactionsByGroupId(tx.group_id);
-				const amortCount = groupTxs.filter(t => t.id !== tx.group_id).length || 1;
-				const isMainPayment = tx.id === tx.group_id;
+				const amortCount = groupTxs.filter(t => !t.amortization_meta?.is_payment_record && t.type === 'expense').length || 1;
+				const isMainPayment = Boolean(tx.amortization_meta?.is_payment_record || tx.id === tx.group_id);
 				const newTotal = isMainPayment ? editAmount : (editAmount * amortCount);
 
 				await this.db.updateInstallmentGroup(tx.group_id, {

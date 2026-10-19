@@ -537,6 +537,7 @@ describe('js/crypto.js - Unit Tests', () => {
 			const mockPrfRaw = new Uint8Array(32).fill(99);
 			const mockCredId = new Uint8Array([11, 22, 33]);
 
+			let capturedGetOptions = null;
 			const mockNavWithPrf = {
 				credentials: {
 					create: async () => ({
@@ -551,17 +552,20 @@ describe('js/crypto.js - Unit Tests', () => {
 							}
 						})
 					}),
-					get: async () => ({
-						rawId: mockCredId.buffer,
-						id: bytesToBase64(mockCredId),
-						getClientExtensionResults: () => ({
-							prf: {
-								results: {
-									first: mockPrfRaw.buffer
+					get: async (opts) => {
+						capturedGetOptions = opts;
+						return {
+							rawId: mockCredId.buffer,
+							id: bytesToBase64(mockCredId),
+							getClientExtensionResults: () => ({
+								prf: {
+									results: {
+										first: mockPrfRaw.buffer
+									}
 								}
-							}
-						})
-					})
+							})
+						};
+					}
 				}
 			};
 
@@ -572,6 +576,13 @@ describe('js/crypto.js - Unit Tests', () => {
 			const authRes = await authenticateWithWebAuthn(regRes.credentialId, mockNavWithPrf);
 			assert.equal(authRes.success, true);
 			assert.deepEqual(authRes.prfKeyRaw, mockPrfRaw);
+			assert.ok(Array.isArray(capturedGetOptions.publicKey.allowCredentials));
+			assert.deepEqual(capturedGetOptions.publicKey.allowCredentials[0].transports, ['internal', 'hybrid', 'usb', 'ble', 'nfc']);
+
+			// Discoverable mode (1Password / Cross-platform Passkey Manager compatibility) omits allowCredentials
+			const discRes = await authenticateWithWebAuthn(regRes.credentialId, mockNavWithPrf, { allowDiscoverable: true });
+			assert.equal(discRes.success, true);
+			assert.equal(capturedGetOptions.publicKey.allowCredentials, undefined);
 		});
 
 		it('handles missing credentials or get errors', async () => {

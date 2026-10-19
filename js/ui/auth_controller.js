@@ -51,7 +51,7 @@ export class AuthController {
 		if (!bundle || !isWebAuthnSupported()) {
 			throw new Error('同期済みPasskeyの復元にWebAuthn環境が必要です');
 		}
-		const res = await authenticateWithWebAuthn(bundle.credentialId);
+		const res = await authenticateWithWebAuthn(bundle.credentialId, undefined, { allowDiscoverable: true });
 		const prfKeyRaw = res.prfKeyRaw || res.prfKey || null;
 		const unwrapped = await verifyAndUnwrapPasskeyBundle(bundle, prfKeyRaw);
 
@@ -243,7 +243,7 @@ export class AuthController {
 			if (!hasWebAuthn) return;
 			try {
 				if (errorMsg) errorMsg.style.display = 'none';
-				const res = await authenticateWithWebAuthn(effectiveWebauthnId);
+				const res = await authenticateWithWebAuthn(effectiveWebauthnId, undefined, { allowDiscoverable: true });
 				if (res.success) {
 					const prfKeyRaw = res.prfKeyRaw || res.prfKey || null;
 					const vault = await this.db.getSecurityKey('webauthn_vault');
@@ -263,7 +263,7 @@ export class AuthController {
 						this.db.setEncryptionKey(dmk);
 						this.privateKey = priv;
 						this.isKeyLocked = false;
-						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: effectiveWebauthnId });
+						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: res.credentialId || effectiveWebauthnId });
 						if (authScreen) authScreen.classList.add('hidden');
 						await this.coordinator.finishAppInit();
 						return;
@@ -328,10 +328,6 @@ export class AuthController {
 		document.getElementById('auth-pin-input')?.addEventListener('keydown', (e) => {
 			if (e.key === 'Enter') attemptPinUnlock();
 		});
-
-		if (hasWebAuthn) {
-			setTimeout(() => { attemptWebAuthnUnlock(); }, 300);
-		}
 	}
 
 	async generateNewKeyPair() {

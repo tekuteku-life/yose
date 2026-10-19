@@ -575,7 +575,7 @@ export async function authenticateWithWebAuthn(credentialIdBase64, nav = (typeof
 		}
 	};
 
-	if (credentialIdBase64) {
+	if (credentialIdBase64 && !options.allowDiscoverable) {
 		let credIdBytes;
 		try {
 			credIdBytes = base64ToBytes(credentialIdBase64);
@@ -585,7 +585,8 @@ export async function authenticateWithWebAuthn(credentialIdBase64, nav = (typeof
 		getOptions.publicKey.allowCredentials = [
 			{
 				id: credIdBytes,
-				type: 'public-key'
+				type: 'public-key',
+				transports: ['internal', 'hybrid', 'usb', 'ble', 'nfc']
 			}
 		];
 	}
