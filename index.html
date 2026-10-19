@@ -293,8 +293,8 @@
 
 		<!-- ==================== TAB 2: SUMMARY & GRAPHS ==================== -->
 		<section id="tab-summary" class="tab-panel">
-			<!-- Total Assets & External Assets Summary Cards -->
-			<div class="summary-grid">
+			<!-- Total Assets & External Assets Summary Cards (Visible when target === 'assets') -->
+			<div id="asset-stat-grid" class="summary-grid" style="display: none;">
 				<div class="stat-card">
 					<div class="stat-label">総資産 (流動 + 投資)</div>
 					<div id="stat-total-assets" class="stat-value" style="color: var(--primary);">¥0</div>
@@ -313,16 +313,9 @@
 				</div>
 			</div>
 
-			<!-- Analytics Target & Granularity Controls -->
-			<div class="card" style="padding: 12px 16px;">
-				<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-					<!-- View Target: Cashflow vs Budget vs Assets -->
-					<div class="segmented-control" id="control-view-target">
-						<button type="button" class="segment-btn active" data-target="cashflow">💰 収支分析</button>
-						<button type="button" class="segment-btn" data-target="budget">🎯 予算・進捗</button>
-						<button type="button" class="segment-btn" data-target="assets">🏦 資産残高・推移</button>
-					</div>
-
+			<!-- Granularity & Period Controls -->
+			<div class="card" id="card-period-controls" style="padding: 12px 16px;">
+				<div id="granularity-control-row" style="display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border);">
 					<!-- Granularity: Daily vs Monthly vs Yearly -->
 					<div class="segmented-control" id="control-granularity">
 						<button type="button" class="segment-btn" data-granularity="daily">📅 日別</button>
@@ -332,7 +325,7 @@
 				</div>
 
 				<!-- Period Navigator (Requirement 3.16) -->
-				<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); position: relative;">
+				<div id="period-navigator-row" style="display: flex; justify-content: space-between; align-items: center; position: relative;">
 					<button id="btn-period-prev" class="btn btn-secondary btn-sm">◀ 前へ</button>
 					<div style="display: inline-flex; align-items: center; position: relative;">
 						<span id="period-display" style="font-weight: 700; font-size: 1.15rem; cursor: pointer;" title="クリックして目的の年月へジャンプ">📅 2026-10 ▾</span>
@@ -342,7 +335,7 @@
 				</div>
 			</div>
 
-			<!-- Realtime Cashflow Stats (Target-dependent) -->
+			<!-- Realtime Cashflow Stats (Visible when target === 'cashflow') -->
 			<div id="cashflow-stat-grid" class="summary-grid">
 				<div class="stat-card">
 					<div class="stat-label" id="label-stat-income">確定収入 / 予定込</div>
@@ -426,7 +419,7 @@
 			<!-- Category Changes Breakdown -->
 			<div class="card" id="card-category-breakdown">
 				<div class="card-title">
-					<span>費目別推移・内訳</span>
+					<span id="category-breakdown-title">費目別推移・内訳</span>
 				</div>
 				<div id="category-breakdown-chart-container" class="chart-container" style="height: 240px; position: relative; margin-bottom: 12px; display: none;">
 					<canvas id="category-breakdown-chart"></canvas>
@@ -437,7 +430,7 @@
 			<!-- Tag Analytics & Breakdown (Requirement 3.18) -->
 			<div class="card" id="card-tag-analytics">
 				<div class="card-title">
-					<span>🏷️ タグ別集計・内訳</span>
+					<span id="tag-analytics-title">🏷️ タグ別集計・内訳</span>
 				</div>
 				<div style="margin-bottom: 10px;">
 					<input type="text" id="input-tag-search" class="form-control" placeholder="🔍 タグ名で絞り込み検索...">
@@ -451,7 +444,7 @@
 			<!-- Accrual × Actual Cross-Aggregation Matrix (Requirement 3.23) -->
 			<div class="card" id="card-cross-matrix">
 				<div class="card-title">
-					<span>📊 計上 × 実態 クロス集計マトリクス</span>
+					<span id="cross-matrix-title">📊 計上 × 実態 クロス集計マトリクス</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
 					行方向＝計上分類（予算・目的別）、列方向＝実態分類（モノの性質）の2次元クロス集計表です。
@@ -459,10 +452,10 @@
 				<div id="cross-matrix-table-container" style="overflow-x: auto;"></div>
 			</div>
 
-			<!-- Account Balances Breakdown -->
+			<!-- Account Balances / Expenses / Budget Breakdown -->
 			<div class="card" id="card-account-balances">
 				<div class="card-title">
-					<span>口座別残高</span>
+					<span id="account-balances-title">口座別支出</span>
 				</div>
 				<div id="account-balances-list" class="tx-list"></div>
 			</div>
@@ -634,7 +627,7 @@
 					<button type="button" id="btn-budget-auto-calc" class="btn btn-secondary btn-sm">🪄 前年実績から自動試算反映</button>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-					年間の総支出予算・目標貯蓄額・目標貯蓄率、および各大項目ごとの予算を設定します。集計タブの「🎯 予算・進捗」にて消化ペースや年間推移グラフで進捗を確認できます。
+					年間の総支出予算・目標貯蓄額・目標貯蓄率、および各大項目ごとの予算を設定します。「🎯 予算・実績」タブにて消化ペースや年間推移グラフで進捗を確認できます。
 				</p>
 				<div class="form-row">
 					<div class="form-group" style="flex: 1; min-width: 120px;">

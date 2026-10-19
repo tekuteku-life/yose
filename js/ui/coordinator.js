@@ -138,9 +138,6 @@ export class AppCoordinator {
 				if (analyticsTarget || targetId === 'tab-summary' || targetId === 'tab-cashflow' || targetId === 'tab-budget' || targetId === 'tab-assets') {
 					const resolvedTarget = analyticsTarget || (targetId === 'tab-budget' ? 'budget' : targetId === 'tab-assets' ? 'assets' : this.analyticsTarget || 'cashflow');
 					this.analyticsTarget = resolvedTarget;
-					document.querySelectorAll('#control-view-target .segment-btn').forEach(b => {
-						b.classList.toggle('active', b.dataset.target === resolvedTarget);
-					});
 					const summaryPanel = document.getElementById('tab-summary');
 					if (summaryPanel) summaryPanel.classList.add('active');
 					this.summaryController.renderSummary();

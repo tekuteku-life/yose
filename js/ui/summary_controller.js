@@ -38,20 +38,6 @@ export class SummaryController {
 	}
 
 	setupSummaryView() {
-		// Target toggle: Cashflow vs Budget vs Assets (syncs with top nav tabs)
-		document.querySelectorAll('#control-view-target .segment-btn').forEach(btn => {
-			btn.addEventListener('click', () => {
-				document.querySelectorAll('#control-view-target .segment-btn').forEach(b => b.classList.remove('active'));
-				btn.classList.add('active');
-				const target = btn.dataset.target;
-				this.coordinator.analyticsTarget = target;
-				document.querySelectorAll('.nav-tabs .tab-btn[data-analytics-target]').forEach(tBtn => {
-					tBtn.classList.toggle('active', tBtn.dataset.analyticsTarget === target);
-				});
-				this.renderSummary();
-			});
-		});
-
 		// Granularity toggle: Daily vs Monthly vs Yearly
 		document.querySelectorAll('#control-granularity .segment-btn').forEach(btn => {
 			btn.addEventListener('click', () => {
@@ -62,16 +48,15 @@ export class SummaryController {
 			});
 		});
 
-		// Period Navigator (Requirement 3.16)
+		// Period Navigator (Requirement 3.16 & 3.36)
 		document.getElementById('btn-period-prev')?.addEventListener('click', () => {
 			if (this.coordinator.analyticsTarget === 'budget' || this.coordinator.analyticsGranularity === 'yearly') {
 				this.coordinator.selectedYear = String(Number(this.coordinator.selectedYear) - 1);
-			} else if (this.coordinator.analyticsGranularity === 'daily') {
+				this.coordinator.currentMonth = `${this.coordinator.selectedYear}-${this.coordinator.currentMonth.slice(5, 7)}`;
+			} else {
+				// daily and monthly both shift by 1 month and update selectedYear
 				this.coordinator.currentMonth = addMonthsToMonthStr(this.coordinator.currentMonth, -1);
 				this.coordinator.selectedYear = this.coordinator.currentMonth.slice(0, 4);
-			} else if (this.coordinator.analyticsGranularity === 'monthly') {
-				this.coordinator.selectedYear = String(Number(this.coordinator.selectedYear) - 1);
-				this.coordinator.currentMonth = `${this.coordinator.selectedYear}-${this.coordinator.currentMonth.slice(5, 7)}`;
 			}
 			this.renderSummary();
 		});
@@ -79,12 +64,11 @@ export class SummaryController {
 		document.getElementById('btn-period-next')?.addEventListener('click', () => {
 			if (this.coordinator.analyticsTarget === 'budget' || this.coordinator.analyticsGranularity === 'yearly') {
 				this.coordinator.selectedYear = String(Number(this.coordinator.selectedYear) + 1);
-			} else if (this.coordinator.analyticsGranularity === 'daily') {
+				this.coordinator.currentMonth = `${this.coordinator.selectedYear}-${this.coordinator.currentMonth.slice(5, 7)}`;
+			} else {
+				// daily and monthly both shift by 1 month and update selectedYear
 				this.coordinator.currentMonth = addMonthsToMonthStr(this.coordinator.currentMonth, 1);
 				this.coordinator.selectedYear = this.coordinator.currentMonth.slice(0, 4);
-			} else if (this.coordinator.analyticsGranularity === 'monthly') {
-				this.coordinator.selectedYear = String(Number(this.coordinator.selectedYear) + 1);
-				this.coordinator.currentMonth = `${this.coordinator.selectedYear}-${this.coordinator.currentMonth.slice(5, 7)}`;
 			}
 			this.renderSummary();
 		});
@@ -219,16 +203,21 @@ export class SummaryController {
 	}
 
 	async renderSummary() {
+		const target = this.coordinator.analyticsTarget || 'cashflow';
+		const granularity = this.coordinator.analyticsGranularity || 'monthly';
+
 		const periodDisplay = document.getElementById('period-display');
 		if (periodDisplay) {
-			if (this.coordinator.analyticsTarget === 'budget') {
+			if (target === 'budget') {
 				periodDisplay.textContent = `📅 ${this.coordinator.selectedYear}年 (年間予算・進捗) ▾`;
-			} else if (this.coordinator.analyticsGranularity === 'daily') {
+			} else if (target === 'assets') {
+				periodDisplay.textContent = `📅 ${this.coordinator.currentMonth} (現在残高・推移) ▾`;
+			} else if (granularity === 'daily') {
 				periodDisplay.textContent = `📅 ${this.coordinator.currentMonth} (日別) ▾`;
-			} else if (this.coordinator.analyticsGranularity === 'monthly') {
-				periodDisplay.textContent = `📅 ${this.coordinator.selectedYear}年 (月別) ▾`;
+			} else if (granularity === 'monthly') {
+				periodDisplay.textContent = `📅 ${this.coordinator.currentMonth} (月別推移) ▾`;
 			} else {
-				periodDisplay.textContent = `📅 全期間 (年別推移) ▾`;
+				periodDisplay.textContent = `📅 ${this.coordinator.selectedYear}年 (年別推移) ▾`;
 			}
 		}
 
@@ -243,81 +232,101 @@ export class SummaryController {
 			snapshot?.external_assets || []
 		);
 
-		// Update top asset KPI cards
-		const statTotal = document.getElementById('stat-total-assets');
-		const statLiquid = document.getElementById('stat-liquid-assets');
-		const statExt = document.getElementById('stat-external-assets');
-		const statLiab = document.getElementById('stat-liabilities');
-
-		if (statTotal) statTotal.textContent = `¥${totalAssetSummary.total_net_assets.toLocaleString()}`;
-		if (statLiquid) statLiquid.textContent = `¥${totalAssetSummary.total_liquid_assets.toLocaleString()}`;
-		if (statExt) statExt.textContent = `¥${totalAssetSummary.total_investment_assets.toLocaleString()}`;
-		if (statLiab) statLiab.textContent = `¥${totalAssetSummary.total_liabilities.toLocaleString()}`;
-
-		// Render External Assets breakdown list if element exists
-		const extList = document.getElementById('summary-external-assets-list');
-		if (extList) {
-			this.renderExternalAssetsBreakdown(snapshot?.external_assets || []);
-		}
-
-		// Render Internal Account balances list
-		await this.renderAccountBalances(summary);
-
-		// Branch on view target: Cashflow vs Budget vs Assets
+		// Top KPI card grids: exclusive visibility per tab
+		const assetStatGrid = document.getElementById('asset-stat-grid');
 		const cashflowGrid = document.getElementById('cashflow-stat-grid');
 		const budgetGrid = document.getElementById('budget-stat-grid');
+
+		if (assetStatGrid) assetStatGrid.style.display = target === 'assets' ? 'grid' : 'none';
+		if (cashflowGrid) cashflowGrid.style.display = target === 'cashflow' ? 'grid' : 'none';
+		if (budgetGrid) budgetGrid.style.display = target === 'budget' ? 'grid' : 'none';
+
+		// Update asset KPI cards when target === 'assets'
+		if (target === 'assets') {
+			const statTotal = document.getElementById('stat-total-assets');
+			const statLiquid = document.getElementById('stat-liquid-assets');
+			const statExt = document.getElementById('stat-external-assets');
+			const statLiab = document.getElementById('stat-liabilities');
+
+			if (statTotal) statTotal.textContent = `¥${totalAssetSummary.total_net_assets.toLocaleString()}`;
+			if (statLiquid) statLiquid.textContent = `¥${totalAssetSummary.total_liquid_assets.toLocaleString()}`;
+			if (statExt) statExt.textContent = `¥${totalAssetSummary.total_investment_assets.toLocaleString()}`;
+			if (statLiab) statLiab.textContent = `¥${totalAssetSummary.total_liabilities.toLocaleString()}`;
+		}
+
+		// Cards visibility
+		const cardPeriodControls = document.getElementById('card-period-controls');
+		const granularityRow = document.getElementById('granularity-control-row');
 		const catCard = document.getElementById('card-category-breakdown');
 		const budgetCatCard = document.getElementById('card-budget-category-progress');
+		const tagCard = document.getElementById('card-tag-analytics');
+		const crossCard = document.getElementById('card-cross-matrix');
+		const monthlyOpsCard = document.getElementById('card-monthly-operations');
+		const monthTxListCard = document.getElementById('card-month-tx-list');
+		const chartCard = document.getElementById('card-summary-chart');
+		const breakdownTableCard = document.getElementById('card-breakdown-table');
+		const accountBalancesCard = document.getElementById('card-account-balances');
+
 		const chartTitle = document.getElementById('chart-title');
 		const tableTitle = document.getElementById('table-title');
+		const accountBalancesTitle = document.getElementById('account-balances-title');
 
-		if (this.coordinator.analyticsTarget === 'budget') {
-			if (cashflowGrid) cashflowGrid.style.display = 'none';
-			if (budgetGrid) budgetGrid.style.display = 'grid';
+		// Monthly operations is shown ONLY on cashflow tab
+		if (monthlyOpsCard) monthlyOpsCard.style.display = target === 'cashflow' ? 'block' : 'none';
+
+		// Granularity selector (daily/monthly/yearly) is relevant for cashflow
+		if (granularityRow) granularityRow.style.display = target === 'cashflow' ? 'flex' : 'none';
+
+		// Tag and Cross matrix cards are primarily for cashflow
+		if (tagCard) tagCard.style.display = target === 'cashflow' ? 'block' : 'none';
+		if (crossCard) crossCard.style.display = target === 'cashflow' ? 'block' : 'none';
+		if (monthTxListCard) monthTxListCard.style.display = target === 'cashflow' ? 'block' : 'none';
+
+		if (target === 'budget') {
 			if (catCard) catCard.style.display = 'none';
 			if (budgetCatCard) budgetCatCard.style.display = 'block';
 			if (chartTitle) chartTitle.textContent = `${this.coordinator.selectedYear}年 年間予算・貯蓄目標の進捗推移`;
 			if (tableTitle) tableTitle.textContent = `${this.coordinator.selectedYear}年 月別予算消化・貯蓄実績一覧`;
+			if (accountBalancesTitle) accountBalancesTitle.textContent = '口座別予算・実績';
 			this.renderBudgetAnalytics(transactions, snapshot, config);
-		} else if (this.coordinator.analyticsTarget === 'cashflow') {
-			if (budgetGrid) budgetGrid.style.display = 'none';
+		} else if (target === 'cashflow') {
 			if (budgetCatCard) budgetCatCard.style.display = 'none';
-			if (cashflowGrid) cashflowGrid.style.display = 'grid';
 			if (catCard) catCard.style.display = 'block';
+			if (accountBalancesTitle) accountBalancesTitle.textContent = '口座別支出（収支）';
 
-			if (this.coordinator.analyticsGranularity === 'daily') {
+			if (granularity === 'daily') {
 				if (chartTitle) chartTitle.textContent = `${this.coordinator.currentMonth} 日別収支推移・内訳`;
 				if (tableTitle) tableTitle.textContent = `${this.coordinator.currentMonth} 日別集計表`;
 				this.renderDailyAnalytics(transactions, summary);
-			} else if (this.coordinator.analyticsGranularity === 'monthly') {
-				if (chartTitle) chartTitle.textContent = `${this.coordinator.selectedYear}年 月別収支推移・内訳`;
+			} else if (granularity === 'monthly') {
+				if (chartTitle) chartTitle.textContent = `${this.coordinator.selectedYear}年 月別収支推移 (当月: ${this.coordinator.currentMonth})`;
 				if (tableTitle) tableTitle.textContent = `${this.coordinator.selectedYear}年 月別集計表`;
-				this.renderMonthlyAnalytics(transactions, snapshot);
+				this.renderMonthlyAnalytics(transactions, snapshot, summary);
 			} else {
-				if (chartTitle) chartTitle.textContent = '年別収支推移・貯蓄率推移';
+				if (chartTitle) chartTitle.textContent = `${this.coordinator.selectedYear}年 年別収支推移・貯蓄率推移`;
 				if (tableTitle) tableTitle.textContent = '年次推移集計表';
 				this.renderYearlyAnalytics(transactions, snapshot);
 			}
 		} else {
 			// Assets Target
-			if (budgetGrid) budgetGrid.style.display = 'none';
 			if (budgetCatCard) budgetCatCard.style.display = 'none';
-			if (cashflowGrid) cashflowGrid.style.display = 'none';
 			if (catCard) catCard.style.display = 'none';
 			if (chartTitle) chartTitle.textContent = '資産構成比・内部口座/外部資産内訳';
 			if (tableTitle) tableTitle.textContent = '資産種別・口座別残高一覧';
+			if (accountBalancesTitle) accountBalancesTitle.textContent = '口座別残高';
 			this.renderAssetsAnalytics(totalAssetSummary, config, snapshot?.external_assets || []);
 		}
 
-		// Render Tag Analytics & Breakdown (Requirement 3.18)
-		this.lastTransactions = transactions;
-		this.renderTagAnalytics(transactions);
+		// Render Account Balances / Expenses / Budget Breakdown
+		await this.renderAccountBalances(summary, transactions, config);
 
-		// Render Accrual × Actual Cross Matrix (Requirement 3.23)
-		this.renderCrossMatrix(transactions, config);
-
-		// Render Transactions List for current month
-		await this.coordinator.txListController.renderMonthTransactions();
+		// Render Tag Analytics & Breakdown (when in cashflow)
+		if (target === 'cashflow') {
+			this.lastTransactions = transactions;
+			this.renderTagAnalytics(transactions);
+			this.renderCrossMatrix(transactions, config);
+			await this.coordinator.txListController.renderMonthTransactions();
+		}
 	}
 
 	async applyDrilldownFilter({ accountId = 'all', categoryId = 'all', tag = 'all' } = {}) {
@@ -551,10 +560,10 @@ export class SummaryController {
 		this.chartController.renderChartForDaily(dailyData);
 	}
 
-	renderMonthlyAnalytics(transactions, snapshot) {
+	renderMonthlyAnalytics(transactions, snapshot, summary) {
 		const monthlyData = aggregateMonthlySummaries(transactions, this.coordinator.selectedYear, snapshot?.monthly_summaries || {});
 
-		// Update cashflow stat cards
+		// Update cashflow stat cards: display currentMonth stats with year reference
 		const statInc = document.getElementById('stat-income');
 		const statExp = document.getElementById('stat-expense');
 		const statNet = document.getElementById('stat-net-income');
@@ -564,15 +573,17 @@ export class SummaryController {
 		const lblNet = document.getElementById('label-stat-net');
 		const lblBal = document.getElementById('label-stat-savings-rate');
 
-		if (lblInc) lblInc.textContent = `${this.coordinator.selectedYear}年 年間収入`;
-		if (statInc) statInc.textContent = `¥${monthlyData.total_income.toLocaleString()}`;
-		if (lblExp) lblExp.textContent = `${this.coordinator.selectedYear}年 年間支出`;
-		if (statExp) statExp.textContent = `¥${monthlyData.total_expense.toLocaleString()}`;
-		if (lblNet) lblNet.textContent = `${this.coordinator.selectedYear}年 年間収支差額`;
-		if (statNet) statNet.textContent = `¥${monthlyData.total_net.toLocaleString()}`;
-		const rate = monthlyData.total_income > 0 ? Math.round((monthlyData.total_net / monthlyData.total_income) * 1000) / 10 : 0;
-		if (lblBal) lblBal.textContent = '年間貯蓄率';
-		if (statBal) statBal.textContent = `${rate}%`;
+		if (summary) {
+			if (lblInc) lblInc.textContent = `当月収入 (${this.coordinator.currentMonth})`;
+			if (statInc) statInc.textContent = `¥${summary.income_confirmed.toLocaleString()} / ¥${summary.income_total.toLocaleString()}`;
+			if (lblExp) lblExp.textContent = `当月支出 (${this.coordinator.currentMonth})`;
+			if (statExp) statExp.textContent = `¥${summary.expense_confirmed.toLocaleString()} / ¥${summary.expense_total.toLocaleString()}`;
+			if (lblNet) lblNet.textContent = `当月収支差額 (貯蓄)`;
+			if (statNet) statNet.textContent = `¥${(summary.income_total - summary.expense_total).toLocaleString()}`;
+			if (lblBal) lblBal.textContent = `年間貯蓄率 (${this.coordinator.selectedYear}年)`;
+			const rate = monthlyData.total_income > 0 ? Math.round((monthlyData.total_net / monthlyData.total_income) * 1000) / 10 : 0;
+			if (statBal) statBal.textContent = `${rate}% (確定残高: ¥${Object.values(summary.confirmed_balances).reduce((a, b) => a + b, 0).toLocaleString()})`;
+		}
 
 		// Table
 		const tableContainer = document.getElementById('breakdown-table-container');
@@ -593,9 +604,10 @@ export class SummaryController {
 					<tbody>
 						${rows.map(m => {
 							cumulative += m.net;
+							const isCurrentSelected = m.month === this.coordinator.currentMonth;
 							return `
-								<tr>
-									<td><strong>${m.month}</strong></td>
+								<tr style="${isCurrentSelected ? 'background: var(--bg-hover); font-weight: 700;' : ''}">
+									<td><strong>${m.month}${isCurrentSelected ? ' 📍' : ''}</strong></td>
 									<td style="color: #10b981;">¥${m.income_total.toLocaleString()}</td>
 									<td style="color: var(--danger);">¥${m.expense_total.toLocaleString()}</td>
 									<td style="font-weight: 600; color: ${m.net >= 0 ? '#10b981' : 'var(--danger)'};">
@@ -610,22 +622,9 @@ export class SummaryController {
 			`;
 		}
 
-		// Category breakdown list
-		const combinedCats = {};
-		for (const m of Object.values(monthlyData.months)) {
-			const src = this.coordinator.useActualCategoryAxis ? m.by_actual_category : m.by_category;
-			if (src) {
-				for (const [k, v] of Object.entries(src)) {
-					const val = typeof v === 'number' ? v : (v.total || 0);
-					combinedCats[k] = (combinedCats[k] || 0) + val;
-				}
-			}
-		}
-		const catObj = {};
-		for (const [k, v] of Object.entries(combinedCats)) {
-			catObj[k] = { total: v, total_confirmed: v, total_planned: 0 };
-		}
-		this.renderCategoryBreakdownList(catObj);
+		// Category breakdown list: aggregate for currentMonth in monthly mode to match selected month
+		const catData = summary ? (this.coordinator.useActualCategoryAxis ? summary.by_actual_category : summary.by_category) : {};
+		this.renderCategoryBreakdownList(catData);
 
 		// Chart
 		this.chartController.renderChartForMonthly(monthlyData);
@@ -1139,31 +1138,111 @@ export class SummaryController {
 		});
 	}
 
-	async renderAccountBalances(summary) {
+	async renderAccountBalances(summary, transactions = [], config = null) {
 		const list = document.getElementById('account-balances-list');
 		if (!list) return;
-		const config = await this.db.getMasterConfig();
-		const accounts = config?.accounts || [];
+		const cfg = config || await this.db.getMasterConfig();
+		const accounts = cfg?.accounts || [];
+		const target = this.coordinator.analyticsTarget || 'cashflow';
+		const granularity = this.coordinator.analyticsGranularity || 'monthly';
 
-		list.innerHTML = accounts.map(acc => {
-			const conf = summary.confirmed_balances[acc.id] || 0;
-			const proj = summary.projected_balances[acc.id] || 0;
-			const insInfo = acc.type === 'insurance' && acc.maturity_date
-				? ` | 満期: ${escapeHtml(acc.maturity_date)}`
-				: '';
-			return `
-				<div class="tx-item clickable" data-filter-account="${escapeHtml(acc.id)}" title="タッチしてこの口座の明細一覧を表示">
-					<div class="tx-info">
-						<span class="tx-title">${escapeHtml(acc.name)} <span style="font-size: 0.75rem; color: var(--text-muted);">🔍</span></span>
-						<span class="tx-meta">${escapeHtml(acc.type)}${insInfo}</span>
+		if (target === 'cashflow') {
+			// Filter transactions for relevant period (daily/monthly: currentMonth, yearly: selectedYear)
+			let relevantTxs = transactions;
+			if (granularity === 'yearly') {
+				relevantTxs = transactions.filter(t => !t.is_deleted && (t.target_month || t.date || '').startsWith(this.coordinator.selectedYear));
+			} else {
+				relevantTxs = transactions.filter(t => !t.is_deleted && (t.target_month || t.date || '').slice(0, 7) === this.coordinator.currentMonth);
+			}
+
+			// Calculate expenses and inflows per account
+			const accStats = {};
+			for (const a of accounts) {
+				accStats[a.id] = { expense: 0, income: 0, count: 0 };
+			}
+			for (const tx of relevantTxs) {
+				const amt = Number(tx.amount) || 0;
+				if (tx.type === 'expense' && tx.account_id && accStats[tx.account_id]) {
+					accStats[tx.account_id].expense += amt;
+					accStats[tx.account_id].count++;
+				} else if (tx.type === 'income' && tx.account_id && accStats[tx.account_id]) {
+					accStats[tx.account_id].income += amt;
+					accStats[tx.account_id].count++;
+				}
+			}
+
+			list.innerHTML = accounts.map(acc => {
+				const stat = accStats[acc.id] || { expense: 0, income: 0, count: 0 };
+				const net = stat.income - stat.expense;
+				return `
+					<div class="tx-item clickable" data-filter-account="${escapeHtml(acc.id)}" title="タッチしてこの口座の明細一覧を表示">
+						<div class="tx-info">
+							<span class="tx-title">${escapeHtml(acc.name)} <span style="font-size: 0.75rem; color: var(--text-muted);">🔍</span></span>
+							<span class="tx-meta">${escapeHtml(acc.type)} (${stat.count}件 / 収入: ¥${stat.income.toLocaleString()})</span>
+						</div>
+						<div style="text-align: right;">
+							<div style="font-weight: 700; color: var(--danger);">支出: ¥${stat.expense.toLocaleString()}</div>
+							<div style="font-size: 0.8rem; color: ${net >= 0 ? 'var(--success)' : 'var(--danger)'};">
+								差引: ¥${net.toLocaleString()}
+							</div>
+						</div>
 					</div>
-					<div style="text-align: right;">
-						<div style="font-weight: 700; color: var(--primary);">¥${conf.toLocaleString()}</div>
-						<div style="font-size: 0.8rem; color: var(--text-muted);">予測: ¥${proj.toLocaleString()}</div>
+				`;
+			}).join('');
+		} else if (target === 'budget') {
+			// Annual account expense actuals and monthly average for selectedYear
+			const yearTxs = transactions.filter(t => !t.is_deleted && t.type === 'expense' && (t.target_month || t.date || '').startsWith(this.coordinator.selectedYear));
+			const accExpenses = {};
+			let totalExp = 0;
+			for (const a of accounts) {
+				accExpenses[a.id] = 0;
+			}
+			for (const tx of yearTxs) {
+				if (tx.account_id && accExpenses[tx.account_id] !== undefined) {
+					const amt = Number(tx.amount) || 0;
+					accExpenses[tx.account_id] += amt;
+					totalExp += amt;
+				}
+			}
+
+			list.innerHTML = accounts.map(acc => {
+				const exp = accExpenses[acc.id] || 0;
+				const monthlyAvg = Math.round(exp / 12);
+				const share = totalExp > 0 ? Math.round((exp / totalExp) * 1000) / 10 : 0;
+				return `
+					<div class="tx-item clickable" data-filter-account="${escapeHtml(acc.id)}" title="タッチしてこの口座の明細一覧を表示">
+						<div class="tx-info">
+							<span class="tx-title">${escapeHtml(acc.name)} <span style="font-size: 0.75rem; color: var(--text-muted);">🔍</span></span>
+							<span class="tx-meta">年間構成比: ${share}% / 月割平均: ¥${monthlyAvg.toLocaleString()}/月</span>
+						</div>
+						<div style="text-align: right;">
+							<div style="font-weight: 700; color: var(--primary);">年間支出: ¥${exp.toLocaleString()}</div>
+						</div>
 					</div>
-				</div>
-			`;
-		}).join('');
+				`;
+			}).join('');
+		} else {
+			// Assets: Confirmed and Projected Balances
+			list.innerHTML = accounts.map(acc => {
+				const conf = summary?.confirmed_balances?.[acc.id] || 0;
+				const proj = summary?.projected_balances?.[acc.id] || 0;
+				const insInfo = acc.type === 'insurance' && acc.maturity_date
+					? ` | 満期: ${escapeHtml(acc.maturity_date)}`
+					: '';
+				return `
+					<div class="tx-item clickable" data-filter-account="${escapeHtml(acc.id)}" title="タッチしてこの口座の明細一覧を表示">
+						<div class="tx-info">
+							<span class="tx-title">${escapeHtml(acc.name)} <span style="font-size: 0.75rem; color: var(--text-muted);">🔍</span></span>
+							<span class="tx-meta">${escapeHtml(acc.type)}${insInfo}</span>
+						</div>
+						<div style="text-align: right;">
+							<div style="font-weight: 700; color: var(--primary);">¥${conf.toLocaleString()}</div>
+							<div style="font-size: 0.8rem; color: var(--text-muted);">月末予測: ¥${proj.toLocaleString()}</div>
+						</div>
+					</div>
+				`;
+			}).join('');
+		}
 
 		list.querySelectorAll('.tx-item[data-filter-account]').forEach(item => {
 			item.addEventListener('click', () => {
