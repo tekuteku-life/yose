@@ -440,18 +440,20 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 			assert.equal(updatedCard.debit_account_id, 'acc_bank_main');
 		});
 
-		it('getUnsettledAdvancePayments returns only unsettled advance transactions', async () => {
+		it('getUnsettledAdvancePayments returns unsettled advance transfers (to acc_receivable) and legacy advance_payment records', async () => {
 			await db.putTransactions([
 				{ id: 'adv_1', type: 'advance_payment', amount: 5000, settlement_status: 'unsettled', memo: '立替A', is_deleted: false, date: '2026-10-01', target_month: '2026-10' },
 				{ id: 'adv_2', type: 'advance_payment', amount: 3000, settlement_status: 'settled', memo: '立替B (回収済)', is_deleted: false, date: '2026-10-02', target_month: '2026-10' },
 				{ id: 'adv_3', type: 'advance_payment', amount: 4000, settlement_status: 'unsettled', memo: '立替C (削除)', is_deleted: true, date: '2026-10-03', target_month: '2026-10' },
+				{ id: 'tx_adv_loan_1', type: 'transfer', account_id: 'acc_wallet', to_account_id: 'acc_receivable', amount: 8500, memo: '[立替貸付] 飲み会立替', is_deleted: false, date: '2026-10-05', target_month: '2026-10' },
+				{ id: 'tx_adv_loan_settled', type: 'transfer', account_id: 'acc_wallet', to_account_id: 'acc_receivable', amount: 6000, settlement_status: 'settled', memo: '[立替貸付] 精算済', is_deleted: false, date: '2026-10-06', target_month: '2026-10' },
+				{ id: 'tx_normal_transfer', type: 'transfer', account_id: 'acc_bank_main', to_account_id: 'acc_wallet', amount: 10000, is_deleted: false, date: '2026-10-04', target_month: '2026-10' },
 				{ id: 'tx_normal', type: 'expense', amount: 1000, is_deleted: false, date: '2026-10-04', target_month: '2026-10' }
 			]);
 
 			const unsettled = await db.getUnsettledAdvancePayments();
-			assert.equal(unsettled.length, 1);
-			assert.equal(unsettled[0].id, 'adv_1');
-			assert.equal(unsettled[0].memo, '立替A');
+			assert.equal(unsettled.length, 2);
+			assert.deepEqual(unsettled.map(u => u.id).sort(), ['adv_1', 'tx_adv_loan_1']);
 		});
 
 		it('getUniqueTags returns sorted unique tags list', async () => {
@@ -538,12 +540,22 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 			const groupTxs = txs.filter(t => t.group_id === groupId);
 			const payTx = groupTxs.find(t => t.id === 'pay_1');
 			assert.equal(payTx.amount, 15000);
+			assert.equal(payTx.memo, '[前払一括支払] [変更] 家賃年払');
 
-			const amortTxs = groupTxs.filter(t => t.id.startsWith('amort_'));
+			// Re-editing with existing [前払一括支払] prefix should NOT duplicate the prefix
+			await db.updateInstallmentGroup(groupId, {
+				memo: '[前払一括支払] [変更2] 家賃年払'
+			});
+			const txsAfter = await db.getTransactions({ group_id: groupId });
+			const payTxAfter = txsAfter.find(t => t.id === 'pay_1');
+			assert.equal(payTxAfter.memo, '[前払一括支払] [変更2] 家賃年払');
+
+			const amortTxs = txsAfter.filter(t => t.id.startsWith('amort_'));
 			for (const a of amortTxs) {
 				assert.equal(a.category_id, 'cat_housing');
 				assert.equal(a.subcategory_id, 'sub_rent');
 				assert.equal(a.amount, 5000);
+				assert.equal(a.memo, '[変更2] 家賃年払');
 				assert.ok(a.tags.includes('固定費'));
 			}
 		});

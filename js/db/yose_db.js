@@ -334,8 +334,11 @@ export class YoseDB extends StorageEngine {
 
 	// --- Advance Unsettled Tracking (Requirement 3.20) ---
 	async getUnsettledAdvancePayments() {
-		const txs = await this.getTransactions({ type: 'advance_payment' });
-		return txs.filter(t => t.settlement_status !== 'settled');
+		const txs = await this.getTransactions();
+		return txs.filter(t =>
+			((t.type === 'transfer' && t.to_account_id === 'acc_receivable') || t.type === 'advance_payment') &&
+			t.settlement_status !== 'settled'
+		);
 	}
 
 	// --- Tag Management (Requirement 3.18) ---
@@ -466,6 +469,10 @@ export class YoseDB extends StorageEngine {
 			newTotal = updates.total_amount;
 		}
 
+		const cleanMemo = updates.memo !== undefined
+			? String(updates.memo).replace(/^(\[(?:前払一括支払|前払分割\s*\d+\/\d+)\]\s*)+/, '')
+			: undefined;
+
 		const nowIso = new Date().toISOString();
 		const updatedTxs = [];
 
@@ -476,7 +483,7 @@ export class YoseDB extends StorageEngine {
 					paymentTx.amortization_meta.total_amount = paymentTx.amount;
 				}
 			}
-			if (updates.memo !== undefined) paymentTx.memo = `[前払一括支払] ${updates.memo}`;
+			if (cleanMemo !== undefined) paymentTx.memo = `[前払一括支払] ${cleanMemo}`;
 			if (updates.tags !== undefined) paymentTx.tags = Array.from(new Set([...updates.tags, '前払費用支払']));
 			paymentTx.updated_at = nowIso;
 			paymentTx.sync_status = 'unsynced';
@@ -508,7 +515,7 @@ export class YoseDB extends StorageEngine {
 				if (updates.subcategory_id !== undefined) atx.subcategory_id = updates.subcategory_id;
 				if (updates.actual_category_id !== undefined) atx.actual_category_id = updates.actual_category_id;
 				if (updates.actual_subcategory_id !== undefined) atx.actual_subcategory_id = updates.actual_subcategory_id;
-				if (updates.memo !== undefined) atx.memo = updates.memo;
+				if (cleanMemo !== undefined) atx.memo = cleanMemo;
 				if (updates.tags !== undefined) atx.tags = updates.tags;
 				atx.updated_at = nowIso;
 				atx.sync_status = 'unsynced';
