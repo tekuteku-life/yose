@@ -38,7 +38,10 @@ export {
 	aggregateYearlySummaries,
 	calculateTotalAssetSummary,
 	calculateTagSummary,
-	calculateCrossAccrualActualSummary
+	calculateCrossAccrualActualSummary,
+	formatDoughnutTooltipLabel,
+	resolveTransactionDisplayInfo,
+	filterTransactionsByCriteria
 } from './logic/aggregator.js';
 
 export {

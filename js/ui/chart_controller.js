@@ -1,13 +1,16 @@
 /**
  * Yoseatsume Kakeibo - Chart Visualization Controller
- * Dedicated Chart.js generator for daily, monthly, yearly, budget progress, and assets.
+ * Dedicated Chart.js generator for daily, monthly, yearly, budget progress, category breakdown, tags, and assets.
  */
+
+import { formatDoughnutTooltipLabel } from '../logic.js';
 
 export class ChartController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
 		this.chart = null;
 		this.tagChart = null;
+		this.categoryBreakdownChart = null;
 		this.isDark = false;
 	}
 
@@ -20,6 +23,17 @@ export class ChartController {
 			this.tagChart.destroy();
 			this.tagChart = null;
 		}
+		if (this.categoryBreakdownChart) {
+			this.categoryBreakdownChart.destroy();
+			this.categoryBreakdownChart = null;
+		}
+	}
+
+	destroyMainChart() {
+		if (this.chart) {
+			this.chart.destroy();
+			this.chart = null;
+		}
 	}
 
 	updateThemeMode(isDark) {
@@ -28,6 +42,19 @@ export class ChartController {
 			window.Chart.defaults.color = isDark ? '#94a3b8' : '#64748b';
 			window.Chart.defaults.borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)';
 		}
+	}
+
+	getDoughnutTooltipOptions() {
+		return {
+			callbacks: {
+				label: (context) => {
+					const label = context.label || '';
+					const value = typeof context.parsed === 'number' ? context.parsed : (Number(context.raw) || 0);
+					const datasetValues = context.dataset?.data || [];
+					return formatDoughnutTooltipLabel(label, value, datasetValues);
+				}
+			}
+		};
 	}
 
 	renderChartForDaily(dailyData) {
@@ -45,7 +72,7 @@ export class ChartController {
 			if (fallback) fallback.style.display = 'none';
 			canvas.style.display = 'block';
 
-			this.destroy();
+			this.destroyMainChart();
 			this.chart = new window.Chart(canvas, {
 				type: 'bar',
 				data: {
@@ -83,7 +110,7 @@ export class ChartController {
 			if (fallback) fallback.style.display = 'none';
 			canvas.style.display = 'block';
 
-			this.destroy();
+			this.destroyMainChart();
 			this.chart = new window.Chart(canvas, {
 				type: 'bar',
 				data: {
@@ -120,7 +147,7 @@ export class ChartController {
 			if (fallback) fallback.style.display = 'none';
 			canvas.style.display = 'block';
 
-			this.destroy();
+			this.destroyMainChart();
 			this.chart = new window.Chart(canvas, {
 				type: 'bar',
 				data: {
@@ -158,7 +185,7 @@ export class ChartController {
 			if (fallback) fallback.style.display = 'none';
 			canvas.style.display = 'block';
 
-			this.destroy();
+			this.destroyMainChart();
 			this.chart = new window.Chart(canvas, {
 				type: 'line',
 				data: {
@@ -236,7 +263,7 @@ export class ChartController {
 			if (fallback) fallback.style.display = 'none';
 			canvas.style.display = 'block';
 
-			this.destroy();
+			this.destroyMainChart();
 			this.chart = new window.Chart(canvas, {
 				type: 'doughnut',
 				data: {
@@ -245,13 +272,72 @@ export class ChartController {
 				},
 				options: {
 					responsive: true,
-					maintainAspectRatio: false
+					maintainAspectRatio: false,
+					plugins: {
+						tooltip: this.getDoughnutTooltipOptions()
+					}
 				}
 			});
 		} else if (fallback) {
 			canvas.style.display = 'none';
 			fallback.style.display = 'block';
 			fallback.innerHTML = `<div>総資産: ¥${totalAssetSummary.total_assets.toLocaleString()} (純資産: ¥${totalAssetSummary.total_net_assets.toLocaleString()})</div>`;
+		}
+	}
+
+	renderChartForCategoryBreakdown(categoryItems = []) {
+		const canvas = document.getElementById('category-breakdown-chart');
+		const container = document.getElementById('category-breakdown-chart-container');
+		if (!canvas) return;
+
+		if (this.categoryBreakdownChart) {
+			this.categoryBreakdownChart.destroy();
+			this.categoryBreakdownChart = null;
+		}
+
+		const positiveItems = (categoryItems || []).filter(item => (item.amount || 0) > 0);
+		if (positiveItems.length === 0) {
+			canvas.style.display = 'none';
+			if (container) container.style.display = 'none';
+			return;
+		}
+
+		if (container) container.style.display = 'block';
+		canvas.style.display = 'block';
+
+		const labels = positiveItems.map(item => item.name);
+		const data = positiveItems.map(item => item.amount);
+		const palette = [
+			'#3b82f6', '#10b981', '#f59e0b', '#ef4444',
+			'#8b5cf6', '#ec4899', '#06b6d4', '#84cc16',
+			'#f97316', '#14b8a6', '#6366f1', '#eab308'
+		];
+
+		if (typeof window !== 'undefined' && window.Chart) {
+			this.categoryBreakdownChart = new window.Chart(canvas, {
+				type: 'doughnut',
+				data: {
+					labels,
+					datasets: [{
+						data,
+						backgroundColor: positiveItems.map((_, idx) => palette[idx % palette.length])
+					}]
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					plugins: {
+						legend: {
+							position: 'right',
+							labels: {
+								color: this.isDark ? '#e2e8f0' : '#334155',
+								font: { size: 11 }
+							}
+						},
+						tooltip: this.getDoughnutTooltipOptions()
+					}
+				}
+			});
 		}
 	}
 
@@ -305,11 +391,13 @@ export class ChartController {
 								color: this.isDark ? '#e2e8f0' : '#334155',
 								font: { size: 11 }
 							}
-						}
+						},
+						tooltip: this.getDoughnutTooltipOptions()
 					}
 				}
 			});
 		}
 	}
 }
+
 

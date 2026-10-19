@@ -469,6 +469,52 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * モーダル内には、全データ一括、取引明細、マスタ設定、年間予算、残高スナップショットの各説明文と、ワンクリックダウンロードボタン（`#btn-export-full`, `#btn-export-transactions`, `#btn-export-master`, `#btn-export-budgets`, `#btn-export-snapshot`）を整然と配置。
    * 「📂 JSONインポート (自動判別・差分ORマージ)」ボタンから、上記のどのJSONファイルを指定してもシームレスに判別・マージが行われる統一的UXを実現。
 
+### 3.27 費目別推移・内訳のドーナツグラフ可視化要件
+
+1. **背景と目的**
+   * 従来、「費目別推移・内訳」カード（`#card-category-breakdown`）はテキストベースの構成比・金額リストのみであったため、どの費目が全体の何割を占めているかを直感的に把握しにくかった。
+   * リスト上部にドーナツグラフ（`#category-breakdown-chart`）を追加し、日別・月別・年別の各粒度および「計上分類ベース / 実態分類ベース」の軸切替とリアルタイムに連動する視覚的な内訳チャートを提供する。
+2. **仕様と描画ルール**
+   * `#card-category-breakdown` 内の `#category-breakdown-list` の直前に `<canvas id="category-breakdown-chart">` を格納した `.chart-container`（高さ `240px`）を配置する。
+   * 支出金額が正（`> 0`）の費目を金額の降順でソートしてドーナツグラフを描画する（データが空または合計0円の場合はキャンバスを非表示とする）。
+   * グラフの破棄（`destroy()`）管理およびダークモード時の凡例テキストカラー（`#e2e8f0` / `#334155`）追従を `ChartController` に統合する。
+
+### 3.28 各種ドーナツグラフのタッチ・ホバー時ツールチップへのパーセント（構成比）表示追加要件
+
+1. **対象チャート**
+   * アプリ内のすべてのドーナツグラフ（`type: 'doughnut'`）：
+     1. **費目別内訳ドーナツグラフ** (`#category-breakdown-chart` / `renderChartForCategoryBreakdown`)
+     2. **タグ別集計ドーナツグラフ** (`#tag-chart` / `renderChartForTags`)
+     3. **資産配分ドーナツグラフ** (`#summary-chart` 資産ビュー時 / `renderChartForAssets`)
+2. **ツールチップ表示仕様**
+   * グラフのセグメントをタッチまたはマウスホバーした際のツールチップ（`options.plugins.tooltip.callbacks.label`）において、項目名・金額に加えて全体に対する構成比（小数点第1位まで、例: `食費: ¥45,000 (32.1%)`）を統一フォーマットで表示する。
+   * 計算ロジックは純粋関数または共通ヘルパー（`formatDoughnutTooltipLabel`）として定義し、合計値が `0` の場合のゼロ除算防御（`0%`）を保証する。
+
+### 3.29 明細一覧の表示階層刷新（費目・中項目メイン、メモ・タグ補助表示）要件
+
+1. **背景と目的**
+   * 従来の「当月の明細一覧」（`#month-tx-list`）および「最近の入力」（`#recent-tx-list`）では、メモ（`t.memo`）がメインタイトル（`.tx-title`）として大きく表示され、肝心の「どの費目・中項目か」が表示されていなかった（またはメモ未入力時に `(メモなし)` とだけ表示されていた）。
+   * 家計簿としての視認性を高めるため、**費目（大項目）と中項目をメインタイトル**として表示し、**メモとタグは補助情報**として表示する階層構造へ刷新する。
+2. **表示レイアウト仕様**
+   * **メイン表示（`.tx-title`）**:
+     * 費目マスタおよび中項目マスタから名称とアイコンを解決し、`🏷️ 食費 > 食料品`（中項目がない場合は `🏷️ 食費`、資金移動の場合は `🔄 資金移動・振替`）をメインタイトルとして太字表示する。
+   * **補助表示（`.tx-meta`）**:
+     * 1行目またはメタ情報として日付（`YYYY-MM-DD`）、ステータスバッジ（`確定` / `予定` / `立替` / `ポイント`）を表示。
+     * 補助テキストとして、メモ（入力されている場合のみ `📝 メモ内容`）およびタグ（設定されている場合のみ `🏷️ #タグ1 #タグ2` のチップまたはバッジ形式）を視認性良く併記する。
+   * XSS対策として、費目名・中項目名・メモ・タグのすべてに `escapeHtml()` を適用する。
+
+### 3.30 明細一覧のマルチフィルタリング（費目・タグ・キーワード・状態による絞り込み）要件
+
+1. **背景と目的**
+   * 従来、「当月の明細一覧」（`#month-tx-list`）はステータス（すべて / 確定のみ / 予定のみ）でしか絞り込めず、特定の費目や特定のタグ、あるいはメモのキーワードで明細を探し出すことができなかった。
+2. **フィルタUIと絞り込み仕様**
+   * 当月の明細一覧カードに以下の複合フィルタコントロールを配置する：
+     1. **状態フィルタ (`#select-status-filter`)**: `すべて表示` (`all`) / `確定のみ` (`confirmed`) / `予定のみ` (`planned`)
+     2. **費目フィルタ (`#select-category-filter`)**: `すべての費目` (`all`) ＋ マスタ上の各大項目（計上分類 `category_id` または実態分類 `actual_category_id` が一致する明細を抽出）
+     3. **タグフィルタ (`#select-tag-filter`)**: `すべてのタグ` (`all`) ＋ 当月明細または履歴に存在するタグ一覧（選択したタグを `tags` 配列に含む明細を抽出）
+     4. **キーワード検索 (`#input-tx-search`)**: メモ・費目名・中項目名・タグ名に対する部分一致（大文字小文字区別なし）でのリアルタイム絞り込み
+   * すべてのフィルタ条件は **AND条件** で複合適用され、条件変更時に即座に明細一覧を再描画する（また、絞り込み後の表示件数や合計金額が把握しやすいよう配慮する）。
+
 ---
 
 ## 4. 同期トリガー・通信・セキュリティ要件
@@ -1495,6 +1541,10 @@ flowchart TD
 | **3.24** | ダークテーマ対応（システム追従・ライト・ダーク） | `js/ui/coordinator.js`, `js/ui/settings_controller.js`, `js/ui/chart_controller.js`, `css/style.css` | - | `master_config` (`theme`) | `test/unit/master_management.test.js` |
 | **3.25** | 金額入力欄の簡易電卓機能統合（四則演算・8%・10%・税抜統合） | `js/ui/tx_input_controller.js`, `js/ui/tx_edit_controller.js`, `js/logic/transaction_factory.js`, `index.html` | - | `pending_diffs` (`tax_meta`) | `test/unit/logic.test.js` |
 | **3.26** | 各種データ種別ごとのJSONエクスポート & 自動判別インポート（データポータビリティ強化） | `js/ui/settings_controller.js`, `js/db/yose_db.js`, `js/db/backup_merger.js`, `index.html` | - | IndexedDB全ストア | `test/unit/db.test.js`, `test/unit/master_management.test.js` |
+| **3.27** | 費目別推移・内訳のドーナツグラフ可視化 | `js/ui/summary_controller.js`, `js/ui/chart_controller.js`, `index.html` | - | - | `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
+| **3.28** | 各種ドーナツグラフのタッチ・ホバー時ツールチップへのパーセント（構成比）表示追加 | `js/ui/chart_controller.js`, `js/logic/aggregator.js` | - | - | `test/unit/logic.test.js` |
+| **3.29** | 明細一覧の表示階層刷新（費目・中項目メイン、メモ・タグ補助表示） | `js/ui/tx_list_controller.js`, `js/logic/aggregator.js`, `css/style.css` | - | - | `test/unit/logic.test.js`, `test/unit/tx_edit.test.js` |
+| **3.30** | 明細一覧のマルチフィルタリング（費目・タグ・キーワード・状態による絞り込み） | `js/ui/tx_list_controller.js`, `js/ui/summary_controller.js`, `js/logic/aggregator.js`, `index.html` | - | - | `test/unit/logic.test.js`, `test/unit/tx_edit.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |

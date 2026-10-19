@@ -32,7 +32,10 @@ import {
 	createCreditCardSettlementTransaction,
 	evaluateCalculatorExpression,
 	calculateTagSummary,
-	calculateCrossAccrualActualSummary
+	calculateCrossAccrualActualSummary,
+	formatDoughnutTooltipLabel,
+	resolveTransactionDisplayInfo,
+	filterTransactionsByCriteria
 } from '../../js/logic.js';
 
 describe('js/logic.js - Unit Tests', () => {
@@ -2091,6 +2094,234 @@ describe('js/logic.js - Unit Tests', () => {
 			assert.equal(invalidChars.success, false);
 			assert.equal(invalidChars.amount, 0);
 			assert.equal(invalidChars.error, 'Invalid characters in expression');
+		});
+	});
+
+	describe('Doughnut Chart Tooltip & Transaction List Display / Multi-Filtering (Requirements 3.27–3.30)', () => {
+		it('formatDoughnutTooltipLabel formats slice label, amount, and percentage with zero-division safety', () => {
+			assert.equal(
+				formatDoughnutTooltipLabel('食費', 45000, [45000, 30000, 25000]),
+				'食費: ¥45,000 (45%)'
+			);
+			assert.equal(
+				formatDoughnutTooltipLabel('日用品', 10000, [45000, 10000, 15000]),
+				'日用品: ¥10,000 (14.3%)'
+			);
+			// Zero total safety
+			assert.equal(
+				formatDoughnutTooltipLabel('未分類', 0, [0, 0]),
+				'未分類: ¥0 (0%)'
+			);
+			// Default / empty arguments
+			assert.equal(
+				formatDoughnutTooltipLabel(),
+				'¥0 (0%)'
+			);
+		});
+
+		it('resolveTransactionDisplayInfo resolves category, subcategory, transfer, and fallbacks', () => {
+			const masterConfig = {
+				categories: [
+					{
+						id: 'cat_food',
+						name: '食費',
+						icon: '🍽️',
+						subcategories: [
+							{ id: 'sub_groceries', name: '食料品' }
+						]
+					},
+					{
+						id: 'cat_housing',
+						name: '住居費',
+						icon: '🏠',
+						subcategories: []
+					},
+					{
+						id: 'cat_other',
+						name: 'その他',
+						icon: '📦',
+						subcategories: [
+							{ id: 'sub_cross_nested', name: '別カテゴリ内サブ' }
+						]
+					}
+				],
+				subcategories: [
+					{ id: 'sub_root_item', name: 'ルート中項目' }
+				]
+			};
+
+			// 1. Standard expense with nested subcategory
+			const info1 = resolveTransactionDisplayInfo({
+				type: 'expense',
+				category_id: 'cat_food',
+				subcategory_id: 'sub_groceries',
+				memo: 'スーパー買い出し',
+				tags: ['週末', '自炊']
+			}, masterConfig);
+			assert.equal(info1.primaryTitle, '🍽️ 食費 > 食料品');
+			assert.equal(info1.categoryName, '食費');
+			assert.equal(info1.subcategoryName, '食料品');
+			assert.equal(info1.memo, 'スーパー買い出し');
+			assert.deepEqual(info1.tags, ['週末', '自炊']);
+
+			// 2. Category only (no subcategory)
+			const info2 = resolveTransactionDisplayInfo({
+				type: 'expense',
+				category_id: 'cat_housing',
+				subcategory_id: '',
+				memo: ''
+			}, masterConfig);
+			assert.equal(info2.primaryTitle, '🏠 住居費');
+			assert.equal(info2.subcategoryName, '');
+			assert.equal(info2.memo, '');
+			assert.deepEqual(info2.tags, []);
+
+			// 3. Root subcategory lookup & cross-category nested subcategory lookup
+			const infoRootSub = resolveTransactionDisplayInfo({
+				type: 'expense',
+				category_id: 'cat_housing',
+				subcategory_id: 'sub_root_item'
+			}, masterConfig);
+			assert.equal(infoRootSub.primaryTitle, '🏠 住居費 > ルート中項目');
+
+			const infoCrossSub = resolveTransactionDisplayInfo({
+				type: 'expense',
+				category_id: 'cat_housing',
+				subcategory_id: 'sub_cross_nested'
+			}, masterConfig);
+			assert.equal(infoCrossSub.primaryTitle, '🏠 住居費 > 別カテゴリ内サブ');
+
+			// 4. Transfer transaction
+			const infoTransfer = resolveTransactionDisplayInfo({
+				type: 'transfer',
+				memo: '口座振替',
+				tags: ['定期']
+			}, masterConfig);
+			assert.equal(infoTransfer.primaryTitle, '🔄 資金移動・振替');
+			assert.equal(infoTransfer.memo, '口座振替');
+			assert.deepEqual(infoTransfer.tags, ['定期']);
+
+			// 5. Unclassified / Income default icon fallback
+			const infoIncome = resolveTransactionDisplayInfo({
+				type: 'income',
+				category_id: 'cat_salary_custom',
+				subcategory_id: 'sub_unknown'
+			}, {});
+			assert.equal(infoIncome.primaryTitle, '💰 cat_salary_custom > sub_unknown');
+
+			const infoEmpty = resolveTransactionDisplayInfo();
+			assert.equal(infoEmpty.primaryTitle, '🏷️ 未分類');
+		});
+
+		it('filterTransactionsByCriteria filters by status, category (accrual/actual), tag, and keyword (AND logic)', () => {
+			const masterConfig = {
+				categories: [
+					{
+						id: 'cat_food',
+						name: '食費',
+						icon: '🍽️',
+						subcategories: [{ id: 'sub_groceries', name: '食料品' }]
+					},
+					{
+						id: 'cat_ent',
+						name: '交際費',
+						icon: '🍻',
+						subcategories: [{ id: 'sub_drink', name: '飲み会' }]
+					}
+				]
+			};
+
+			const txs = [
+				{
+					id: 'tx_1',
+					status: 'confirmed',
+					type: 'expense',
+					category_id: 'cat_food',
+					subcategory_id: 'sub_groceries',
+					actual_category_id: 'cat_food',
+					memo: 'イオンで野菜購入',
+					tags: ['自炊', '特売'],
+					is_deleted: false
+				},
+				{
+					id: 'tx_2',
+					status: 'planned',
+					type: 'expense',
+					category_id: 'cat_ent',
+					subcategory_id: 'sub_drink',
+					actual_category_id: 'cat_food', // Actual category is food
+					memo: '歓送迎会ディナー',
+					tags: ['会社', 'イベント'],
+					is_deleted: false
+				},
+				{
+					id: 'tx_3',
+					status: 'confirmed',
+					type: 'transfer',
+					memo: 'メインバンクから財布へ',
+					tags: [],
+					is_deleted: false
+				},
+				{
+					id: 'tx_deleted',
+					status: 'confirmed',
+					type: 'expense',
+					category_id: 'cat_food',
+					memo: '削除済み',
+					is_deleted: true
+				},
+				null
+			];
+
+			// Default (all active)
+			const allActive = filterTransactionsByCriteria(txs, {}, masterConfig);
+			assert.equal(allActive.length, 3);
+
+			// Filter by status
+			const confirmedOnly = filterTransactionsByCriteria(txs, { status: 'confirmed' }, masterConfig);
+			assert.equal(confirmedOnly.length, 2);
+			const plannedOnly = filterTransactionsByCriteria(txs, { status: 'planned' }, masterConfig);
+			assert.equal(plannedOnly.length, 1);
+			assert.equal(plannedOnly[0].id, 'tx_2');
+
+			// Filter by categoryId (matches either category_id OR actual_category_id)
+			const foodTxs = filterTransactionsByCriteria(txs, { categoryId: 'cat_food' }, masterConfig);
+			assert.equal(foodTxs.length, 2); // tx_1 (accrual=food) and tx_2 (actual=food)
+
+			const entTxs = filterTransactionsByCriteria(txs, { categoryId: 'cat_ent' }, masterConfig);
+			assert.equal(entTxs.length, 1);
+			assert.equal(entTxs[0].id, 'tx_2');
+
+			// Filter by tag
+			const tagTxs = filterTransactionsByCriteria(txs, { tag: '自炊' }, masterConfig);
+			assert.equal(tagTxs.length, 1);
+			assert.equal(tagTxs[0].id, 'tx_1');
+
+			// Filter by keyword (matches memo, category name, subcategory name, or tag)
+			const kwMemo = filterTransactionsByCriteria(txs, { keyword: 'イオン' }, masterConfig);
+			assert.equal(kwMemo.length, 1);
+			assert.equal(kwMemo[0].id, 'tx_1');
+
+			const kwSubcat = filterTransactionsByCriteria(txs, { keyword: '飲み会' }, masterConfig);
+			assert.equal(kwSubcat.length, 1);
+			assert.equal(kwSubcat[0].id, 'tx_2');
+
+			const kwTag = filterTransactionsByCriteria(txs, { keyword: 'イベント' }, masterConfig);
+			assert.equal(kwTag.length, 1);
+			assert.equal(kwTag[0].id, 'tx_2');
+
+			// Combined AND filter
+			const combined = filterTransactionsByCriteria(txs, {
+				status: 'confirmed',
+				categoryId: 'cat_food',
+				tag: '特売',
+				keyword: '食料品'
+			}, masterConfig);
+			assert.equal(combined.length, 1);
+			assert.equal(combined[0].id, 'tx_1');
+
+			// Empty call fallback
+			assert.deepEqual(filterTransactionsByCriteria(), []);
 		});
 	});
 });

@@ -417,6 +417,9 @@
 				<div class="card-title">
 					<span>費目別推移・内訳</span>
 				</div>
+				<div id="category-breakdown-chart-container" class="chart-container" style="height: 240px; position: relative; margin-bottom: 12px; display: none;">
+					<canvas id="category-breakdown-chart"></canvas>
+				</div>
 				<div id="category-breakdown-list" class="tx-list"></div>
 			</div>
 
@@ -470,13 +473,24 @@
 
 			<!-- Transactions in Selected Month -->
 			<div class="card">
-				<div class="card-title">
+				<div class="card-title" style="flex-wrap: wrap; gap: 8px;">
 					<span>当月の明細一覧</span>
-					<select id="select-status-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
-						<option value="all">すべて表示</option>
-						<option value="confirmed">確定のみ</option>
-						<option value="planned">予定のみ</option>
-					</select>
+					<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+						<select id="select-status-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
+							<option value="all">すべて表示</option>
+							<option value="confirmed">確定のみ</option>
+							<option value="planned">予定のみ</option>
+						</select>
+						<select id="select-category-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
+							<option value="all">すべての費目</option>
+						</select>
+						<select id="select-tag-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
+							<option value="all">すべてのタグ</option>
+						</select>
+					</div>
+				</div>
+				<div style="margin-bottom: 10px;">
+					<input type="text" id="input-tx-search" class="form-control form-control-sm" placeholder="🔍 費目・中項目・メモ・タグで絞り込み...">
 				</div>
 				<div id="month-tx-list" class="tx-list"></div>
 			</div>
@@ -760,7 +774,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.4.0</span>
+					<span class="badge badge-info" id="badge-current-version">v1.6.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。

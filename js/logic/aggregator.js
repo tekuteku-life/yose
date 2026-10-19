@@ -627,3 +627,129 @@ export function calculateCrossAccrualActualSummary(transactions = [], targetMont
 	};
 }
 
+/**
+ * Format Doughnut Chart Tooltip Label with Amount and Percentage (Requirement 3.28)
+ * @param {string} label - slice label
+ * @param {number} value - slice numeric value
+ * @param {number[]} datasetValues - all values in the dataset
+ * @returns {string} formatted tooltip string e.g. "食費: ¥45,000 (32.1%)"
+ */
+export function formatDoughnutTooltipLabel(label = '', value = 0, datasetValues = []) {
+	const numVal = Math.max(0, Number(value) || 0);
+	const total = (datasetValues || []).reduce((sum, v) => sum + Math.max(0, Number(v) || 0), 0);
+	const pct = total > 0 ? Math.round((numVal / total) * 1000) / 10 : 0;
+	const prefix = label ? `${label}: ` : '';
+	return `${prefix}¥${numVal.toLocaleString()} (${pct}%)`;
+}
+
+/**
+ * Resolve Transaction Primary Title (Category > Subcategory) and Secondary Metadata (Requirement 3.29)
+ * @param {object} tx - transaction record
+ * @param {object} [masterConfig] - master configuration with categories & subcategories
+ * @returns {{ icon: string, categoryName: string, subcategoryName: string, primaryTitle: string, memo: string, tags: string[] }}
+ */
+export function resolveTransactionDisplayInfo(tx = {}, masterConfig = {}) {
+	const categories = masterConfig?.categories || [];
+	const rootSubcategories = masterConfig?.subcategories || [];
+
+	if (tx.type === 'transfer') {
+		return {
+			icon: '🔄',
+			categoryName: '資金移動・振替',
+			subcategoryName: '',
+			primaryTitle: '🔄 資金移動・振替',
+			memo: String(tx.memo || '').trim(),
+			tags: Array.isArray(tx.tags) ? tx.tags.filter(Boolean) : []
+		};
+	}
+
+	const catId = tx.category_id || '';
+	const subId = tx.subcategory_id || '';
+	const catObj = categories.find(c => c.id === catId);
+
+	let subObj = null;
+	if (catObj && Array.isArray(catObj.subcategories)) {
+		subObj = catObj.subcategories.find(s => s.id === subId);
+	}
+	if (!subObj && subId) {
+		subObj = rootSubcategories.find(s => s.id === subId);
+		if (!subObj) {
+			for (const c of categories) {
+				if (Array.isArray(c.subcategories)) {
+					const found = c.subcategories.find(s => s.id === subId);
+					if (found) {
+						subObj = found;
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	const icon = catObj?.icon || (tx.type === 'income' ? '💰' : '🏷️');
+	const categoryName = catObj?.name || (catId || '未分類');
+	const subcategoryName = subObj?.name || (subId || '');
+
+	const primaryTitle = subcategoryName
+		? `${icon} ${categoryName} > ${subcategoryName}`
+		: `${icon} ${categoryName}`;
+
+	return {
+		icon,
+		categoryName,
+		subcategoryName,
+		primaryTitle,
+		memo: String(tx.memo || '').trim(),
+		tags: Array.isArray(tx.tags) ? tx.tags.filter(Boolean) : []
+	};
+}
+
+/**
+ * Filter Transactions by Multi-Criteria: Status, Category, Tag, and Keyword (Requirement 3.30)
+ * @param {Array} transactions - list of transactions
+ * @param {object} [filters]
+ * @param {string} [filters.status='all'] - 'all' | 'confirmed' | 'planned'
+ * @param {string} [filters.categoryId='all'] - 'all' or category ID (matches category_id or actual_category_id)
+ * @param {string} [filters.tag='all'] - 'all' or tag string
+ * @param {string} [filters.keyword=''] - case-insensitive keyword matching memo, category, subcategory, or tags
+ * @param {object} [masterConfig] - master configuration for resolving category/subcategory names during keyword search
+ * @returns {Array} filtered transactions
+ */
+export function filterTransactionsByCriteria(transactions = [], filters = {}, masterConfig = {}) {
+	const status = filters.status || 'all';
+	const categoryId = filters.categoryId || 'all';
+	const tag = filters.tag || 'all';
+	const keyword = String(filters.keyword || '').trim().toLowerCase();
+
+	return (transactions || []).filter(tx => {
+		if (!tx || tx.is_deleted) return false;
+
+		if (status === 'confirmed' && tx.status !== 'confirmed') return false;
+		if (status === 'planned' && tx.status !== 'planned') return false;
+
+		if (categoryId !== 'all') {
+			const matchAccrual = tx.category_id === categoryId;
+			const matchActual = tx.actual_category_id === categoryId;
+			if (!matchAccrual && !matchActual) return false;
+		}
+
+		if (tag !== 'all') {
+			const txTags = Array.isArray(tx.tags) ? tx.tags : [];
+			if (!txTags.includes(tag)) return false;
+		}
+
+		if (keyword) {
+			const display = resolveTransactionDisplayInfo(tx, masterConfig);
+			const searchable = [
+				display.categoryName,
+				display.subcategoryName,
+				display.memo,
+				...display.tags
+			].join(' ').toLowerCase();
+			if (!searchable.includes(keyword)) return false;
+		}
+
+		return true;
+	});
+}
+
