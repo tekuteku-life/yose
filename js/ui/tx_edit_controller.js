@@ -110,13 +110,13 @@ export class TransactionEditController {
 		if (catSelect) catSelect.value = catId;
 		await this.coordinator.txInputController.updateSubcategories(catId, 'edit-tx-subcategory');
 		const subSelect = document.getElementById('edit-tx-subcategory');
-		if (subSelect && tx.subcategory_id) subSelect.value = tx.subcategory_id;
+		if (subSelect) subSelect.value = tx.subcategory_id || '';
 
 		const actCatId = tx.actual_category_id || catId;
 		if (actCatSelect) actCatSelect.value = actCatId;
 		await this.coordinator.txInputController.updateSubcategories(actCatId, 'edit-tx-actual-subcategory');
 		const actSubSelect = document.getElementById('edit-tx-actual-subcategory');
-		if (actSubSelect && tx.actual_subcategory_id) actSubSelect.value = tx.actual_subcategory_id;
+		if (actSubSelect) actSubSelect.value = tx.actual_subcategory_id !== undefined && tx.actual_subcategory_id !== null ? tx.actual_subcategory_id : (tx.subcategory_id || '');
 
 		if (memoInput) memoInput.value = tx.memo || '';
 		if (tagsInput) tagsInput.value = (tx.tags || []).join(', ');
@@ -170,6 +170,7 @@ export class TransactionEditController {
 				});
 
 				document.getElementById('modal-edit-tx')?.classList.remove('active');
+				this.coordinator.showToast('✅ 関連明細を一括修正しました');
 				this.syncManager?.syncPendingDiffs().catch(e => console.log('Sync deferred:', e.message));
 				await this.coordinator.refreshAllViews();
 				return;
@@ -193,6 +194,7 @@ export class TransactionEditController {
 		tx.sync_status = 'unsynced';
 
 		await this.db.putTransaction(tx);
+		this.coordinator.showToast('✅ 明細を修正しました');
 
 		const snapshot = await this.db.getSnapshot();
 		const isPastClosed = snapshot?.last_closed_month && tx.target_month <= snapshot.last_closed_month;
@@ -220,6 +222,7 @@ export class TransactionEditController {
 		tx.updated_at = new Date().toISOString();
 		tx.sync_status = 'unsynced';
 		await this.db.putTransaction(tx);
+		this.coordinator.showToast('🗑️ 明細を削除しました');
 
 		const snapshot = await this.db.getSnapshot();
 		const isPastClosed = snapshot?.last_closed_month && tx.target_month <= snapshot.last_closed_month;

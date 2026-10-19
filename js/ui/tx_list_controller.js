@@ -19,6 +19,21 @@ export class TransactionListController {
 	}
 
 	populateFilterDropdowns(txs = [], masterConfig = {}) {
+		const accSelect = document.getElementById('select-account-filter');
+		if (accSelect) {
+			const currentAcc = accSelect.value || 'all';
+			const accounts = (masterConfig?.accounts || []).filter(a => !a.is_archived);
+			accSelect.innerHTML = [
+				'<option value="all">すべての口座</option>',
+				...accounts.map(a => `<option value="${escapeHtml(a.id)}">🏦 ${escapeHtml(a.name)}</option>`)
+			].join('');
+			if (currentAcc === 'all' || accounts.some(a => a.id === currentAcc)) {
+				accSelect.value = currentAcc;
+			} else {
+				accSelect.value = 'all';
+			}
+		}
+
 		const catSelect = document.getElementById('select-category-filter');
 		if (catSelect) {
 			const currentCat = catSelect.value || 'all';
@@ -123,12 +138,14 @@ export class TransactionListController {
 		this.populateFilterDropdowns(txs, masterConfig);
 
 		const filterStatus = document.getElementById('select-status-filter')?.value || 'all';
+		const filterAccount = document.getElementById('select-account-filter')?.value || 'all';
 		const filterCategory = document.getElementById('select-category-filter')?.value || 'all';
 		const filterTag = document.getElementById('select-tag-filter')?.value || 'all';
 		const filterKeyword = document.getElementById('input-tx-search')?.value || '';
 
 		const filtered = filterTransactionsByCriteria(txs, {
 			status: filterStatus,
+			accountId: filterAccount,
 			categoryId: filterCategory,
 			tag: filterTag,
 			keyword: filterKeyword

@@ -515,6 +515,82 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
      4. **キーワード検索 (`#input-tx-search`)**: メモ・費目名・中項目名・タグ名に対する部分一致（大文字小文字区別なし）でのリアルタイム絞り込み
    * すべてのフィルタ条件は **AND条件** で複合適用され、条件変更時に即座に明細一覧を再描画する（また、絞り込み後の表示件数や合計金額が把握しやすいよう配慮する）。
 
+### 3.31 中項目を選択しない（費目のみ指定）選択肢の追加要件
+
+1. **背景と目的**
+   * 従来、大項目（費目）を選択すると、それに紐づく最初の中項目が強制的に選択され、「費目（大項目）のみを指定して中項目は指定しない」という入力ができなかった。
+2. **仕様**
+   * 入力画面（`#select-subcategory`, `#select-actual-subcategory`）および明細編集モーダル（`#edit-tx-subcategory`, `#edit-tx-actual-subcategory`）の中項目セレクトボックスの先頭に、常に `<option value="">（指定なし / 費目のみ）</option>` を配置する。
+   * 値が空文字（`""`）の場合は `subcategory_id: null`（および `actual_subcategory_id: null`）として保存し、集計・表示時は大項目名のみ（例: `🍽️ 食費`）として扱う。
+
+### 3.32 スマートフォンにおけるメモ・タグ入力欄のフォーカスアウト時サジェスト非表示制御要件
+
+1. **背景と目的**
+   * スマートフォンブラウザ（iOS Safari / Mobile Chrome等）において、ネイティブ `<datalist>` をバインドした `#input-memo` や `#input-tag-text` にフォーカスした後、候補を選択せずにフォーカスアウト（`blur`）してもネイティブ候補リストが画面上に残留する不具合が発生していた。
+2. **仕様**
+   * `#input-memo` および `#input-tag-text` をカスタムサジェストドロップダウン（`#memo-suggest-dropdown`, `#tag-suggest-dropdown`）または `focus` 時にのみ `list` 属性を付与し、`blur` / `touchend`（外部タップ）時に即座に候補ポップアップを破棄・非表示化する制御を実装する。
+   * これにより、スマートフォンでどの候補も選択せずに他の入力欄や背景をタップした際にも、確実にサジェストリストが閉じる快適なモバイルUXを保証する。
+
+### 3.33 取引入力完了時のトースト通知（完了ポップアップ）表示要件
+
+1. **背景と目的**
+   * 取引を入力して「💾 登録する」ボタンを押した際、入力欄がクリアされるだけで視覚的な完了フィードバックがなく、登録が完了したのかどうかが直感的に分かりづらかった。
+2. **仕様**
+   * 画面上部または下部に軽量・非ブロッキングなトースト通知コンポーネント（`#toast-notification`）を設ける。
+   * 取引登録完了時（通常入力・立替・返済・前払・ポイント）、明細修正完了時、立替精算完了時に `✅ 登録が完了しました` 等のポップアップトーストをフェードイン表示し、約2.5秒後に自動でフェードアウト消去する（`showToast(message, type)`）。
+
+### 3.34 口座種別への負債「ローン (`loan`)」の追加要件
+
+1. **背景と目的**
+   * 住宅ローン・マイカーローン・奨学金等の長期負債をクレジットカード未払金とは区別して管理できるよう、口座の負債種別に「ローン（`loan`）」を追加する。
+2. **仕様**
+   * 口座マスタの種別（`type`）に `loan`（ローン・借入金）を追加し、`is_asset: false`（負債口座）として扱う。
+   * `calculateTotalAssetSummary` において、`type === 'loan'` の口座残高（マイナス残高または借入残高の絶対値）を負債合計（`liabilities` / `total_liabilities`）および `by_type.loan` に正確に算入し、資産タブの負債セクションに表示する。
+
+### 3.35 口座種別への「保険 (`insurance`)」追加（定期出費ルール・満期日の同時設定）要件
+
+1. **背景と目的**
+   * 積立型保険や貯蓄型生命保険・学資保険等を資産口座として管理しつつ、毎月の保険料支払（または積立振替）と満期日（`maturity_date`）を一元的に設定できるようにする。
+2. **仕様**
+   * 口座マスタの種別（`type`）に `insurance`（保険・積立保険）を追加し、投資・資産口座群（または流動・保険資産）として純資産集計に統合する。
+   * 口座追加・編集モーダルで `insurance` を選択した際、以下の保険専用設定フィールドを表示する：
+     * **満期日 (`maturity_date`)**: `YYYY-MM-DD` 形式の満期日（定期ルールの `end_date` にも自動連動）
+     * **満期返戻金・想定額 (`maturity_amount`)**: 任意入力（円）
+     * **毎月の保険料・定期出費の同時設定**:
+       * 支払元口座（`premium_pay_account_id`）、毎月金額（`premium_amount`）、引落日（`premium_day`、1〜31）、計上費目（`premium_category_id`）を指定可能。
+       * 保存時に、対応する定期ルール（`recurring_rules` 内の `id: "rec_ins_" + account.id`、`end_date: maturity_date`）を自動生成・同期更新する。
+
+### 3.36 集計・グラフタブの3タブ分割（収支 / 予算・実績 / 資産）要件
+
+1. **背景と目的**
+   * 従来の「📊 集計・グラフ」タブは単一タブ内で内部セグメントボタンにより表示を切り替えていたため、情報量が多く目的の画面へのアクセス階層が深くなっていた。
+2. **仕様**
+   * トップナビゲーションバー（`.nav-tabs`）を以下の5タブ構成へ拡張・分割する：
+     1. `📝 入力` (`data-tab="tab-input"`)
+     2. `💰 収支` (`data-tab="tab-summary"`, ` data-analytics-target="cashflow"`)
+     3. `🎯 予算・実績` (`data-tab="tab-summary"`, `data-analytics-target="budget"`)
+     4. `🏦 資産` (`data-tab="tab-summary"`, `data-analytics-target="assets"`)
+     5. `⚙️ 設定・マスタ` (`data-tab="tab-settings"`)
+   * 各タブ押下時に `analyticsTarget`（`cashflow` / `budget` / `assets`）を直接切り替え、各ビューに固有のカード群のみを整然と表示する（従来の互換用 `#control-view-target` とも完全同期する）。
+
+### 3.37 各画面（収支・予算・資産・設定）における各ペイン（カード）の折りたたみ（表示/非表示）切替要件
+
+1. **背景と目的**
+   * 収支、予算・実績、資産、設定・マスタの各画面には多くの機能カード（ペイン）が並んでいるため、ユーザーが必要なペインだけを開き、不要なペインを折りたたんで（非表示にして）スッキリ閲覧できるようにする。
+2. **仕様**
+   * 収支・予算・資産・設定の各 `.card` ヘッダー（`.card-title`）に折りたたみトグルボタン（`▼` / `▶`）を自動付与（または配置）し、クリックでカード本体の表示・非表示（`.card.collapsed`）を切り替えられるようにする。
+   * 各カードの開閉状態（`collapsed_panes: { [cardId]: boolean }`）は `localStorage`（および `master_config`）に保存し、リロード後もユーザーの好みを維持する。
+
+### 3.38 収支タブの口座別・費目別・タグ別集計項目タッチによる明細一覧へのドリルダウン連動要件
+
+1. **背景と目的**
+   * 収支タブの「口座別残高」「費目別推移・内訳」「タグ別集計・内訳」の各行をタッチした際、その項目に該当する取引明細を即座に確認したい。
+2. **仕様**
+   * 明細一覧フィルタに **口座フィルタ (`#select-account-filter`)** を新設し、`filterTransactionsByCriteria` で `accountId`（`tx.account_id === accountId || tx.to_account_id === accountId`）による絞り込みに対応する。
+   * 「口座別残高」（`#account-balances-list`）の各口座行をタッチすると、`#select-account-filter` に当該口座IDをセット（他のフィルタはリセット）し、明細一覧を再描画して `#card-month-tx-list` へスムーズスクロールする。
+   * 「費目別推移・内訳」（`#category-breakdown-list`）の各費目行をタッチすると、`#select-category-filter` に当該費目IDをセットし、明細一覧へドリルダウンする。
+   * 「タグ別集計・内訳」（`#tag-breakdown-list`）の各タグ行をタッチすると、`#select-tag-filter` に当該タグ名をセットし、明細一覧へドリルダウンする。
+
 ---
 
 ## 4. 同期トリガー・通信・セキュリティ要件
@@ -762,6 +838,43 @@ flowchart TD
 
 5. **PWA Service Worker (`sw.js`) キャッシュ整合性更新**
    * `CACHE_NAME` を `'yose-cache-v1.3.0'` に更新し、`js/db/*.js`（4ファイル）および `js/logic/*.js`（4ファイル）の計8モジュールを `ASSETS_TO_CACHE` に追加することで、オフライン起動時のモジュール解決を100%保証する。
+
+### 4.8 マルチデバイス環境における同一Passkey共有アーキテクチャ（PRF自己暗号化＆Ed25519自己署名バンドル）
+* **背景・課題**:
+  * 従来の実装では、`webauthn_vault` が各ブラウザ固有の IndexedDB `security_keys` ストアにのみ保存されていたため、マルチデバイス環境（PCとスマートフォン等）ではデバイスごとに個別のパスキーを登録するか、毎回PINとバックアップ復元を組み合わせる必要があった。
+  * ユーザー要望として「最初に1つパスキーを作ったら、他のデバイスでも（1Password / iCloudキーチェーン / Googleパスワードマネージャー等の同期パスキー機能を通じて）同じパスキーをそのまま使いたい。ただし、セキュリティを犠牲にするなら今のままでよい」という要件が挙げられた。
+* **ゼロトラストを1ミリも犠牲にしない暗号学的解決策（PRF Self-Encryption + Ed25519 Self-Signature）**:
+  1. **WebAuthn PRF 拡張によるハードウェア/パスキー束縛鍵 (`prfKeyRaw`) の導出**:
+     * パスキー登録・認証時に WebAuthn Level 3 `prf` 拡張（`extensions: { prf: { eval: { first: DEFAULT_WEBAUTHN_PRF_SALT } } }`）を実行し、パスキー内部の秘密鍵から決定論的な256-bit疑似乱数出力（`prfKeyRaw`）を取得する。
+     * 1PasswordやiCloudキーチェーン等で同期された同一パスキーは、同一RP ID（ドメイン）上で認証された際にのみ、どのデバイスでも全く同一の `prfKeyRaw`（32 bytes）を出力する。一方、攻撃者が `master_config`（JSONやGAS上のシート）を盗み見ても、正規ユーザーの生体認証とパスキー秘密鍵がなければ `prfKeyRaw` は絶対に得られない（総当たり耐性 $2^{256}$）。
+  2. **AES-GCM-256 自己暗号化ボールト (`vault`) の生成**:
+     * `prfKeyRaw` を HKDF-SHA256 に通して AES-GCM-256 鍵を導出し、ランダムな 96-bit IV を用いて `{ dmkRaw, privateKeyPkcs8 }`（DB暗号化マスター鍵とGAS通信用Ed25519秘密鍵）を認証付き暗号化する。
+     * **フォールバック禁止（フェイルセーフ原則）**: 認証器が PRF 拡張に非対応（`prfKeyRaw === null`）の場合は、平文や弱暗号でのバンドル出力を一切行わず、`synced_passkey_bundle` の生成をスキップする（「セキュリティを犠牲にするなら今のままでいい」という原則の厳格な遵守）。
+  3. **Ed25519 自己署名（Self-Signature）による改ざん・すり替え完全防止**:
+     * 暗号化された `vault`、`credentialId`、`publicKeyBase64`、`updated_at` を含む正規化JSON（`canonicalJsonStringify`）に対し、自身の Ed25519 秘密鍵（`privateKey`）で電子署名 `signature` を付与し、`master_config.synced_passkey_bundle` として保存する。
+     * これにより、万が一クラウド上の `master_config` が改ざんされたり、攻撃者の別パスキーにすり替えられたりしても、インポート・ロック解除時に公開鍵 `publicKeyBase64` による Ed25519 署名検証と AES-GCM 認証タグ検証の二重ゲートで即座に検知・拒絶される。
+  4. **他デバイス（Device B）でのシームレスなパスキー引き継ぎ・ロック解除フロー**:
+     * Device A でパスキー登録後、マスタ同期またはJSONエクスポートを行うと、`master_config.synced_passkey_bundle` が共有される。
+     * Device B でマスタJSONインポート（または初回セットアップ画面の「🔑 同期済みパスキー（バンドル）で復元・ロック解除」）を実行すると、ブラウザが同期パスキー（`credentialId`）を呼び出して WebAuthn PRF 認証を行い、署名検証＆復号に成功した瞬間に Device B のローカル `security_keys`（`webauthn_vault`）へ安全にプロビジョニングされ、同一の DMK と Ed25519 鍵ペアで即座に利用可能となる。
+
+```mermaid
+sequenceDiagram
+    participant DevA as "Device A (初回作成)"
+    participant Auth as "Synced Passkey (1Password / iCloud / Google)"
+    participant Sync as "master_config (GAS / Backup JSON)"
+    participant DevB as "Device B (2台目端末)"
+
+    DevA->>Auth: "1. WebAuthn 登録/認証 + PRF eval(salt)"
+    Auth-->>DevA: "2. credentialId + prfKeyRaw (256-bit)"
+    DevA->>DevA: "3. HKDF + AES-GCM-256 で {dmkRaw, privateKeyPkcs8} を暗号化 (vault)"
+    DevA->>DevA: "4. Ed25519 秘密鍵で {credentialId, vault, publicKeyBase64, updated_at} に自己署名"
+    DevA->>Sync: "5. master_config.synced_passkey_bundle として保存・同期"
+    Sync-->>DevB: "6. master_config 取得 / JSONインポート"
+    DevB->>DevB: "7. Ed25519 自己署名を publicKeyBase64 で検証"
+    DevB->>Auth: "8. credentialId 指定で WebAuthn 認証 + PRF eval(salt)"
+    Auth-->>DevB: "9. 同一の prfKeyRaw (256-bit) を出力"
+    DevB->>DevB: "10. AES-GCM-256 で vault を復号し DMK & Ed25519秘密鍵をメモリ展開・ローカル保存"
+```
 
 ---
 
@@ -1544,7 +1657,15 @@ flowchart TD
 | **3.27** | 費目別推移・内訳のドーナツグラフ可視化 | `js/ui/summary_controller.js`, `js/ui/chart_controller.js`, `index.html` | - | - | `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
 | **3.28** | 各種ドーナツグラフのタッチ・ホバー時ツールチップへのパーセント（構成比）表示追加 | `js/ui/chart_controller.js`, `js/logic/aggregator.js` | - | - | `test/unit/logic.test.js` |
 | **3.29** | 明細一覧の表示階層刷新（費目・中項目メイン、メモ・タグ補助表示） | `js/ui/tx_list_controller.js`, `js/logic/aggregator.js`, `css/style.css` | - | - | `test/unit/logic.test.js`, `test/unit/tx_edit.test.js` |
-| **3.30** | 明細一覧のマルチフィルタリング（費目・タグ・キーワード・状態による絞り込み） | `js/ui/tx_list_controller.js`, `js/ui/summary_controller.js`, `js/logic/aggregator.js`, `index.html` | - | - | `test/unit/logic.test.js`, `test/unit/tx_edit.test.js` |
+| **3.30** | 明細一覧のマルチフィルタリング（費目・タグ・キーワード・状態・口座による絞り込み） | `js/ui/tx_list_controller.js`, `js/ui/summary_controller.js`, `js/logic/aggregator.js`, `index.html` | - | - | `test/unit/logic.test.js`, `test/unit/tx_edit.test.js` |
+| **3.31** | 中項目を選択しない（費目のみ指定）選択肢の追加 | `js/ui/tx_input_controller.js`, `js/ui/tx_edit_controller.js` | - | `pending_diffs` (`subcategory_id: ""`) | `test/unit/master_management.test.js`, `test/unit/tx_edit.test.js` |
+| **3.32** | スマホ環境でのメモ欄・タグ欄フォーカスアウト時のサジェストリスト残存不具合の解消 | `js/ui/tx_input_controller.js`, `index.html` | - | - | `test/unit/master_management.test.js` |
+| **3.33** | 取引入力・編集完了時のトースト通知ポップアップ表示 | `js/ui/coordinator.js`, `js/ui/tx_input_controller.js`, `js/ui/tx_edit_controller.js`, `css/style.css`, `index.html` | - | - | `test/unit/master_management.test.js`, `test/unit/tx_edit.test.js` |
+| **3.34** | 口座の負債種別への「ローン（`loan`）」追加 | `js/ui/master_controller.js`, `js/ui/summary_controller.js`, `js/logic/aggregator.js` | - | `master_config` (`accounts`) | `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
+| **3.35** | 口座種別への「保険（`insurance`）」追加（定期出費と満期の同時設定・連動） | `js/ui/master_controller.js`, `js/ui/summary_controller.js`, `js/logic/aggregator.js`, `js/logic/transaction_factory.js` | - | `master_config` (`accounts`, `recurring_rules`) | `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
+| **3.36** | 集計・グラフタブの3分割（収支・予算/実績・資産の独立トップレベルタブ化） | `index.html`, `js/ui/coordinator.js`, `js/ui/summary_controller.js` | - | - | `test/system/e2e_scenario.test.js`, `test/unit/master_management.test.js` |
+| **3.37** | 各タブ（収支・予算/実績・資産・設定）内の各ペインの表示・非表示（折りたたみ）切り替え | `js/ui/coordinator.js`, `css/style.css`, `index.html`, `js/db/backup_merger.js` | - | `master_config` (`collapsed_panes`) | `test/unit/master_management.test.js`, `test/unit/db.test.js` |
+| **3.38** | 収支タブの口座別・費目別・タグ別集計項目のタッチによる明細一覧フィルター連動 | `js/ui/summary_controller.js`, `js/ui/tx_list_controller.js`, `js/logic/aggregator.js`, `index.html` | - | - | `test/unit/logic.test.js`, `test/unit/tx_edit.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |
@@ -1552,8 +1673,9 @@ flowchart TD
 | **4.5** | 設定画面におけるセキュリティ・鍵管理操作の明確なグルーピングと視覚的分離 | `js/app.js`, `index.html` | - | `security_keys` | `test/unit/crypto.test.js` |
 | **4.6** | モジュラーUIアーキテクチャ（AppCoordinator調停者 & 9コンポーネントコントローラー分割） | `js/app.js`, `js/ui/*.js`, `sw.js` | - | - | `test/system/e2e_scenario.test.js`, `npm test` |
 | **4.7** | コアエンジン・モジュラーアーキテクチャ（`js/db/` ストレージ層 & `js/logic/` 計算エンジン分割） | `js/db.js`, `js/db/*.js`, `js/logic.js`, `js/logic/*.js`, `sw.js` | - | - | `test/unit/db.test.js`, `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
+| **4.8** | マルチデバイス環境における同一Passkey共有（PRF自己暗号化＆Ed25519自己署名バンドル） | `js/crypto.js`, `js/ui/auth_controller.js`, `js/ui/settings_controller.js`, `js/db/backup_merger.js`, `index.html` | `gas/Code.gs` (`update_master`) | `master_config` (`synced_passkey_bundle`) | `test/unit/crypto.test.js`, `test/unit/db.test.js` |
 
 ### 8.2 設計整合性および仕様乖離監査結果
 1. **仕様乖離の有無**: 要件定義（第1章〜第5章）と設計図・開発注意点（第6章〜第7章）の間で用語、データスキーマ、フローの乖離がないことを確認済み。
-2. **アカウント体系**: 口座タイプ（`cash`, `bank`, `credit_card`, `receivable`, `prepaid`, `point`, `investment`, `asset`）がUI・DB初期マスタ・ロジック・設計図で完全に合致し、外部資産が通常口座へ美しく統合されている。
-3. **セキュリティモデル**: WebAuthn生体認証、全データAES-GCM暗号化（At-Rest）、Ed25519署名、タイムスタンプ検証、LockService排他制御、40,000字チャンク化がコードベースと設計書で1対1に対応している。
+2. **アカウント体系**: 口座タイプ（`cash`, `bank`, `credit_card`, `loan`, `receivable`, `prepaid`, `point`, `investment`, `insurance`, `asset`）がUI・DB初期マスタ・ロジック・設計図で完全に合致し、ローン負債および満期・定期出費連動型の保険口座が統合されている。
+3. **セキュリティモデル**: WebAuthn生体認証（PRF自己暗号化＆Ed25519自己署名によるマルチデバイスPasskey共有を含む）、全データAES-GCM暗号化（At-Rest）、Ed25519署名、タイムスタンプ検証、LockService排他制御、40,000字チャンク化がコードベースと設計書で1対1に対応している。

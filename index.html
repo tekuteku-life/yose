@@ -61,6 +61,15 @@
 				</button>
 			</form>
 
+			<div id="auth-synced-passkey-container" style="display: none; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border);">
+				<p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;">
+					他端末で作成・同期されたパスキー（1Password / iCloud / Google等）が見つかりました。同じパスキーで復元・解除できます。
+				</p>
+				<button type="button" id="btn-auth-synced-passkey" class="btn btn-secondary btn-block">
+					🔑 同期済みPasskeyで復元・ロック解除
+				</button>
+			</div>
+
 			<div id="auth-error-msg" style="color: var(--danger); font-size: 0.85rem; margin-top: 12px; display: none;"></div>
 		</div>
 	</div>
@@ -77,10 +86,12 @@
 		</div>
 	</header>
 
-	<!-- Top Navigation Tabs -->
+	<!-- Top Navigation Tabs (Requirement 3.36: Split into Input, Cashflow, Budget, Assets, Settings) -->
 	<nav class="nav-tabs">
 		<button class="tab-btn active" data-tab="tab-input">📝 入力</button>
-		<button class="tab-btn" data-tab="tab-summary">📊 集計・グラフ</button>
+		<button class="tab-btn" data-tab="tab-cashflow" data-analytics-target="cashflow">💰 収支</button>
+		<button class="tab-btn" data-tab="tab-budget" data-analytics-target="budget">🎯 予算・実績</button>
+		<button class="tab-btn" data-tab="tab-assets" data-analytics-target="assets">🏦 資産</button>
 		<button class="tab-btn" data-tab="tab-settings">⚙️ 設定・マスタ</button>
 	</nav>
 
@@ -382,7 +393,7 @@
 			</div>
 
 			<!-- Interactive Chart Container -->
-			<div class="card">
+			<div class="card" id="card-summary-chart">
 				<div class="card-title">
 					<span id="chart-title">収支推移・内訳グラフ</span>
 					<div style="display: flex; gap: 8px; flex-wrap: wrap;">
@@ -397,7 +408,7 @@
 			</div>
 
 			<!-- Granular Aggregation Table & Item Changes -->
-			<div class="card">
+			<div class="card" id="card-breakdown-table">
 				<div class="card-title">
 					<span id="table-title">集計表・推移データ</span>
 				</div>
@@ -449,7 +460,7 @@
 			</div>
 
 			<!-- Account Balances Breakdown -->
-			<div class="card">
+			<div class="card" id="card-account-balances">
 				<div class="card-title">
 					<span>口座別残高</span>
 				</div>
@@ -457,7 +468,7 @@
 			</div>
 
 			<!-- Monthly Operations & Month Closing -->
-			<div class="card">
+			<div class="card" id="card-monthly-operations">
 				<div class="card-title">
 					<span>月次アクション</span>
 				</div>
@@ -472,7 +483,7 @@
 			</div>
 
 			<!-- Transactions in Selected Month -->
-			<div class="card">
+			<div class="card" id="card-month-tx-list">
 				<div class="card-title" style="flex-wrap: wrap; gap: 8px;">
 					<span>当月の明細一覧</span>
 					<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
@@ -480,6 +491,9 @@
 							<option value="all">すべて表示</option>
 							<option value="confirmed">確定のみ</option>
 							<option value="planned">予定のみ</option>
+						</select>
+						<select id="select-account-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
+							<option value="all">すべての口座</option>
 						</select>
 						<select id="select-category-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
 							<option value="all">すべての費目</option>
@@ -499,7 +513,7 @@
 		<!-- ==================== TAB 3: SETTINGS & MASTER ==================== -->
 		<section id="tab-settings" class="tab-panel">
 			<!-- Security & Public Key (Requirement 4.5: Visual Segregation) -->
-			<div class="card">
+			<div class="card" id="card-security-keys">
 				<div class="card-title">
 					<span>🔐 認証・セキュリティ鍵管理</span>
 					<span id="key-configured-badge" class="badge badge-success" style="display: none;">初期設定済み</span>
@@ -539,14 +553,16 @@
 					<!-- Subcard 2: WebAuthn / Passkey Management -->
 					<div class="sub-card">
 						<div class="sub-card-title">
-							<span>② 👆 WebAuthn・Passkey連携管理 (1Password等)</span>
+							<span>② 👆 WebAuthn・Passkey連携管理 & マルチデバイス共有 (1Password等)</span>
 						</div>
 						<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
-							端末の生体認証（Touch ID, Face ID, Windows Hello）や1Password等のパスキーと連携してアプリを安全にアンロックします。<br>
-							※ 固定User IDを採用しているため、1Password等のパスキーマネージャーで「既存パスキーの更新・上書き」が利用できます。
+							端末の生体認証（Touch ID, Face ID, Windows Hello）や1Password等の同期パスキーと連携してアプリを安全にアンロックします。<br>
+							※ WebAuthn PRF対応のパスキーの場合、自己暗号化（AES-GCM-256）＆自己署名（Ed25519）付きの鍵バンドルがマスタ設定に安全に保存され、別デバイスでも同じパスキーをそのまま利用できます。
 						</p>
+						<div id="synced-passkey-status" style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;"></div>
 						<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
 							<button id="btn-register-webauthn" class="btn btn-primary btn-sm">👆 WebAuthn (Passkey) を上書き・再登録</button>
+							<button id="btn-import-synced-passkey" class="btn btn-secondary btn-sm" style="display: none;">🔑 マスタ内の同期済みPasskeyをこの端末に適用</button>
 							<button id="btn-clear-webauthn" class="btn btn-danger btn-sm" style="display: none;">🗑️ WebAuthn登録を解除</button>
 						</div>
 					</div>
@@ -575,7 +591,7 @@
 			</div>
 
 			<!-- GAS Web App Sync Configuration -->
-			<div class="card">
+			<div class="card" id="card-gas-sync">
 				<div class="card-title">
 					<span>☁️ Google Apps Script (GAS) 連携</span>
 				</div>
@@ -684,7 +700,7 @@
 			</div>
 
 			<!-- Master Config Management -->
-			<div class="card">
+			<div class="card" id="card-master-management">
 				<div class="card-title">
 					<span>🏷️ マスタ管理 (口座・費目・定期・祝日)</span>
 				</div>
@@ -774,7 +790,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.6.0</span>
+					<span class="badge badge-info" id="badge-current-version">v1.7.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
@@ -1070,6 +1086,9 @@
 			</div>
 		</div>
 	</div>
+
+	<!-- ==================== TOAST NOTIFICATION (Requirement 3.33) ==================== -->
+	<div id="toast-notification" class="toast-notification" role="status" aria-live="polite" style="display: none;"></div>
 
 	<!-- Main Application Script (ES Module) -->
 	<script type="module" src="js/app.js"></script>

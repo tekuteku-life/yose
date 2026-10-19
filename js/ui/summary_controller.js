@@ -38,12 +38,16 @@ export class SummaryController {
 	}
 
 	setupSummaryView() {
-		// Target toggle: Cashflow vs Assets
+		// Target toggle: Cashflow vs Budget vs Assets (syncs with top nav tabs)
 		document.querySelectorAll('#control-view-target .segment-btn').forEach(btn => {
 			btn.addEventListener('click', () => {
 				document.querySelectorAll('#control-view-target .segment-btn').forEach(b => b.classList.remove('active'));
 				btn.classList.add('active');
-				this.coordinator.analyticsTarget = btn.dataset.target;
+				const target = btn.dataset.target;
+				this.coordinator.analyticsTarget = target;
+				document.querySelectorAll('.nav-tabs .tab-btn[data-analytics-target]').forEach(tBtn => {
+					tBtn.classList.toggle('active', tBtn.dataset.analyticsTarget === target);
+				});
 				this.renderSummary();
 			});
 		});
@@ -125,6 +129,10 @@ export class SummaryController {
 		});
 
 		document.getElementById('select-status-filter')?.addEventListener('change', () => {
+			this.coordinator.txListController.renderMonthTransactions();
+		});
+
+		document.getElementById('select-account-filter')?.addEventListener('change', () => {
 			this.coordinator.txListController.renderMonthTransactions();
 		});
 
@@ -312,6 +320,33 @@ export class SummaryController {
 		await this.coordinator.txListController.renderMonthTransactions();
 	}
 
+	async applyDrilldownFilter({ accountId = 'all', categoryId = 'all', tag = 'all' } = {}) {
+		const statusSelect = document.getElementById('select-status-filter');
+		const accSelect = document.getElementById('select-account-filter');
+		const catSelect = document.getElementById('select-category-filter');
+		const tagSelect = document.getElementById('select-tag-filter');
+		const searchInput = document.getElementById('input-tx-search');
+
+		if (statusSelect) statusSelect.value = 'all';
+		if (searchInput) searchInput.value = '';
+
+		await this.coordinator.txListController.renderMonthTransactions();
+
+		if (accSelect) accSelect.value = accountId;
+		if (catSelect) catSelect.value = categoryId;
+		if (tagSelect) tagSelect.value = tag;
+
+		await this.coordinator.txListController.renderMonthTransactions();
+
+		const txCard = document.getElementById('card-month-tx-list');
+		if (txCard) {
+			await this.coordinator.setPaneCollapsed('card-month-tx-list', false);
+			if (typeof txCard.scrollIntoView === 'function') {
+				txCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+			}
+		}
+	}
+
 	renderTagAnalytics(transactions) {
 		const list = document.getElementById('tag-breakdown-list');
 		if (!list) return;
@@ -339,9 +374,9 @@ export class SummaryController {
 				const incomeAmt = t.income ?? t.income_total ?? 0;
 				const netAmt = t.net ?? t.net_total ?? 0;
 				return `
-					<div class="tx-item">
+					<div class="tx-item clickable" data-filter-tag="${escapeHtml(tagName)}" title="タッチしてこのタグの明細一覧を表示">
 						<div class="tx-info">
-							<span class="tx-title">🏷️ ${escapeHtml(tagName)}</span>
+							<span class="tx-title">🏷️ ${escapeHtml(tagName)} <span style="font-size: 0.75rem; color: var(--text-muted);">🔍</span></span>
 							<span class="tx-meta">${t.count}件 (収入: ¥${incomeAmt.toLocaleString()})</span>
 						</div>
 						<div style="text-align: right;">
@@ -353,6 +388,15 @@ export class SummaryController {
 					</div>
 				`;
 			}).join('');
+
+			list.querySelectorAll('.tx-item[data-filter-tag]').forEach(item => {
+				item.addEventListener('click', () => {
+					const tagVal = item.dataset.filterTag;
+					if (tagVal && tagVal !== '(未設定)') {
+						this.applyDrilldownFilter({ tag: tagVal });
+					}
+				});
+			});
 		}
 
 		this.chartController.renderChartForTags(tagSummary);
@@ -944,10 +988,12 @@ export class SummaryController {
 
 		const totalNet = totalAssetSummary.total_net_assets || 1;
 		const accounts = config?.accounts || [];
-		const investmentTypes = new Set(['investment', 'asset', 'stock', 'mutual_fund', 'crypto']);
+		const investmentTypes = new Set(['investment', 'insurance', 'asset', 'stock', 'mutual_fund', 'crypto']);
+		const liabilityTypes = new Set(['credit_card', 'loan']);
 
-		const liquidAccounts = accounts.filter(a => !a.is_archived && a.type !== 'credit_card' && !investmentTypes.has(a.type));
+		const liquidAccounts = accounts.filter(a => !a.is_archived && !liabilityTypes.has(a.type) && !investmentTypes.has(a.type));
 		const investmentAccounts = accounts.filter(a => !a.is_archived && investmentTypes.has(a.type));
+		const liabilityAccounts = accounts.filter(a => !a.is_archived && liabilityTypes.has(a.type));
 
 		tableContainer.innerHTML = `
 			<table class="summary-table">
@@ -976,14 +1022,17 @@ export class SummaryController {
 						`;
 					}).join('') || '<tr><td colspan="4" style="color:var(--text-muted); text-align:center;">登録なし</td></tr>'}
 					<tr class="summary-category-header" style="font-weight: 700;">
-						<td colspan="4">投資資産 (証券・投信・NISA等)</td>
+						<td colspan="4">投資・保険資産 (証券・投信・NISA・積立保険等)</td>
 					</tr>
 					${investmentAccounts.map(a => {
 						const bal = totalAssetSummary.confirmed_balances?.[a.id] || 0;
 						const pct = Math.round((Math.max(0, bal) / Math.max(1, totalNet)) * 1000) / 10;
+						const insMeta = a.type === 'insurance' && (a.maturity_date || a.maturity_amount)
+							? `<div style="font-size: 0.75rem; color: var(--text-muted);">満期: ${escapeHtml(a.maturity_date || '未設定')}${a.maturity_amount ? ` / 満期額: ¥${Number(a.maturity_amount).toLocaleString()}` : ''}</div>`
+							: '';
 						return `
 							<tr>
-								<td>${escapeHtml(a.name)}</td>
+								<td>${escapeHtml(a.name)}${insMeta}</td>
 								<td>${escapeHtml(a.type)}</td>
 								<td style="font-weight: 600; color: #10b981;">¥${bal.toLocaleString()}</td>
 								<td>${pct}%</td>
@@ -1003,12 +1052,23 @@ export class SummaryController {
 						`;
 					}).join('')}
 					<tr class="summary-category-header" style="font-weight: 700;">
-						<td colspan="4">負債・立替金等</td>
+						<td colspan="4">負債 (クレジットカード・ローン等)</td>
 					</tr>
+					${liabilityAccounts.map(a => {
+						const bal = totalAssetSummary.confirmed_balances?.[a.id] || 0;
+						return `
+							<tr>
+								<td>${escapeHtml(a.name)}</td>
+								<td>負債 (${escapeHtml(a.type)})</td>
+								<td style="font-weight: 600; color: var(--danger);">¥${bal.toLocaleString()}</td>
+								<td>-</td>
+							</tr>
+						`;
+					}).join('')}
 					<tr>
-						<td>クレジットカード・未払枠</td>
-						<td>負債 (credit_card)</td>
-						<td style="font-weight: 600; color: var(--danger);">-¥${totalAssetSummary.liabilities.toLocaleString()}</td>
+						<td><strong>負債合計</strong></td>
+						<td>負債 (credit_card / loan)</td>
+						<td style="font-weight: 700; color: var(--danger);">-¥${totalAssetSummary.liabilities.toLocaleString()}</td>
 						<td>-</td>
 					</tr>
 				</tbody>
@@ -1057,9 +1117,9 @@ export class SummaryController {
 				const pct = totalExpense > 0 ? Math.round((amt / totalExpense) * 1000) / 10 : 0;
 				const catName = catMap.get(catId) || catId;
 				return `
-					<div class="tx-item">
+					<div class="tx-item clickable" data-filter-category="${escapeHtml(catId)}" title="タッチしてこの費目の明細一覧を表示">
 						<div class="tx-info">
-							<span class="tx-title">${escapeHtml(catName)}</span>
+							<span class="tx-title">${escapeHtml(catName)} <span style="font-size: 0.75rem; color: var(--text-muted);">🔍</span></span>
 							<span class="tx-meta">構成比: ${pct}%</span>
 						</div>
 						<div style="text-align: right; font-weight: 700; color: var(--primary);">
@@ -1068,6 +1128,15 @@ export class SummaryController {
 					</div>
 				`;
 			}).join('');
+
+		list.querySelectorAll('.tx-item[data-filter-category]').forEach(item => {
+			item.addEventListener('click', () => {
+				const catId = item.dataset.filterCategory;
+				if (catId) {
+					this.applyDrilldownFilter({ categoryId: catId });
+				}
+			});
+		});
 	}
 
 	async renderAccountBalances(summary) {
@@ -1079,11 +1148,14 @@ export class SummaryController {
 		list.innerHTML = accounts.map(acc => {
 			const conf = summary.confirmed_balances[acc.id] || 0;
 			const proj = summary.projected_balances[acc.id] || 0;
+			const insInfo = acc.type === 'insurance' && acc.maturity_date
+				? ` | 満期: ${escapeHtml(acc.maturity_date)}`
+				: '';
 			return `
-				<div class="tx-item">
+				<div class="tx-item clickable" data-filter-account="${escapeHtml(acc.id)}" title="タッチしてこの口座の明細一覧を表示">
 					<div class="tx-info">
-						<span class="tx-title">${escapeHtml(acc.name)}</span>
-						<span class="tx-meta">${escapeHtml(acc.type)}</span>
+						<span class="tx-title">${escapeHtml(acc.name)} <span style="font-size: 0.75rem; color: var(--text-muted);">🔍</span></span>
+						<span class="tx-meta">${escapeHtml(acc.type)}${insInfo}</span>
 					</div>
 					<div style="text-align: right;">
 						<div style="font-weight: 700; color: var(--primary);">¥${conf.toLocaleString()}</div>
@@ -1092,6 +1164,15 @@ export class SummaryController {
 				</div>
 			`;
 		}).join('');
+
+		list.querySelectorAll('.tx-item[data-filter-account]').forEach(item => {
+			item.addEventListener('click', () => {
+				const accId = item.dataset.filterAccount;
+				if (accId) {
+					this.applyDrilldownFilter({ accountId: accId });
+				}
+			});
+		});
 	}
 }
 

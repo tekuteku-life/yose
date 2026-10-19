@@ -394,10 +394,12 @@ export function calculateTotalAssetSummary(accountBalances = {}, accountsMaster 
 		cash: 0,
 		bank: 0,
 		credit_card: 0,
+		loan: 0,
 		point: 0,
 		receivable: 0,
 		prepaid: 0,
 		investment: 0,
+		insurance: 0,
 		asset: 0,
 		stock: 0,
 		mutual_fund: 0,
@@ -410,16 +412,19 @@ export function calculateTotalAssetSummary(accountBalances = {}, accountsMaster 
 		accountMap.set(acc.id, acc);
 	}
 
-	const investmentTypeSet = new Set(['investment', 'asset', 'stock', 'mutual_fund', 'crypto']);
+	const investmentTypeSet = new Set(['investment', 'insurance', 'asset', 'stock', 'mutual_fund', 'crypto']);
+	const liabilityTypeSet = new Set(['credit_card', 'loan']);
 
 	for (const [accId, balance] of Object.entries(accountBalances)) {
 		const acc = accountMap.get(accId);
 		const type = acc?.type || 'cash';
-		const isAsset = acc?.is_asset !== false && type !== 'credit_card';
+		const isAsset = acc?.is_asset !== false && !liabilityTypeSet.has(type);
 
-		if (type === 'credit_card') {
+		if (liabilityTypeSet.has(type)) {
 			if (balance < 0) {
 				liabilities += Math.abs(balance);
+			} else if (type === 'loan' && balance > 0) {
+				liabilities += balance;
 			} else {
 				liquidAssets += balance;
 			}
@@ -705,10 +710,11 @@ export function resolveTransactionDisplayInfo(tx = {}, masterConfig = {}) {
 }
 
 /**
- * Filter Transactions by Multi-Criteria: Status, Category, Tag, and Keyword (Requirement 3.30)
+ * Filter Transactions by Multi-Criteria: Status, Account, Category, Tag, and Keyword (Requirement 3.30 & 3.38)
  * @param {Array} transactions - list of transactions
  * @param {object} [filters]
  * @param {string} [filters.status='all'] - 'all' | 'confirmed' | 'planned'
+ * @param {string} [filters.accountId='all'] - 'all' or account ID (matches account_id or to_account_id)
  * @param {string} [filters.categoryId='all'] - 'all' or category ID (matches category_id or actual_category_id)
  * @param {string} [filters.tag='all'] - 'all' or tag string
  * @param {string} [filters.keyword=''] - case-insensitive keyword matching memo, category, subcategory, or tags
@@ -717,6 +723,7 @@ export function resolveTransactionDisplayInfo(tx = {}, masterConfig = {}) {
  */
 export function filterTransactionsByCriteria(transactions = [], filters = {}, masterConfig = {}) {
 	const status = filters.status || 'all';
+	const accountId = filters.accountId || 'all';
 	const categoryId = filters.categoryId || 'all';
 	const tag = filters.tag || 'all';
 	const keyword = String(filters.keyword || '').trim().toLowerCase();
@@ -726,6 +733,11 @@ export function filterTransactionsByCriteria(transactions = [], filters = {}, ma
 
 		if (status === 'confirmed' && tx.status !== 'confirmed') return false;
 		if (status === 'planned' && tx.status !== 'planned') return false;
+
+		if (accountId !== 'all') {
+			const matchAccount = tx.account_id === accountId || tx.to_account_id === accountId;
+			if (!matchAccount) return false;
+		}
 
 		if (categoryId !== 'all') {
 			const matchAccrual = tx.category_id === categoryId;

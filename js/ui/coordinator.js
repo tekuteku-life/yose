@@ -93,6 +93,7 @@ export class AppCoordinator {
 		if (!this._domInitialized) {
 			this._domInitialized = true;
 			this.setupNavigation();
+			this.setupCollapsiblePanes();
 			this.syncStatusController.setupListeners();
 			this.txInputController.setupInputForm();
 			this.txInputController.setupTaxModal();
@@ -110,8 +111,9 @@ export class AppCoordinator {
 			}
 		}
 
-		// 6. Setup Theme
+		// 6. Setup Theme & Collapsible Panes state
 		await this.initTheme();
+		await this.applyCollapsedPanesState();
 
 		// 7. Initial Render
 		await this.refreshAllViews();
@@ -127,20 +129,121 @@ export class AppCoordinator {
 		tabBtns.forEach(btn => {
 			btn.addEventListener('click', () => {
 				const targetId = btn.dataset.tab;
+				const analyticsTarget = btn.dataset.analyticsTarget;
 				tabBtns.forEach(b => b.classList.remove('active'));
 				panels.forEach(p => p.classList.remove('active'));
 
 				btn.classList.add('active');
-				const targetPanel = document.getElementById(targetId);
-				if (targetPanel) targetPanel.classList.add('active');
 
-				if (targetId === 'tab-summary') {
+				if (analyticsTarget || targetId === 'tab-summary' || targetId === 'tab-cashflow' || targetId === 'tab-budget' || targetId === 'tab-assets') {
+					const resolvedTarget = analyticsTarget || (targetId === 'tab-budget' ? 'budget' : targetId === 'tab-assets' ? 'assets' : this.analyticsTarget || 'cashflow');
+					this.analyticsTarget = resolvedTarget;
+					document.querySelectorAll('#control-view-target .segment-btn').forEach(b => {
+						b.classList.toggle('active', b.dataset.target === resolvedTarget);
+					});
+					const summaryPanel = document.getElementById('tab-summary');
+					if (summaryPanel) summaryPanel.classList.add('active');
 					this.summaryController.renderSummary();
-				} else if (targetId === 'tab-settings') {
-					this.settingsController.renderSettings();
+				} else {
+					const targetPanel = document.getElementById(targetId);
+					if (targetPanel) targetPanel.classList.add('active');
+					if (targetId === 'tab-settings') {
+						this.settingsController.renderSettings();
+					}
 				}
 			});
 		});
+	}
+
+	setupCollapsiblePanes() {
+		if (typeof document === 'undefined') return;
+		const cards = document.querySelectorAll('#tab-summary .card[id], #tab-settings .card[id]');
+		cards.forEach(card => {
+			const paneId = card.id;
+			const titleEl = card.querySelector('.card-title');
+			if (!paneId || !titleEl) return;
+			if (titleEl.querySelector('.card-collapse-btn')) return;
+
+			const btn = document.createElement('button');
+			btn.type = 'button';
+			btn.className = 'card-collapse-btn';
+			btn.dataset.paneId = paneId;
+			btn.setAttribute('aria-expanded', 'true');
+			btn.title = 'ペインの表示・非表示を切り替え';
+			btn.textContent = '▼ 非表示';
+
+			btn.addEventListener('click', async (e) => {
+				e.stopPropagation();
+				const nextCollapsed = !card.classList.contains('collapsed');
+				await this.setPaneCollapsed(paneId, nextCollapsed);
+			});
+
+			titleEl.appendChild(btn);
+		});
+	}
+
+	async applyCollapsedPanesState() {
+		if (typeof document === 'undefined') return;
+		let collapsedMap = {};
+		try {
+			const config = await this.db.getMasterConfig();
+			if (config?.collapsed_panes && typeof config.collapsed_panes === 'object') {
+				collapsedMap = { ...config.collapsed_panes };
+			}
+		} catch (e) {}
+
+		for (const [paneId, isCollapsed] of Object.entries(collapsedMap)) {
+			const card = document.getElementById(paneId);
+			if (card) {
+				card.classList.toggle('collapsed', Boolean(isCollapsed));
+				const btn = card.querySelector('.card-collapse-btn');
+				if (btn) {
+					btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+					btn.textContent = isCollapsed ? '▶ 表示' : '▼ 非表示';
+				}
+			}
+		}
+	}
+
+	async setPaneCollapsed(paneId, isCollapsed) {
+		if (!paneId) return;
+		if (typeof document !== 'undefined') {
+			const card = document.getElementById(paneId);
+			if (card) {
+				card.classList.toggle('collapsed', Boolean(isCollapsed));
+				const btn = card.querySelector('.card-collapse-btn');
+				if (btn) {
+					btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+					btn.textContent = isCollapsed ? '▶ 表示' : '▼ 非表示';
+				}
+			}
+		}
+		try {
+			const config = await this.db.getMasterConfig();
+			if (config) {
+				if (!config.collapsed_panes || typeof config.collapsed_panes !== 'object') {
+					config.collapsed_panes = {};
+				}
+				config.collapsed_panes[paneId] = Boolean(isCollapsed);
+				await this.db.saveMasterConfig(config);
+			}
+		} catch (e) {}
+	}
+
+	showToast(message = '✅ 登録が完了しました', durationMs = 2200) {
+		if (typeof document === 'undefined') return;
+		const toast = document.getElementById('toast-notification');
+		if (!toast) return;
+		toast.textContent = message;
+		toast.style.display = 'block';
+		toast.classList.add('active');
+		if (this._toastTimer) {
+			clearTimeout(this._toastTimer);
+		}
+		this._toastTimer = setTimeout(() => {
+			toast.classList.remove('active');
+			toast.style.display = 'none';
+		}, durationMs);
 	}
 
 	async checkStartupUpdate() {

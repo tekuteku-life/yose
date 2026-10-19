@@ -714,4 +714,90 @@ export function clearActiveSession() {
 	activeSession = null;
 }
 
+/**
+ * Create a self-encrypted (WebAuthn PRF AES-GCM-256) and self-signed (Ed25519) Passkey bundle
+ * for multi-device sharing via master_config (Requirement 4.8).
+ * Returns null if prfKeyRaw is not available (Fail-Safe: never exports unencrypted keys).
+ * @param {{
+ *   dmkRaw: Uint8Array,
+ *   privateKeyPkcs8: Uint8Array,
+ *   privateKey: CryptoKey,
+ *   publicKeyBase64: string,
+ *   credentialId: string,
+ *   prfKeyRaw: Uint8Array|null,
+ *   updatedAt?: string
+ * }} params
+ * @returns {Promise<{ credentialId: string, vault: { ciphertext: string, iv: string, prfSalt: string }, publicKeyBase64: string, updated_at: string, signature: string }|null>}
+ */
+export async function createSignedPasskeyBundle({
+	dmkRaw,
+	privateKeyPkcs8,
+	privateKey,
+	publicKeyBase64,
+	credentialId,
+	prfKeyRaw,
+	updatedAt = new Date().toISOString()
+}) {
+	if (!prfKeyRaw || !(prfKeyRaw instanceof Uint8Array) || prfKeyRaw.byteLength < 16) {
+		return null;
+	}
+	if (!dmkRaw || !privateKeyPkcs8 || !privateKey || !publicKeyBase64 || !credentialId) {
+		throw new Error('Missing required parameters for createSignedPasskeyBundle');
+	}
+
+	const vault = await encryptWebAuthnVault({ dmkRaw, privateKeyPkcs8 }, prfKeyRaw);
+	const signTarget = canonicalJsonStringify({
+		credentialId,
+		publicKeyBase64,
+		updated_at: updatedAt,
+		vault
+	});
+	const signature = await signPayload(privateKey, signTarget);
+
+	return {
+		credentialId,
+		vault,
+		publicKeyBase64,
+		updated_at: updatedAt,
+		signature
+	};
+}
+
+/**
+ * Verify Ed25519 self-signature first (Verify-Before-Decrypt) and unwrap DMK + Ed25519 Private Key
+ * from a multi-device synced passkey bundle using the WebAuthn PRF output (Requirement 4.8).
+ * @param {object} bundle
+ * @param {Uint8Array} prfKeyRaw
+ * @returns {Promise<{ dmkRaw: Uint8Array, privateKeyPkcs8: Uint8Array, publicKeyBase64: string, credentialId: string }>}
+ */
+export async function verifyAndUnwrapPasskeyBundle(bundle, prfKeyRaw) {
+	if (!bundle || typeof bundle !== 'object' || !bundle.credentialId || !bundle.vault || !bundle.publicKeyBase64 || !bundle.signature || !bundle.updated_at) {
+		throw new Error('Invalid passkey bundle format');
+	}
+	if (!prfKeyRaw || !(prfKeyRaw instanceof Uint8Array) || prfKeyRaw.byteLength < 16) {
+		throw new Error('PRF key is required to unwrap passkey bundle');
+	}
+
+	const publicKey = await importPublicKeyBase64(bundle.publicKeyBase64);
+	const signTarget = canonicalJsonStringify({
+		credentialId: bundle.credentialId,
+		publicKeyBase64: bundle.publicKeyBase64,
+		updated_at: bundle.updated_at,
+		vault: bundle.vault
+	});
+	const isValidSig = await verifySignature(publicKey, bundle.signature, signTarget);
+	if (!isValidSig) {
+		throw new Error('Passkey bundle Ed25519 signature verification failed');
+	}
+
+	const { dmkRaw, privateKeyPkcs8 } = await decryptWebAuthnVault(bundle.vault, prfKeyRaw);
+	return {
+		dmkRaw,
+		privateKeyPkcs8,
+		publicKeyBase64: bundle.publicKeyBase64,
+		credentialId: bundle.credentialId
+	};
+}
+
+
 

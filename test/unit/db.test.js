@@ -667,6 +667,56 @@ describe('js/db.js - Unit Tests', () => {
 			await db.saveMasterConfig({ schema_version: 2, accounts: [], categories: [] });
 			const savedBudget = await db.saveAnnualBudget('2027', { expense_budget: 2000000 });
 			assert.equal(savedBudget.expense_budget, 2000000);
+
+			// 4. Merge collapsed_panes (Requirement 3.37) & synced_passkey_bundle (Requirement 4.8)
+			const cfgWithPanes = {
+				accounts: [],
+				categories: []
+			};
+			BackupMerger.mergeMasterConfig(cfgWithPanes, {
+				collapsed_panes: {
+					'card-tag-analytics': true,
+					'card-cross-matrix': false,
+					'__proto__': true
+				},
+				synced_passkey_bundle: {
+					credentialId: 'cred_v1',
+					publicKeyBase64: 'pub_v1',
+					signature: 'sig_v1',
+					updated_at: '2026-10-19T08:00:00Z',
+					vault: {
+						ciphertext: 'ct_v1',
+						iv: 'iv_v1',
+						prfSalt: 'salt_v1'
+					}
+				}
+			}, stats);
+			assert.equal(cfgWithPanes.collapsed_panes['card-tag-analytics'], true);
+			assert.equal(cfgWithPanes.collapsed_panes['card-cross-matrix'], false);
+			assert.equal(Object.prototype.hasOwnProperty.call(cfgWithPanes.collapsed_panes, '__proto__'), false);
+			assert.equal(cfgWithPanes.synced_passkey_bundle.credentialId, 'cred_v1');
+
+			// Newer synced_passkey_bundle overwrites older one, while existing collapsed_panes key is preserved
+			BackupMerger.mergeMasterConfig(cfgWithPanes, {
+				collapsed_panes: {
+					'card-tag-analytics': false,
+					'card-account-balances': true
+				},
+				synced_passkey_bundle: {
+					credentialId: 'cred_v2',
+					publicKeyBase64: 'pub_v2',
+					signature: 'sig_v2',
+					updated_at: '2026-10-19T12:00:00Z',
+					vault: {
+						ciphertext: 'ct_v2',
+						iv: 'iv_v2'
+					}
+				}
+			}, stats);
+			assert.equal(cfgWithPanes.collapsed_panes['card-tag-analytics'], true);
+			assert.equal(cfgWithPanes.collapsed_panes['card-account-balances'], true);
+			assert.equal(cfgWithPanes.synced_passkey_bundle.credentialId, 'cred_v2');
+			assert.equal(cfgWithPanes.synced_passkey_bundle.vault.prfSalt, '');
 		});
 	});
 

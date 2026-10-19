@@ -8,6 +8,7 @@ import {
 	JAPANESE_HOLIDAYS_PRESET,
 	parseHolidayTextOrCsv,
 	groupHolidaysByYear,
+	syncInsuranceRecurringRule,
 	escapeHtml
 } from '../logic.js';
 
@@ -191,6 +192,9 @@ export class MasterController {
 					const acc = accounts.find(a => a.id === btn.dataset.id);
 					if (acc) {
 						acc.is_archived = !acc.is_archived;
+						if (acc.type === 'insurance') {
+							syncInsuranceRecurringRule(config, acc);
+						}
 						await this.saveMasterConfigAndSync(config);
 					}
 				});
@@ -379,6 +383,9 @@ export class MasterController {
 		if (type === 'account') {
 			const isNew = !item;
 			title.textContent = isNew ? '🏦 新規口座の追加' : `🏦 口座の編集: ${item.name}`;
+			const activeExpenseCats = (config.categories || []).filter(c => !c.is_archived && (!c.type || c.type === 'expense'));
+			const activePayAccounts = (config.accounts || []).filter(a => !a.is_archived && a.id !== item?.id && !['loan', 'receivable', 'prepaid'].includes(a.type));
+
 			body.innerHTML = `
 				<form id="form-master-account">
 					<div class="form-group">
@@ -396,7 +403,9 @@ export class MasterController {
 								<option value="bank" ${item?.type === 'bank' ? 'selected' : ''}>銀行預金 (bank)</option>
 								<option value="cash" ${item?.type === 'cash' ? 'selected' : ''}>現金 (cash)</option>
 								<option value="investment" ${item?.type === 'investment' ? 'selected' : ''}>証券・投資信託・積立NISA (investment)</option>
+								<option value="insurance" ${item?.type === 'insurance' ? 'selected' : ''}>保険・積立保険 (insurance)</option>
 								<option value="credit_card" ${item?.type === 'credit_card' ? 'selected' : ''}>クレジットカード (credit_card)</option>
+								<option value="loan" ${item?.type === 'loan' ? 'selected' : ''}>ローン・借入金 (loan / 負債)</option>
 								<option value="point" ${item?.type === 'point' ? 'selected' : ''}>ポイント・電子マネー (point)</option>
 								<option value="receivable" ${item?.type === 'receivable' ? 'selected' : ''}>立替債権 (receivable)</option>
 								<option value="prepaid" ${item?.type === 'prepaid' ? 'selected' : ''}>前払費用 (prepaid)</option>
@@ -438,6 +447,44 @@ export class MasterController {
 							</div>
 						</div>
 					</div>
+					<div id="m-acc-insurance-fields" style="display: ${item?.type === 'insurance' ? 'block' : 'none'}; border-top: 1px dashed var(--border); margin-top: 12px; padding-top: 12px;">
+						<div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 8px;">🛡️ 保険・満期および定期保険料の同時設定</div>
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="m-acc-maturity-date">満期日 (任意)</label>
+								<input type="date" id="m-acc-maturity-date" class="form-control" value="${escapeHtml(item?.maturity_date || '')}">
+							</div>
+							<div class="form-group">
+								<label class="form-label" for="m-acc-maturity-amount">満期保険金額・目標額 (円)</label>
+								<input type="number" id="m-acc-maturity-amount" class="form-control" value="${item?.maturity_amount ?? ''}" placeholder="例: 3000000" min="0" step="1">
+							</div>
+						</div>
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="m-acc-premium-amount">毎月の保険料 (円・定期出費連動)</label>
+								<input type="number" id="m-acc-premium-amount" class="form-control" value="${item?.premium_amount ?? ''}" placeholder="例: 15000 (0で定期連携なし)" min="0" step="1">
+							</div>
+							<div class="form-group">
+								<label class="form-label" for="m-acc-premium-day">引落・支払日 (毎月何日: 1〜31)</label>
+								<input type="number" id="m-acc-premium-day" class="form-control" value="${item?.premium_day ?? 27}" min="1" max="31" step="1">
+							</div>
+						</div>
+						<div class="form-row">
+							<div class="form-group">
+								<label class="form-label" for="m-acc-premium-pay-account">保険料の引落元口座</label>
+								<select id="m-acc-premium-pay-account" class="form-control">
+									<option value="">設定なし (定期ルール未生成)</option>
+									${activePayAccounts.map(a => `<option value="${escapeHtml(a.id)}" ${item?.premium_pay_account_id === a.id ? 'selected' : ''}>${escapeHtml(a.name)} (${escapeHtml(a.type)})</option>`).join('')}
+								</select>
+							</div>
+							<div class="form-group">
+								<label class="form-label" for="m-acc-premium-cat">保険料の計上費目</label>
+								<select id="m-acc-premium-cat" class="form-control">
+									${activeExpenseCats.map(c => `<option value="${escapeHtml(c.id)}" ${item?.premium_category_id === c.id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('')}
+								</select>
+							</div>
+						</div>
+					</div>
 					<div style="display: flex; gap: 8px; margin-top: 16px;">
 						<button type="submit" class="btn btn-primary btn-block">保存する</button>
 					</div>
@@ -446,7 +493,9 @@ export class MasterController {
 
 			document.getElementById('m-acc-type')?.addEventListener('change', (e) => {
 				const ccFields = document.getElementById('m-acc-cc-fields');
+				const insFields = document.getElementById('m-acc-insurance-fields');
 				if (ccFields) ccFields.style.display = e.target.value === 'credit_card' ? 'block' : 'none';
+				if (insFields) insFields.style.display = e.target.value === 'insurance' ? 'block' : 'none';
 			});
 
 			document.getElementById('form-master-account')?.addEventListener('submit', async (e) => {
@@ -463,32 +512,60 @@ export class MasterController {
 				const debitOffset = Number(document.getElementById('m-acc-debit-offset')?.value) || 1;
 				const debitAccId = document.getElementById('m-acc-debit-account')?.value || null;
 
+				const maturityDate = document.getElementById('m-acc-maturity-date')?.value || null;
+				const maturityAmtVal = document.getElementById('m-acc-maturity-amount')?.value;
+				const maturityAmount = maturityAmtVal ? Number(maturityAmtVal) : null;
+				const premiumAmtVal = document.getElementById('m-acc-premium-amount')?.value;
+				const premiumAmount = premiumAmtVal ? Number(premiumAmtVal) : null;
+				const premiumDay = Number(document.getElementById('m-acc-premium-day')?.value) || 27;
+				const premiumPayAccId = document.getElementById('m-acc-premium-pay-account')?.value || null;
+				const premiumCatId = document.getElementById('m-acc-premium-cat')?.value || null;
+
+				const isAsset = !['credit_card', 'loan'].includes(accType);
+
 				config.accounts = config.accounts || [];
+				let targetAccount;
 				if (isNew) {
-					config.accounts.push({
+					targetAccount = {
 						id,
 						name,
 						type: accType,
 						currency: 'JPY',
 						initial_balance: initBal,
-						is_asset: accType !== 'credit_card',
+						is_asset: isAsset,
 						closing_day: accType === 'credit_card' ? closingDay : null,
 						debit_day: accType === 'credit_card' ? debitDay : null,
 						debit_month_offset: accType === 'credit_card' ? debitOffset : 1,
 						debit_account_id: accType === 'credit_card' ? debitAccId : null,
+						maturity_date: accType === 'insurance' ? maturityDate : null,
+						maturity_amount: accType === 'insurance' ? maturityAmount : null,
+						premium_amount: accType === 'insurance' ? premiumAmount : null,
+						premium_day: accType === 'insurance' ? premiumDay : null,
+						premium_pay_account_id: accType === 'insurance' ? premiumPayAccId : null,
+						premium_category_id: accType === 'insurance' ? premiumCatId : null,
 						sort_order: config.accounts.length + 1,
 						is_archived: false
-					});
+					};
+					config.accounts.push(targetAccount);
 				} else {
 					item.name = name;
 					item.type = accType;
 					item.initial_balance = initBal;
-					item.is_asset = accType !== 'credit_card';
+					item.is_asset = isAsset;
 					item.closing_day = accType === 'credit_card' ? closingDay : null;
 					item.debit_day = accType === 'credit_card' ? debitDay : null;
 					item.debit_month_offset = accType === 'credit_card' ? debitOffset : 1;
 					item.debit_account_id = accType === 'credit_card' ? debitAccId : null;
+					item.maturity_date = accType === 'insurance' ? maturityDate : null;
+					item.maturity_amount = accType === 'insurance' ? maturityAmount : null;
+					item.premium_amount = accType === 'insurance' ? premiumAmount : null;
+					item.premium_day = accType === 'insurance' ? premiumDay : null;
+					item.premium_pay_account_id = accType === 'insurance' ? premiumPayAccId : null;
+					item.premium_category_id = accType === 'insurance' ? premiumCatId : null;
+					targetAccount = item;
 				}
+
+				syncInsuranceRecurringRule(config, targetAccount);
 
 				modal.classList.remove('active');
 				await this.saveMasterConfigAndSync(config);
