@@ -18,6 +18,8 @@ import {
 	decryptMasterKeysWithPin,
 	encryptWebAuthnVault,
 	decryptWebAuthnVault,
+	createSignedPasskeyBundle,
+	verifyAndUnwrapPasskeyBundle,
 	isWebAuthnSupported,
 	registerWebAuthnCredential,
 	authenticateWithWebAuthn,
@@ -45,6 +47,36 @@ export class AuthController {
 		return this.coordinator.syncManager;
 	}
 
+	async applySyncedPasskeyBundle(bundle) {
+		if (!bundle || !isWebAuthnSupported()) {
+			throw new Error('同期済みPasskeyの復元にWebAuthn環境が必要です');
+		}
+		const res = await authenticateWithWebAuthn(bundle.credentialId);
+		const prfKeyRaw = res.prfKeyRaw || res.prfKey || null;
+		const unwrapped = await verifyAndUnwrapPasskeyBundle(bundle, prfKeyRaw);
+
+		const dmk = await importAesKeyRaw(unwrapped.dmkRaw);
+		const priv = await importPrivateKeyPkcs8(unwrapped.privateKeyPkcs8);
+		const pub = await importPublicKeyBase64(unwrapped.publicKeyBase64);
+
+		await this.db.saveSecurityKey('public_key_base64', unwrapped.publicKeyBase64);
+		await this.db.saveSecurityKey('webauthn_credential_id', unwrapped.credentialId);
+		const encVault = await encryptWebAuthnVault({ dmkRaw: unwrapped.dmkRaw, privateKeyPkcs8: unwrapped.privateKeyPkcs8 }, prfKeyRaw);
+		await this.db.saveSecurityKey('webauthn_vault', encVault);
+
+		this.publicKey = pub;
+		this.publicKeyBase64 = unwrapped.publicKeyBase64;
+		this.privateKey = priv;
+		this.db.setEncryptionKey(dmk);
+		this.isKeyLocked = false;
+		this.isKeyProtectedWithPin = true;
+		setActiveSession({ dmk, privateKey: priv, publicKey: pub, credentialId: unwrapped.credentialId });
+		if (this.syncManager) {
+			this.syncManager.setPrivateKey(priv);
+		}
+		return unwrapped;
+	}
+
 	async initSecurityAndAuthGate() {
 		const authScreen = document.getElementById('auth-screen');
 		const authTitle = document.getElementById('auth-title');
@@ -52,6 +84,7 @@ export class AuthController {
 		const webauthnContainer = document.getElementById('auth-webauthn-container');
 		const pinContainer = document.getElementById('auth-pin-container');
 		const setupContainer = document.getElementById('auth-setup-container');
+		const syncedPasskeyContainer = document.getElementById('auth-synced-passkey-container');
 		const errorMsg = document.getElementById('auth-error-msg');
 
 		const masterPkg = await this.db.getSecurityKey('master_keys_package');
@@ -63,6 +96,33 @@ export class AuthController {
 				this.publicKey = await importPublicKeyBase64(storedPub);
 			} catch (e) {}
 		}
+
+		let syncedBundle = null;
+		try {
+			const rawConfig = await this.db.getMasterConfig();
+			if (rawConfig?.synced_passkey_bundle?.credentialId && rawConfig?.synced_passkey_bundle?.vault) {
+				syncedBundle = rawConfig.synced_passkey_bundle;
+			}
+		} catch (e) {}
+
+		if (syncedPasskeyContainer) {
+			syncedPasskeyContainer.style.display = (syncedBundle && isWebAuthnSupported()) ? 'block' : 'none';
+		}
+
+		document.getElementById('btn-auth-synced-passkey')?.addEventListener('click', async () => {
+			if (!syncedBundle) return;
+			try {
+				if (errorMsg) errorMsg.style.display = 'none';
+				await this.applySyncedPasskeyBundle(syncedBundle);
+				if (authScreen) authScreen.classList.add('hidden');
+				await this.coordinator.finishAppInit();
+			} catch (err) {
+				if (errorMsg) {
+					errorMsg.textContent = `同期パスキー解除エラー: ${err.message}`;
+					errorMsg.style.display = 'block';
+				}
+			}
+		});
 
 		if (!masterPkg) {
 			// First Time Setup Mode
@@ -96,12 +156,12 @@ export class AuthController {
 
 					// 3. Register WebAuthn if supported
 					let credentialId = null;
-					let prfKey = null;
+					let prfKeyRaw = null;
 					if (isWebAuthnSupported()) {
 						try {
 							const cred = await registerWebAuthnCredential('よせあつめ家計簿 ユーザー');
 							credentialId = cred.credentialId;
-							prfKey = cred.prfKey;
+							prfKeyRaw = cred.prfKeyRaw || cred.prfKey || null;
 							await this.db.saveSecurityKey('webauthn_credential_id', credentialId);
 						} catch (wErr) {
 							console.warn('WebAuthn setup skipped or failed:', wErr);
@@ -114,10 +174,19 @@ export class AuthController {
 					const pkg = await encryptMasterKeysWithPin({ dmkRaw, privateKeyPkcs8: privPkcs8 }, pin);
 					await this.db.saveSecurityKey('master_keys_package', pkg);
 
+					let createdBundle = null;
 					if (credentialId) {
-						if (prfKey) {
-							const encVault = await encryptWebAuthnVault({ dmkRaw, privateKeyPkcs8: privPkcs8 }, prfKey);
+						if (prfKeyRaw) {
+							const encVault = await encryptWebAuthnVault({ dmkRaw, privateKeyPkcs8: privPkcs8 }, prfKeyRaw);
 							await this.db.saveSecurityKey('webauthn_vault', encVault);
+							createdBundle = await createSignedPasskeyBundle({
+								dmkRaw,
+								privateKeyPkcs8: privPkcs8,
+								privateKey: kp.privateKey,
+								publicKeyBase64: this.publicKeyBase64,
+								credentialId,
+								prfKeyRaw
+							});
 						} else {
 							await this.db.saveSecurityKey('webauthn_vault', {
 								dmk: bytesToBase64(dmkRaw),
@@ -133,8 +202,11 @@ export class AuthController {
 					this.isKeyLocked = false;
 					setActiveSession({ dmk, privateKey: kp.privateKey, publicKey: kp.publicKey, credentialId });
 
-					// Re-save initial master config and snapshot under encryption key
+					// Re-save initial master config (including synced_passkey_bundle if created) and snapshot under encryption key
 					const currentConfig = await this.db.getMasterConfig();
+					if (createdBundle && currentConfig) {
+						currentConfig.synced_passkey_bundle = createdBundle;
+					}
 					await this.db.saveMasterConfig(currentConfig);
 					const currentSnapshot = await this.db.getSnapshot();
 					await this.db.saveSnapshot(currentSnapshot);
@@ -161,7 +233,8 @@ export class AuthController {
 		if (setupContainer) setupContainer.style.display = 'none';
 		if (pinContainer) pinContainer.style.display = 'block';
 
-		const hasWebAuthn = Boolean(webauthnId && isWebAuthnSupported());
+		const effectiveWebauthnId = webauthnId || syncedBundle?.credentialId || null;
+		const hasWebAuthn = Boolean(effectiveWebauthnId && isWebAuthnSupported());
 		if (webauthnContainer) {
 			webauthnContainer.style.display = hasWebAuthn ? 'block' : 'none';
 		}
@@ -170,16 +243,17 @@ export class AuthController {
 			if (!hasWebAuthn) return;
 			try {
 				if (errorMsg) errorMsg.style.display = 'none';
-				const res = await authenticateWithWebAuthn(webauthnId);
+				const res = await authenticateWithWebAuthn(effectiveWebauthnId);
 				if (res.success) {
+					const prfKeyRaw = res.prfKeyRaw || res.prfKey || null;
 					const vault = await this.db.getSecurityKey('webauthn_vault');
 					if (vault) {
 						let dmk, priv;
 						if (vault.ciphertext) {
-							if (!res.prfKey) {
+							if (!prfKeyRaw) {
 								throw new Error('PRF key is required for encrypted WebAuthn vault');
 							}
-							const decrypted = await decryptWebAuthnVault(vault, res.prfKey);
+							const decrypted = await decryptWebAuthnVault(vault, prfKeyRaw);
 							dmk = await importAesKeyRaw(decrypted.dmkRaw);
 							priv = await importPrivateKeyPkcs8(decrypted.privateKeyPkcs8);
 						} else {
@@ -189,7 +263,20 @@ export class AuthController {
 						this.db.setEncryptionKey(dmk);
 						this.privateKey = priv;
 						this.isKeyLocked = false;
-						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: webauthnId });
+						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: effectiveWebauthnId });
+						if (authScreen) authScreen.classList.add('hidden');
+						await this.coordinator.finishAppInit();
+						return;
+					} else if (syncedBundle && prfKeyRaw) {
+						const unwrapped = await verifyAndUnwrapPasskeyBundle(syncedBundle, prfKeyRaw);
+						const dmk = await importAesKeyRaw(unwrapped.dmkRaw);
+						const priv = await importPrivateKeyPkcs8(unwrapped.privateKeyPkcs8);
+						await this.db.saveSecurityKey('webauthn_credential_id', unwrapped.credentialId);
+						await this.db.saveSecurityKey('webauthn_vault', syncedBundle.vault);
+						this.db.setEncryptionKey(dmk);
+						this.privateKey = priv;
+						this.isKeyLocked = false;
+						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: unwrapped.credentialId });
 						if (authScreen) authScreen.classList.add('hidden');
 						await this.coordinator.finishAppInit();
 						return;

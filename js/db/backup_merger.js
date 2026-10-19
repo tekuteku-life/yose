@@ -136,6 +136,48 @@ export class BackupMerger {
 			}
 		}
 
+		// 6. Collapsed Panes: safe boolean map merge (Requirement 3.37)
+		if (importedConfig.collapsed_panes && typeof importedConfig.collapsed_panes === 'object' && !Array.isArray(importedConfig.collapsed_panes)) {
+			if (!localConfig.collapsed_panes || typeof localConfig.collapsed_panes !== 'object' || Array.isArray(localConfig.collapsed_panes)) {
+				localConfig.collapsed_panes = {};
+			}
+			for (const [paneId, isCollapsed] of Object.entries(importedConfig.collapsed_panes)) {
+				if (BackupMerger.isSafeKey(paneId) && !Object.prototype.hasOwnProperty.call(localConfig.collapsed_panes, paneId)) {
+					localConfig.collapsed_panes[paneId] = Boolean(isCollapsed);
+				}
+			}
+		}
+
+		// 7. Multi-Device Synced Passkey Bundle: adopt if absent or newer updated_at (Requirement 4.8)
+		const impBundle = importedConfig.synced_passkey_bundle;
+		if (
+			impBundle &&
+			typeof impBundle === 'object' &&
+			typeof impBundle.credentialId === 'string' &&
+			typeof impBundle.publicKeyBase64 === 'string' &&
+			typeof impBundle.signature === 'string' &&
+			typeof impBundle.updated_at === 'string' &&
+			impBundle.vault &&
+			typeof impBundle.vault === 'object' &&
+			typeof impBundle.vault.ciphertext === 'string' &&
+			typeof impBundle.vault.iv === 'string'
+		) {
+			const localBundle = localConfig.synced_passkey_bundle;
+			if (!localBundle || !localBundle.updated_at || impBundle.updated_at > localBundle.updated_at) {
+				localConfig.synced_passkey_bundle = {
+					credentialId: impBundle.credentialId,
+					publicKeyBase64: impBundle.publicKeyBase64,
+					signature: impBundle.signature,
+					updated_at: impBundle.updated_at,
+					vault: {
+						ciphertext: impBundle.vault.ciphertext,
+						iv: impBundle.vault.iv,
+						prfSalt: String(impBundle.vault.prfSalt || '')
+					}
+				};
+			}
+		}
+
 		return localConfig;
 	}
 

@@ -625,3 +625,66 @@ export function evaluateCalculatorExpression(expression = '', taxAction = null, 
 	};
 }
 
+/**
+ * Synchronize an Insurance Account's recurring expense rule (`rec_ins_<id>`) in master_config (Requirement 3.35).
+ * Automatically creates, updates, or deactivates the linked recurring rule when an insurance account is saved/updated.
+ * @param {object} config - master_config object
+ * @param {object} account - account object from master_config.accounts
+ * @param {string} [todayStr] - YYYY-MM-DD
+ * @returns {object|null} the created/updated recurring rule, or null
+ */
+export function syncInsuranceRecurringRule(config, account, todayStr = formatDate(new Date())) {
+	if (!config || !account || !account.id) return null;
+	if (!Array.isArray(config.recurring_rules)) {
+		config.recurring_rules = [];
+	}
+
+	const ruleId = `rec_ins_${account.id}`;
+	const existingIdx = config.recurring_rules.findIndex(r => r && r.id === ruleId);
+	const premiumAmount = Math.max(0, Math.round(Number(account.premium_amount) || 0));
+	const isInsuranceActive = account.type === 'insurance' && !account.is_archived && premiumAmount > 0 && Boolean(account.premium_pay_account_id);
+
+	if (!isInsuranceActive) {
+		if (existingIdx !== -1) {
+			config.recurring_rules[existingIdx].is_active = false;
+			return config.recurring_rules[existingIdx];
+		}
+		return null;
+	}
+
+	const ruleObj = {
+		id: ruleId,
+		name: `[保険料] ${account.name || account.id}`,
+		type: 'expense',
+		amount: premiumAmount,
+		account_id: account.premium_pay_account_id,
+		to_account_id: null,
+		category_id: account.premium_category_id || (config.categories?.[0]?.id || 'cat_food'),
+		subcategory_id: account.premium_subcategory_id || '',
+		actual_category_id: account.premium_category_id || (config.categories?.[0]?.id || 'cat_food'),
+		actual_subcategory_id: account.premium_subcategory_id || '',
+		frequency: 'monthly',
+		interval_months: 1,
+		day_of_month: Math.min(31, Math.max(1, Math.round(Number(account.premium_day) || 27))),
+		holiday_adjustment: 'after',
+		start_date: existingIdx !== -1 && config.recurring_rules[existingIdx].start_date
+			? config.recurring_rules[existingIdx].start_date
+			: `${todayStr.slice(0, 7)}-01`,
+		end_date: account.maturity_date || null,
+		is_active: true,
+		linked_insurance_account_id: account.id
+	};
+
+	if (existingIdx !== -1) {
+		config.recurring_rules[existingIdx] = {
+			...config.recurring_rules[existingIdx],
+			...ruleObj
+		};
+		return config.recurring_rules[existingIdx];
+	} else {
+		config.recurring_rules.push(ruleObj);
+		return ruleObj;
+	}
+}
+
+

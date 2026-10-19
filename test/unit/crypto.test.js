@@ -627,6 +627,96 @@ describe('js/crypto.js - Unit Tests', () => {
 				await decryptObject({ ciphertext: 'abc' }, {});
 			}, /Invalid encrypted object payload/);
 		});
+
+		it('creates and unwraps multi-device synced passkey bundle with Ed25519 Verify-Before-Decrypt (Requirement 4.8)', async () => {
+			const {
+				generateEd25519KeyPair,
+				exportPrivateKeyPkcs8,
+				exportPublicKeyBase64,
+				createSignedPasskeyBundle,
+				verifyAndUnwrapPasskeyBundle,
+				getRandomValues
+			} = await import('../../js/crypto.js');
+
+			const dmkRaw = getRandomValues(new Uint8Array(32));
+			const prfKeyRaw = getRandomValues(new Uint8Array(32));
+			const keyPair = await generateEd25519KeyPair();
+			const privateKeyPkcs8 = await exportPrivateKeyPkcs8(keyPair.privateKey);
+			const publicKeyBase64 = await exportPublicKeyBase64(keyPair.publicKey);
+
+			// 1. Fail-Safe: returns null if prfKeyRaw is null or too short
+			const nullBundle = await createSignedPasskeyBundle({
+				dmkRaw,
+				privateKeyPkcs8,
+				privateKey: keyPair.privateKey,
+				publicKeyBase64,
+				credentialId: 'cred_sync_1',
+				prfKeyRaw: null
+			});
+			assert.equal(nullBundle, null);
+
+			const shortBundle = await createSignedPasskeyBundle({
+				dmkRaw,
+				privateKeyPkcs8,
+				privateKey: keyPair.privateKey,
+				publicKeyBase64,
+				credentialId: 'cred_sync_1',
+				prfKeyRaw: new Uint8Array(8)
+			});
+			assert.equal(shortBundle, null);
+
+			// 2. Missing required parameters throws error
+			await assert.rejects(async () => {
+				await createSignedPasskeyBundle({
+					dmkRaw: null,
+					privateKeyPkcs8,
+					privateKey: keyPair.privateKey,
+					publicKeyBase64,
+					credentialId: 'cred_sync_1',
+					prfKeyRaw
+				});
+			}, /Missing required parameters for createSignedPasskeyBundle/);
+
+			// 3. Valid bundle creation and Verify-Before-Decrypt unwrapping
+			const bundle = await createSignedPasskeyBundle({
+				dmkRaw,
+				privateKeyPkcs8,
+				privateKey: keyPair.privateKey,
+				publicKeyBase64,
+				credentialId: 'cred_sync_1',
+				prfKeyRaw
+			});
+			assert.ok(bundle);
+			assert.equal(bundle.credentialId, 'cred_sync_1');
+			assert.equal(bundle.publicKeyBase64, publicKeyBase64);
+			assert.ok(bundle.signature);
+			assert.ok(bundle.updated_at);
+			assert.ok(bundle.vault.ciphertext);
+
+			const unwrapped = await verifyAndUnwrapPasskeyBundle(bundle, prfKeyRaw);
+			assert.deepEqual(unwrapped.dmkRaw, dmkRaw);
+			assert.deepEqual(unwrapped.privateKeyPkcs8, privateKeyPkcs8);
+			assert.equal(unwrapped.publicKeyBase64, publicKeyBase64);
+			assert.equal(unwrapped.credentialId, 'cred_sync_1');
+
+			// 4. Tampered vault or signature is rejected BEFORE decryption
+			const tamperedBundle = {
+				...bundle,
+				updated_at: '2099-01-01T00:00:00.000Z'
+			};
+			await assert.rejects(async () => {
+				await verifyAndUnwrapPasskeyBundle(tamperedBundle, prfKeyRaw);
+			}, /Passkey bundle Ed25519 signature verification failed/);
+
+			// 5. Invalid bundle format or missing PRF key errors
+			await assert.rejects(async () => {
+				await verifyAndUnwrapPasskeyBundle(null, prfKeyRaw);
+			}, /Invalid passkey bundle format/);
+
+			await assert.rejects(async () => {
+				await verifyAndUnwrapPasskeyBundle(bundle, null);
+			}, /PRF key is required to unwrap passkey bundle/);
+		});
 	});
 });
 

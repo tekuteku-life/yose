@@ -35,7 +35,8 @@ import {
 	calculateCrossAccrualActualSummary,
 	formatDoughnutTooltipLabel,
 	resolveTransactionDisplayInfo,
-	filterTransactionsByCriteria
+	filterTransactionsByCriteria,
+	syncInsuranceRecurringRule
 } from '../../js/logic.js';
 
 describe('js/logic.js - Unit Tests', () => {
@@ -2322,6 +2323,101 @@ describe('js/logic.js - Unit Tests', () => {
 
 			// Empty call fallback
 			assert.deepEqual(filterTransactionsByCriteria(), []);
+
+			// Filter by accountId (matches either account_id OR to_account_id) (Requirement 3.38)
+			const txsWithAccounts = [
+				{ id: 'tx_a1', account_id: 'acc_bank', to_account_id: null, is_deleted: false },
+				{ id: 'tx_a2', account_id: 'acc_wallet', to_account_id: 'acc_bank', is_deleted: false },
+				{ id: 'tx_a3', account_id: 'acc_card', to_account_id: null, is_deleted: false }
+			];
+			const bankFiltered = filterTransactionsByCriteria(txsWithAccounts, { accountId: 'acc_bank' }, masterConfig);
+			assert.equal(bankFiltered.length, 2);
+			assert.equal(bankFiltered[0].id, 'tx_a1');
+			assert.equal(bankFiltered[1].id, 'tx_a2');
+		});
+	});
+
+	describe('Loan Liability, Insurance Account & Recurring Sync (Requirements 3.34 & 3.35)', () => {
+		it('calculateTotalAssetSummary aggregates loan as liability and insurance as asset', () => {
+			const balances = {
+				acc_bank: 500000,
+				acc_ins_1: 1200000,
+				acc_loan_1: -3000000,
+				acc_loan_overpaid: 10000
+			};
+			const accounts = [
+				{ id: 'acc_bank', name: 'メイン銀行', type: 'bank', is_asset: true },
+				{ id: 'acc_ins_1', name: '学資保険', type: 'insurance', is_asset: true, maturity_date: '2035-03-31', maturity_amount: 2000000 },
+				{ id: 'acc_loan_1', name: '住宅ローン', type: 'loan', is_asset: false },
+				{ id: 'acc_loan_overpaid', name: '完済ローン過払', type: 'loan', is_asset: false }
+			];
+
+			const summary = calculateTotalAssetSummary(balances, accounts, []);
+			assert.equal(summary.liquid_assets, 500000);
+			assert.equal(summary.total_investment_assets, 1200000); // insurance included in investment/long-term assets
+			assert.equal(summary.by_type.insurance, 1200000);
+			assert.equal(summary.by_type.loan, -2990000); // -3,000,000 + 10,000
+			assert.equal(summary.liabilities, 3010000); // 3,000,000 + 10,000 (both negative and positive loan balances treated as liability)
+			assert.equal(summary.net_assets, -1310000); // 500,000 + 1,200,000 - 3,010,000
+		});
+
+		it('syncInsuranceRecurringRule creates, updates, and deactivates linked recurring rule', () => {
+			// Null/invalid guard
+			assert.equal(syncInsuranceRecurringRule(null, null), null);
+			assert.equal(syncInsuranceRecurringRule({}, { id: '' }), null);
+
+			const config = {
+				categories: [{ id: 'cat_ins', name: '保険' }]
+				// recurring_rules intentionally omitted to test array initialization
+			};
+
+			// Non-insurance account returns null when no existing rule
+			const nonIns = syncInsuranceRecurringRule(config, { id: 'acc_bank', type: 'bank' }, '2026-10-19');
+			assert.equal(nonIns, null);
+			assert.ok(Array.isArray(config.recurring_rules));
+
+			// Create new insurance recurring rule
+			const insAcc = {
+				id: 'acc_life_ins',
+				name: '終身保険',
+				type: 'insurance',
+				is_archived: false,
+				maturity_date: '2040-12-31',
+				maturity_amount: 5000000,
+				premium_amount: 15000,
+				premium_day: 27,
+				premium_pay_account_id: 'acc_bank_main',
+				premium_category_id: 'cat_ins',
+				premium_subcategory_id: ''
+			};
+
+			const createdRule = syncInsuranceRecurringRule(config, insAcc, '2026-10-19');
+			assert.ok(createdRule);
+			assert.equal(createdRule.id, 'rec_ins_acc_life_ins');
+			assert.equal(createdRule.name, '[保険料] 終身保険');
+			assert.equal(createdRule.amount, 15000);
+			assert.equal(createdRule.day_of_month, 27);
+			assert.equal(createdRule.account_id, 'acc_bank_main');
+			assert.equal(createdRule.category_id, 'cat_ins');
+			assert.equal(createdRule.subcategory_id, '');
+			assert.equal(createdRule.start_date, '2026-10-01');
+			assert.equal(createdRule.end_date, '2040-12-31');
+			assert.equal(createdRule.is_active, true);
+			assert.equal(config.recurring_rules.length, 1);
+
+			// Update existing insurance recurring rule (preserves start_date)
+			insAcc.premium_amount = 18000;
+			insAcc.maturity_date = '2045-12-31';
+			const updatedRule = syncInsuranceRecurringRule(config, insAcc, '2026-11-05');
+			assert.equal(updatedRule.amount, 18000);
+			assert.equal(updatedRule.end_date, '2045-12-31');
+			assert.equal(updatedRule.start_date, '2026-10-01');
+			assert.equal(config.recurring_rules.length, 1);
+
+			// Archiving or zeroing premium deactivates existing rule
+			insAcc.is_archived = true;
+			const deactivatedRule = syncInsuranceRecurringRule(config, insAcc, '2026-11-05');
+			assert.equal(deactivatedRule.is_active, false);
 		});
 	});
 });

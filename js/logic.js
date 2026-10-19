@@ -28,7 +28,8 @@ export {
 	createAdvanceRepaymentTransaction,
 	createPointPaymentTransactions,
 	createCreditCardSettlementTransaction,
-	evaluateCalculatorExpression
+	evaluateCalculatorExpression,
+	syncInsuranceRecurringRule
 } from './logic/transaction_factory.js';
 
 export {

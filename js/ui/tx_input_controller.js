@@ -109,7 +109,7 @@ export class TransactionInputController {
 			});
 		}
 
-		// Memo autocomplete & auto-categorization (Requirement 3.19)
+		// Memo autocomplete & auto-categorization (Requirement 3.19 & 3.32)
 		const memoInput = document.getElementById('input-memo');
 		const handleMemoChange = async (e) => {
 			const val = (e.target.value || '').trim();
@@ -120,8 +120,8 @@ export class TransactionInputController {
 					catSelect.value = match.category_id;
 					await this.updateSubcategories(match.category_id, 'select-subcategory');
 					const subSelect = document.getElementById('select-subcategory');
-					if (subSelect && match.subcategory_id) {
-						subSelect.value = match.subcategory_id;
+					if (subSelect) {
+						subSelect.value = match.subcategory_id || '';
 					}
 				}
 				const chkSync = document.getElementById('chk-sync-actual-category');
@@ -131,20 +131,30 @@ export class TransactionInputController {
 						actCatSelect.value = match.category_id;
 						await this.updateSubcategories(match.category_id, 'select-actual-subcategory');
 						const actSubSelect = document.getElementById('select-actual-subcategory');
-						if (actSubSelect && match.subcategory_id) {
-							actSubSelect.value = match.subcategory_id;
+						if (actSubSelect) {
+							actSubSelect.value = match.subcategory_id || '';
 						}
 					}
 				}
 			}
 		};
+		memoInput?.addEventListener('focus', () => {
+			memoInput.setAttribute('list', 'memo-history-list');
+		});
+		memoInput?.addEventListener('blur', () => {
+			memoInput.removeAttribute('list');
+		});
 		memoInput?.addEventListener('input', handleMemoChange);
 		memoInput?.addEventListener('change', handleMemoChange);
 
-		// Tag chips input handling (Requirement 3.18)
+		// Tag chips input handling (Requirement 3.18 & 3.32)
 		const tagTextInput = document.getElementById('input-tag-text');
 		const tagsChipsList = document.getElementById('tags-chips-list');
 		const hiddenTagsInput = document.getElementById('input-tags');
+
+		tagTextInput?.addEventListener('focus', () => {
+			tagTextInput.setAttribute('list', 'tags-history-list');
+		});
 
 		tagTextInput?.addEventListener('keydown', (e) => {
 			if (e.key === 'Enter' || e.key === ',') {
@@ -161,6 +171,7 @@ export class TransactionInputController {
 		});
 
 		tagTextInput?.addEventListener('blur', () => {
+			tagTextInput.removeAttribute('list');
 			const val = tagTextInput.value.trim();
 			if (val) {
 				this.addTag(val);
@@ -358,14 +369,19 @@ export class TransactionInputController {
 		if (!select) return;
 		const config = await this.db.getMasterConfig();
 		const cat = (config?.categories || []).find(c => c.id === categoryId);
+		const emptyOption = '<option value="">（指定なし / 費目のみ）</option>';
 		if (!cat || !cat.subcategories) {
-			select.innerHTML = '<option value="">なし</option>';
+			select.innerHTML = emptyOption;
 			return;
 		}
 		const activeSubs = cat.subcategories.filter(s => !s.is_archived);
-		select.innerHTML = activeSubs.map(s =>
-			`<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`
-		).join('');
+		select.innerHTML = [
+			emptyOption,
+			...activeSubs.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`)
+		].join('');
+		if (activeSubs.length > 0) {
+			select.value = activeSubs[0].id;
+		}
 	}
 
 	renderTagChips() {
@@ -460,6 +476,7 @@ export class TransactionInputController {
 		advTx.sync_status = 'unsynced';
 
 		await this.db.putTransactions([repayTx, advTx]);
+		this.coordinator.showToast(`✅ 立替金(¥${advTx.amount.toLocaleString()})の回収を登録しました`);
 		alert(`立替金「${advTx.memo || '未回収'}」(¥${advTx.amount.toLocaleString()}) の回収・精算を完了しました`);
 		await this.coordinator.refreshAllViews();
 		this.syncManager?.syncPendingDiffs().catch(e => console.log('Sync deferred:', e.message));
@@ -722,6 +739,7 @@ export class TransactionInputController {
 
 		// Save to Database
 		await this.db.putTransactions(txRecordsToSave);
+		this.coordinator.showToast('✅ 登録が完了しました');
 
 		// Reset inputs
 		const elAmt = document.getElementById('input-amount');

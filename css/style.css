@@ -997,5 +997,57 @@ header {
 	background: var(--bg-hover);
 }
 
+/* Toast Notification Popup (Requirement 3.33) */
+.toast-notification {
+	position: fixed;
+	bottom: 24px;
+	left: 50%;
+	transform: translateX(-50%) translateY(16px);
+	background: var(--primary);
+	color: #ffffff;
+	padding: 10px 20px;
+	border-radius: 9999px;
+	font-size: 0.9rem;
+	font-weight: 600;
+	box-shadow: var(--shadow);
+	z-index: 2000;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.25s ease, transform 0.25s ease;
+	white-space: nowrap;
+}
+
+.toast-notification.active {
+	opacity: 1;
+	transform: translateX(-50%) translateY(0);
+}
+
+/* Collapsible Card Panes (Requirement 3.37) */
+.card-collapse-btn {
+	background: var(--bg-hover);
+	border: 1px solid var(--border);
+	color: var(--text-muted);
+	border-radius: 6px;
+	padding: 2px 8px;
+	font-size: 0.75rem;
+	cursor: pointer;
+	margin-left: 8px;
+	transition: all 0.15s;
+}
+
+.card-collapse-btn:hover {
+	color: var(--primary);
+	border-color: var(--primary);
+}
+
+.card.collapsed > :not(.card-title) {
+	display: none !important;
+}
+
+.card.collapsed > .card-title {
+	margin-bottom: 0;
+}
+
+
 
 
