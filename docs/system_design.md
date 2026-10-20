@@ -652,6 +652,32 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
      * 明細カードのタイトル（`#month-tx-list-title`）を粒度および対象期間に応じて動的に更新する（例: `📋 2026-10の明細一覧`, `📋 2026年の明細一覧`, `📋 2026-10-20の明細一覧`）。
      * 年別など明細が多数（30件超）に及ぶ場合、快適なページ送り操作（`#tx-pagination-controls`: `1 / N ページ (全 M 件)`, `[◀ 前へ]`, `[次へ ▶]`）を提供し、DOM描画負荷とスクロール負荷を抑制する。
 
+### 3.41 静的型チェック自動検証（check:types）および集計・設定全機能網羅UIテスト拡充（予定トグル・軸切替・年次予算・テーマ）要件
+
+1. **背景と目的**
+   * 開発プロセス定義書において静的型チェックが未導入であったため、関数戻り値の不整合（例: `evaluateCalculatorExpression` の `result` プロパティ欠落）や潜在的な型・プロパティ不一致の自動検知が不十分であった。
+   * また、ヘッドレスChrome実ブラウザUIテストにおいて、収支タブの予定取引トグル（`予定: ON/OFF`）切り替え時に明細一覧（`#month-tx-list`）から予定取引が除外されない不具合が未検知であった。
+   * さらに、設定タブの全機能（年間予算の設定と保存、テーマ切替、バックアップモーダル展開、バージョンチェック）および集計タブの全機能（分類軸切替、マルチフィルタ複合、0件空状態表示、年月移動）のDOM自動検証を網羅し、継続的品質保証を確立する。
+2. **仕様およびあるべき姿**
+   * **3.41.1 静的型検査（`npm run check:types`）の導入とJSDoc・型定義の整合**:
+     * `typescript` を開発依存関係として導入し、`jsconfig.json` にて `checkJs: true` および `noEmit: true` を設定する。
+     * ブラウザグローバル環境およびDOM拡張（`types/ambient.d.ts`）を定義し、プロジェクト全ソースコード（`js/**/*.js`, `sw.js`）を対象とする `npm run check:types`（`tsc --noEmit -p jsconfig.json`）を確立する。
+     * JSDocアノテーション（`@returns`, `@param`, `@typedef`）の型整合性を完全化し、`check:types` のエラーを **0件** とする。
+     * `package.json` の `lint` コマンド（`npm run lint:indent && npm run check:syntax && npm run check:types`）および `docs/development_process.md` の開発標準・品質ゲート（原則12、Phase 4、Phase 5）に正式統合する。
+   * **3.41.2 予定取引トグル（`予定: OFF`）における明細一覧連動除外不具合の恒久的修正**:
+     * `filterTransactionsByCriteria(transactions, filters, masterConfig)` において、`filters.includePlanned`（デフォルト: `true`）フラグのサポートを追加する。
+     * `filters.status === 'all'` かつ `filters.includePlanned === false`（または `coordinator.showPlanned === false`）の場合、`tx.status === 'planned'` のレコードを確実に明細一覧から除外する。
+     * 予定トグルボタン（`#btn-toggle-planned`）が `予定: OFF` の状態では、KPI集計だけでなく明細一覧（`#month-tx-list`）からも予定取引が即座に非表示となる連動を保証する。
+   * **3.41.3 設定タブ全機能（年間予算・テーマ・バックアップ・バージョン）のUI E2E自動検証**:
+     * 年間予算（総支出予算、年間目標貯蓄額、目標貯蓄率）の入力、月平均目安プレビュー更新、および保存（IndexedDB永続化）のDOM挙動を自動検証する。
+     * テーマ切替（ダーク・ライト・システム）における `document.documentElement` の `data-theme` 属性およびChartControllerのテーマ連動を自動検証する。
+     * バックアップエクスポートモーダル（`#modal-export-json`）の開閉および全5種のエクスポートボタン（全データ、取引明細、マスタ設定、年間予算、残高スナップショット）のUI稼働を検証する。
+     * バージョン確認バッジ（`#badge-current-version`）およびアプリアップデート確認ボタン（`#btn-check-app-update`）の正常性を検証する。
+   * **3.41.4 集計タブ全機能（分類軸・予定トグル・マルチフィルタ・年月移動）のUI E2E自動検証**:
+     * 分類軸切替（`🏷️ 計上分類ベース` $\longleftrightarrow$ `📦 実態分類ベース`）による費目別集計および取引一覧の分類連動を自動検証する。
+     * 複合条件フィルタ（ステータス × 口座 × 費目 × キーワード）のAND一致動作、および一致件数0件時の空状態（`条件に一致する明細がありません`）表示を自動検証する。
+     * 前月・翌月・今月ボタン（`#btn-prev-period`, `#btn-next-period`, `#btn-today-period`）および年月ピッカーによる期間表示の正確な遷移を自動検証する。
+
 ---
 
 ## 4. 同期トリガー・通信・セキュリティ要件
@@ -1732,6 +1758,7 @@ flowchart TD
 | **3.38** | 収支タブの口座別・費目別・タグ別集計項目のタッチによる明細一覧フィルター連動 | `js/ui/summary_controller.js`, `js/ui/tx_list_controller.js`, `js/logic/aggregator.js`, `index.html` | - | - | `test/unit/logic.test.js`, `test/unit/tx_edit.test.js` |
 | **3.39** | ヘッドレスChrome UIテストによる品質保証とUI/UX・安全性不具合の恒久的修正（Chartガード、中項目参照、XSS防御、アーカイブ非表示、年別集計分離、口座ドリルダウン、PIN表示） | `js/ui/chart_controller.js`, `js/ui/master_controller.js`, `js/ui/summary_controller.js`, `js/ui/settings_controller.js`, `js/ui/auth_controller.js` | - | `master_config` | `test/ui/headless_ui.test.js`, `test/unit/master_management.test.js` |
 | **3.40** | 入力サジェストUI制御（ネイティブdatalist撤廃とインラインドロップダウン）・クレカ引落口座連携表示・集計粒度別明細表示およびページネーション | `js/ui/tx_input_controller.js`, `js/ui/master_controller.js`, `js/ui/tx_list_controller.js`, `index.html`, `css/style.css`, `js/db/defaults.js` | - | `master_config` (`debit_account_id`), `pending_diffs` | `test/ui/headless_ui.test.js`, `test/unit/master_management.test.js` |
+| **3.41** | 静的型チェック自動検証（check:types）および集計・設定全機能網羅UIテスト拡充（予定トグル・軸切替・年次予算・テーマ） | `package.json`, `jsconfig.json`, `types/ambient.d.ts`, `js/logic/aggregator.js`, `js/ui/tx_list_controller.js`, `js/ui/settings_controller.js`, `js/ui/summary_controller.js` | - | `master_config` (`annual_budgets`) | `npm run check:types`, `test/ui/headless_ui.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |

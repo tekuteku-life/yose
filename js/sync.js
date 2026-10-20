@@ -6,8 +6,8 @@ import { createSignedRequest } from './crypto.js';
 
 export class SyncManager {
 	/**
-	 * @param {object} options
-	 * @param {import('./db.js').YoseDB} options.db
+	 * @param {object} [options]
+	 * @param {import('./db.js').YoseDB} [options.db]
 	 * @param {CryptoKey} [options.privateKey]
 	 * @param {string} [options.gasUrl]
 	 * @param {Function} [options.customFetch]

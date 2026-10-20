@@ -288,7 +288,7 @@ export function isTimestampValid(timestamp, currentTime = Date.now(), maxSkewMs 
 
 /**
  * Verify a signed request envelope
- * @param {object} requestEnvelope - { action, timestamp, payload, signature }
+ * @param {Record<string, any>} requestEnvelope - { action, timestamp, payload, signature }
  * @param {CryptoKey} publicKey
  * @param {number} [currentTime]
  * @param {number} [maxSkewMs]
@@ -471,6 +471,8 @@ export async function decryptMasterKeysWithPin(wrappedKeys, pin) {
 
 /**
  * Check if WebAuthn is supported in environment
+ * @param {Navigator|Record<string, any>} [nav]
+ * @returns {boolean}
  */
 export function isWebAuthnSupported(nav = (typeof globalThis !== 'undefined' ? globalThis.navigator : null)) {
 	return typeof nav?.credentials?.create === 'function' && typeof nav?.credentials?.get === 'function';
@@ -548,9 +550,9 @@ export async function registerWebAuthnCredential(username = 'よせあつめ家�
 /**
  * Authenticate with existing WebAuthn Credential
  * @param {string} credentialIdBase64
- * @param {object} [nav]
- * @param {object} [options]
- * @returns {Promise<{ success: boolean, credentialId: string, prfKeyRaw: Uint8Array|null }>}
+ * @param {Navigator|Record<string, any>} [nav]
+ * @param {Record<string, any>} [options]
+ * @returns {Promise<{ success: boolean, credentialId: string, prfKeyRaw: Uint8Array|null, prfKey?: any }>}
  */
 export async function authenticateWithWebAuthn(credentialIdBase64, nav = (typeof globalThis !== 'undefined' ? globalThis.navigator : null), options = {}) {
 	if (!isWebAuthnSupported(nav)) {
@@ -626,7 +628,7 @@ export async function encryptWebAuthnVault({ dmkRaw, privateKeyPkcs8 }, prfKeyRa
 	const iv = getRandomValues(new Uint8Array(12));
 	const prfAesKey = await subtle.importKey(
 		'raw',
-		prfKeyRaw,
+		/** @type {BufferSource} */ (/** @type {unknown} */ (prfKeyRaw)),
 		{ name: 'AES-GCM' },
 		false,
 		['encrypt', 'decrypt']
@@ -667,7 +669,7 @@ export async function decryptWebAuthnVault(vault, prfKeyRaw) {
 
 	const prfAesKey = await subtle.importKey(
 		'raw',
-		prfKeyRaw,
+		/** @type {BufferSource} */ (/** @type {unknown} */ (prfKeyRaw)),
 		{ name: 'AES-GCM' },
 		false,
 		['encrypt', 'decrypt']
@@ -767,7 +769,7 @@ export async function createSignedPasskeyBundle({
 /**
  * Verify Ed25519 self-signature first (Verify-Before-Decrypt) and unwrap DMK + Ed25519 Private Key
  * from a multi-device synced passkey bundle using the WebAuthn PRF output (Requirement 4.8).
- * @param {object} bundle
+ * @param {Record<string, any>} bundle
  * @param {Uint8Array} prfKeyRaw
  * @returns {Promise<{ dmkRaw: Uint8Array, privateKeyPkcs8: Uint8Array, publicKeyBase64: string, credentialId: string }>}
  */

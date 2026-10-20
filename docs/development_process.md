@@ -49,6 +49,10 @@
      3. `js/version.js`: `export const CURRENT_APP_VERSION = 'X.Y.Z';`
      4. `sw.js`: `const CACHE_NAME = 'yose-cache-vX.Y.Z';`
      5. `index.html`: `#badge-current-version`（`vX.Y.Z`）
+12. **実装後の静的型検査自動検証 (Post-Implementation Static Type Check Verification)**:
+   - プロダクションコードおよびアンビエント型定義（`types/ambient.d.ts`）に対し、TypeScriptコンパイラによる静的型検査（`npm run check:types` = `tsc --noEmit -p jsconfig.json`）を常時実行する。
+   - 関数の引数・戻り値の不整合、未定義プロパティ参照、プロトタイプの誤用、DOM/WebWorker境界での型不整合を自動検知し、型エラー **0件** を必須ゲートとする。
+   - `npm run lint`（`lint:indent` + `check:syntax` + `check:types`）に組み込み、構文検査とインデント検査と合わせて1コマンドで全静的品質を担保する。
 
 ---
 
@@ -133,13 +137,13 @@ flowchart TD
 
 ---
 
-### Phase 4: 機能実装・構文エラーチェック・不要コード削除
+### Phase 4: 機能実装・構文＆型エラーチェック・不要コード削除
 1. **プロダクションコード実装**:
    - 設計およびテストに適合するよう、最小限で堅牢なコードを実装する。
-2. **実装後の構文エラーチェック（必須ゲート）**:
-   - 実装・修正完了直後、テスト実行やレビュー依頼へ進む前に `npm run check:syntax`（`node scripts/check_syntax.js`）を実行する。
-   - JavaScript（`node -c`）、Google Apps Script（`vm.Script`）、JSON（`JSON.parse`）の構文エラー（`SyntaxError`、未定義シンボル、閉じ括弧不足等）が **0件** であることを自動検証する。
-   - 構文エラーが1件でも検出された場合、テスト実行やレビュー依頼を行わず即座に修正する。
+2. **実装後の構文エラー・型エラーチェック（必須ゲート）**:
+   - 実装・修正完了直後、テスト実行やレビュー依頼へ進む前に `npm run check:syntax`（`node scripts/check_syntax.js`）および `npm run check:types`（`tsc --noEmit -p jsconfig.json`）を実行する。
+   - JavaScript（`node -c`）、Google Apps Script（`vm.Script`）、JSON（`JSON.parse`）の構文エラー（`SyntaxError`、未定義シンボル、閉じ括弧不足等）およびTypeScript静的型検査エラーが **0件** であることを自動検証する。
+   - 構文エラーまたは型エラーが1件でも検出された場合、テスト実行やレビュー依頼を行わず即座に修正する。
 3. **コードのクリーンアップ・棚卸し（必須ステップ）**:
    - **不要コードの削除**: 新実装により使われなくなった関数、変数、import、CSSルールを完全に削除する。
    - **不要な互換性維持コードの排除**: 過去の暫定対応や、古いデータ構造を維持するための場当たり的なフォールバック・冗長分岐を点検し、現行仕様（Schema v2等）に統一して不要な分岐を削除する。
@@ -153,7 +157,7 @@ flowchart TD
 
 ### Phase 5: Argonサブエージェントによる実装後コードレビュー & 最終受入ゲート
 1. **品質基準および全テストの検証**:
-   - 静的チェック（`npm run lint` = `lint:indent` + `check:syntax`）のエラーが 0 件であること。
+   - 静的チェック（`npm run lint` = `lint:indent` + `check:syntax` + `check:types`）のエラーが 0 件であること。
    - 全自動テスト（単体・結合・システム・UIテスト `npm run test:ui`）が 100% 合格すること。
    - カバレッジ基準: **全対象ファイルで命令網羅（Line）$\ge 97\%$ かつ 分岐網羅（Branch）$\ge 97\%$** を満たしていること。
    - バージョン情報が改修内容（Major / Minor / Patch）に応じて適切に引き上げられ、関連5ファイルで完全に同期していること。

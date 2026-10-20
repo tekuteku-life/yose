@@ -168,6 +168,7 @@ export class TransactionListController {
 
 		const filtered = filterTransactionsByCriteria(txs, {
 			status: filterStatus,
+			includePlanned: this.coordinator.showPlanned,
 			accountId: filterAccount,
 			categoryId: filterCategory,
 			tag: filterTag,
@@ -180,7 +181,8 @@ export class TransactionListController {
 		const btnNext = document.getElementById('btn-tx-next-page');
 
 		if (filtered.length === 0) {
-			list.innerHTML = '<div style="color: var(--text-muted); padding: 12px; text-align: center;">取引はありません</div>';
+			const emptyMsg = txs.length > 0 ? '条件に一致する取引はありません' : '取引はありません';
+			list.innerHTML = `<div style="color: var(--text-muted); padding: 12px; text-align: center;">${emptyMsg}</div>`;
 			if (paginationControls) paginationControls.style.display = 'none';
 			return;
 		}
