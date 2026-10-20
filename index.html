@@ -256,19 +256,23 @@
 						</div>
 					</div>
 
-					<!-- Memo & Tags (Requirements 3.18, 3.19) -->
+					<!-- Memo & Tags (Requirements 3.18, 3.19, 3.40) -->
 					<div class="form-row">
 						<div class="form-group" style="flex: 2;">
 							<label class="form-label" for="input-memo">メモ</label>
-							<input type="text" id="input-memo" class="form-control" placeholder="例: スーパーで食材購入" list="memo-history-list" autocomplete="off">
-							<datalist id="memo-history-list"></datalist>
+							<div class="suggest-wrapper">
+								<input type="text" id="input-memo" class="form-control" placeholder="例: スーパーで食材購入" autocomplete="off">
+								<div id="memo-suggest-dropdown" class="suggest-dropdown" style="display: none;"></div>
+							</div>
 						</div>
 						<div class="form-group" style="flex: 1;">
 							<label class="form-label" for="input-tag-text">タグ (Enter/カンマで追加)</label>
-							<div id="tags-chip-container" class="tags-input-box">
-								<div id="tags-chips-list" class="tags-chips-list"></div>
-								<input type="text" id="input-tag-text" class="tags-inner-input" placeholder="タグ候補..." list="tags-history-list" autocomplete="off">
-								<datalist id="tags-history-list"></datalist>
+							<div class="suggest-wrapper">
+								<div id="tags-chip-container" class="tags-input-box">
+									<div id="tags-chips-list" class="tags-chips-list"></div>
+									<input type="text" id="input-tag-text" class="tags-inner-input" placeholder="タグ候補..." autocomplete="off">
+								</div>
+								<div id="tags-suggest-dropdown" class="suggest-dropdown" style="display: none;"></div>
 							</div>
 							<input type="hidden" id="input-tags" value="">
 						</div>
@@ -478,7 +482,7 @@
 			<!-- Transactions in Selected Month -->
 			<div class="card" id="card-month-tx-list">
 				<div class="card-title" style="flex-wrap: wrap; gap: 8px;">
-					<span>当月の明細一覧</span>
+					<span id="month-tx-list-title">📋 当月の明細一覧</span>
 					<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
 						<select id="select-status-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
 							<option value="all">すべて表示</option>
@@ -500,6 +504,11 @@
 					<input type="text" id="input-tx-search" class="form-control form-control-sm" placeholder="🔍 費目・中項目・メモ・タグで絞り込み...">
 				</div>
 				<div id="month-tx-list" class="tx-list"></div>
+				<div id="tx-pagination-controls" style="display: none; justify-content: center; align-items: center; gap: 12px; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border);">
+					<button type="button" id="btn-tx-prev-page" class="btn btn-secondary btn-sm">◀ 前へ</button>
+					<span id="tx-pagination-info" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500;">1 / 1 ページ (全 0 件)</span>
+					<button type="button" id="btn-tx-next-page" class="btn btn-secondary btn-sm">次へ ▶</button>
+				</div>
 			</div>
 		</section>
 
@@ -783,7 +792,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.7.2</span>
+					<span class="badge badge-info" id="badge-current-version">v1.7.3</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。

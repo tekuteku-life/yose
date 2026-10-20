@@ -630,6 +630,28 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * **3.39.7 初回セットアップ直後再ロック時のPINフォーム表示整合性保証**:
      * `AuthController.lockPrivateKey()` 実行時に、`#auth-setup-container` を非表示、`#auth-pin-container` を表示（`display: block`）状態に設定し、初回PINセットアップ直後にページ再読み込みを行わなくても即座にPIN入力によるロック解除が行える状態を保証する。
 
+### 3.40 入力サジェストUI制御・クレカ引落口座連携表示・集計粒度別明細表示およびページネーション要件
+
+1. **背景と目的**
+   * 入力画面においてネイティブ `<datalist>` によるメモ・タグ候補が画面全体に拡大展開されユーザーが非表示にできない問題、設定画面でクレジットカードの引き落とし元口座が表示・初期選択されない問題、および収支タブで年別粒度を選択しているにもかかわらず明細一覧が当月分のみにとどまる問題を根本から解消する。
+2. **仕様およびあるべき姿**
+   * **3.40.1 タグ・メモ入力時のカスタムサジェストドロップダウン制御要件**:
+     * ネイティブ `<datalist>` を完全撤廃し、入力欄直下に限定配置される軽量カスタムサジェストコンポーネント（`#memo-suggest-dropdown`, `#tags-suggest-dropdown`）を導入する。
+     * ドロップダウンは入力ボックスの直下（`position: absolute; top: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto`）にコンパクトに展開し、画面を占有しない。
+     * 入力欄へのフォーカス・文字入力時に絞り込み候補を表示し、候補のクリック選択で即座に入力確定および関連カテゴリ連動を行い、ドロップダウンを自動で閉じる。
+     * 入力欄外のクリック（外部タップ）またはEscキー押下により、ユーザーが意図したタイミングで確実にサジェスト一覧を非表示化できる操作性を担保する。
+   * **3.40.2 クレジットカード口座設定における引き落とし口座（`debit_account_id`）の初期選択・マスタ一覧表示要件**:
+     * 口座編集モーダル（`openMasterModal`）において、既存プロパティ `debit_account_id` に加え旧プロパティ `settlement_account_id` との互換フォールバック（`item?.debit_account_id || item?.settlement_account_id`）を導入し、初期設定クレカ口座（`acc_card_a`）でも紐づくメイン銀行（`acc_bank_main`）が正しく選択された状態で表示されるようにする。
+     * 初期マスタ設定（`DEFAULT_MASTER_CONFIG`）の `acc_card_a` に `debit_account_id: 'acc_bank_main'` を明示定義する。
+     * 設定タブの口座マスタ一覧（`#master-accounts-list`）において、クレジットカード口座の行に締め日・引き落とし日および紐づく引き落とし口座名（例: `💳 締: 15日 / 引落: 10日 (メイン銀行)`）を表示し、設定状況を一目で確認可能とする。
+   * **3.40.3 収支タブにおける集計粒度（日別・月別・年別）に応じた明細一覧期間連動およびページネーション要件**:
+     * 明細一覧描画処理（`TransactionListController.renderMonthTransactions`）において、現在の集計粒度（`granularity`）を判定し、粒度に合致する取引レコードを抽出する：
+       * **月別 (`monthly`)**: 選択月（`this.coordinator.currentMonth`）の取引
+       * **年別 (`yearly`)**: 選択年（`this.coordinator.selectedYear`）の全取引（`YYYY-01-01` 〜 `YYYY-12-31`）
+       * **日別 (`daily`)**: 選択日（`this.coordinator.selectedDate`）の取引
+     * 明細カードのタイトル（`#month-tx-list-title`）を粒度および対象期間に応じて動的に更新する（例: `📋 2026-10の明細一覧`, `📋 2026年の明細一覧`, `📋 2026-10-20の明細一覧`）。
+     * 年別など明細が多数（30件超）に及ぶ場合、快適なページ送り操作（`#tx-pagination-controls`: `1 / N ページ (全 M 件)`, `[◀ 前へ]`, `[次へ ▶]`）を提供し、DOM描画負荷とスクロール負荷を抑制する。
+
 ---
 
 ## 4. 同期トリガー・通信・セキュリティ要件
@@ -1709,6 +1731,7 @@ flowchart TD
 | **3.37** | 各タブ（収支・予算/実績・資産・設定）内の各ペインの表示・非表示（折りたたみ）切り替え | `js/ui/coordinator.js`, `css/style.css`, `index.html`, `js/db/backup_merger.js` | - | `master_config` (`collapsed_panes`) | `test/unit/master_management.test.js`, `test/unit/db.test.js` |
 | **3.38** | 収支タブの口座別・費目別・タグ別集計項目のタッチによる明細一覧フィルター連動 | `js/ui/summary_controller.js`, `js/ui/tx_list_controller.js`, `js/logic/aggregator.js`, `index.html` | - | - | `test/unit/logic.test.js`, `test/unit/tx_edit.test.js` |
 | **3.39** | ヘッドレスChrome UIテストによる品質保証とUI/UX・安全性不具合の恒久的修正（Chartガード、中項目参照、XSS防御、アーカイブ非表示、年別集計分離、口座ドリルダウン、PIN表示） | `js/ui/chart_controller.js`, `js/ui/master_controller.js`, `js/ui/summary_controller.js`, `js/ui/settings_controller.js`, `js/ui/auth_controller.js` | - | `master_config` | `test/ui/headless_ui.test.js`, `test/unit/master_management.test.js` |
+| **3.40** | 入力サジェストUI制御（ネイティブdatalist撤廃とインラインドロップダウン）・クレカ引落口座連携表示・集計粒度別明細表示およびページネーション | `js/ui/tx_input_controller.js`, `js/ui/master_controller.js`, `js/ui/tx_list_controller.js`, `index.html`, `css/style.css`, `js/db/defaults.js` | - | `master_config` (`debit_account_id`), `pending_diffs` | `test/ui/headless_ui.test.js`, `test/unit/master_management.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |

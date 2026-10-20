@@ -19,6 +19,7 @@ export class TransactionInputController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
 		this.confirmedTags = [];
+		this.availableTags = [];
 		this.memoHistoryMap = {};
 		this.calcTargetInputId = 'input-amount';
 		this.calcCurrentExpr = '0';
@@ -109,10 +110,10 @@ export class TransactionInputController {
 			});
 		}
 
-		// Memo autocomplete & auto-categorization (Requirement 3.19 & 3.32)
+		// Memo autocomplete & auto-categorization (Requirement 3.19 & 3.40.1)
 		const memoInput = document.getElementById('input-memo');
 		const handleMemoChange = async (e) => {
-			const val = (e.target.value || '').trim();
+			const val = (e?.target?.value ?? (typeof e === 'string' ? e : '')).trim();
 			const match = this.memoHistoryMap[val];
 			if (match && match.category_id) {
 				const catSelect = document.getElementById('select-category');
@@ -138,22 +139,27 @@ export class TransactionInputController {
 				}
 			}
 		};
+		this.handleMemoChange = handleMemoChange;
+
 		memoInput?.addEventListener('focus', () => {
-			memoInput.setAttribute('list', 'memo-history-list');
+			this.renderMemoSuggestions(memoInput.value);
 		});
-		memoInput?.addEventListener('blur', () => {
-			memoInput.removeAttribute('list');
+		memoInput?.addEventListener('input', (e) => {
+			this.renderMemoSuggestions(e.target.value);
+			handleMemoChange(e);
 		});
-		memoInput?.addEventListener('input', handleMemoChange);
 		memoInput?.addEventListener('change', handleMemoChange);
 
-		// Tag chips input handling (Requirement 3.18 & 3.32)
+		// Tag chips input handling (Requirement 3.18 & 3.40.1)
 		const tagTextInput = document.getElementById('input-tag-text');
 		const tagsChipsList = document.getElementById('tags-chips-list');
 		const hiddenTagsInput = document.getElementById('input-tags');
 
 		tagTextInput?.addEventListener('focus', () => {
-			tagTextInput.setAttribute('list', 'tags-history-list');
+			this.renderTagSuggestions(tagTextInput.value);
+		});
+		tagTextInput?.addEventListener('input', (e) => {
+			this.renderTagSuggestions(e.target.value);
 		});
 
 		tagTextInput?.addEventListener('keydown', (e) => {
@@ -163,19 +169,41 @@ export class TransactionInputController {
 				if (val) {
 					this.addTag(val);
 					tagTextInput.value = '';
+					this.renderTagSuggestions('');
 				}
 			} else if (e.key === 'Backspace' && tagTextInput.value === '' && this.confirmedTags.length > 0) {
 				this.confirmedTags.pop();
 				this.renderTagChips();
+			} else if (e.key === 'Escape') {
+				const tagsDropdown = document.getElementById('tags-suggest-dropdown');
+				if (tagsDropdown) tagsDropdown.style.display = 'none';
+			}
+		});
+
+		memoInput?.addEventListener('keydown', (e) => {
+			if (e.key === 'Escape') {
+				const memoDropdown = document.getElementById('memo-suggest-dropdown');
+				if (memoDropdown) memoDropdown.style.display = 'none';
 			}
 		});
 
 		tagTextInput?.addEventListener('blur', () => {
-			tagTextInput.removeAttribute('list');
 			const val = tagTextInput.value.trim();
 			if (val) {
 				this.addTag(val);
 				tagTextInput.value = '';
+			}
+		});
+
+		// Global dismiss for custom suggestion dropdowns
+		document.addEventListener('click', (e) => {
+			if (!e.target.closest('#input-memo') && !e.target.closest('#memo-suggest-dropdown')) {
+				const memoDropdown = document.getElementById('memo-suggest-dropdown');
+				if (memoDropdown) memoDropdown.style.display = 'none';
+			}
+			if (!e.target.closest('#tags-chip-container') && !e.target.closest('#tags-suggest-dropdown')) {
+				const tagsDropdown = document.getElementById('tags-suggest-dropdown');
+				if (tagsDropdown) tagsDropdown.style.display = 'none';
 			}
 		});
 
@@ -410,20 +438,70 @@ export class TransactionInputController {
 	}
 
 	async updateTagAndMemoSuggestions() {
-		// Tags datalist
-		const tagDatalist = document.getElementById('tags-history-list');
-		if (tagDatalist) {
-			const uniqueTags = await this.db.getUniqueTags();
-			tagDatalist.innerHTML = uniqueTags.map(t => `<option value="${escapeHtml(t)}"></option>`).join('');
-		}
+		this.availableTags = await this.db.getUniqueTags();
+		this.memoHistoryMap = await this.db.getMemoHistory();
+	}
 
-		// Memo datalist & history map
-		const memoDatalist = document.getElementById('memo-history-list');
-		if (memoDatalist) {
-			const memoHistory = await this.db.getMemoHistory();
-			this.memoHistoryMap = memoHistory;
-			memoDatalist.innerHTML = Object.keys(memoHistory).map(m => `<option value="${escapeHtml(m)}"></option>`).join('');
+	renderMemoSuggestions(query = '') {
+		const dropdown = document.getElementById('memo-suggest-dropdown');
+		if (!dropdown) return;
+		const allMemos = Object.keys(this.memoHistoryMap || {});
+		const q = String(query || '').trim().toLowerCase();
+		const filtered = q ? allMemos.filter(m => m.toLowerCase().includes(q)) : allMemos;
+		if (filtered.length === 0) {
+			dropdown.style.display = 'none';
+			dropdown.innerHTML = '';
+			return;
 		}
+		dropdown.innerHTML = filtered.slice(0, 15).map(m => {
+			const match = this.memoHistoryMap[m];
+			const subText = match?.category_id ? ` <span style="font-size: 0.75rem; color: var(--text-muted);">(${escapeHtml(match.category_id)})</span>` : '';
+			return `<div class="suggest-item" data-value="${escapeHtml(m)}"><span>📝 ${escapeHtml(m)}</span>${subText}</div>`;
+		}).join('');
+		dropdown.style.display = 'block';
+
+		dropdown.querySelectorAll('.suggest-item').forEach(item => {
+			item.addEventListener('click', (e) => {
+				e.stopPropagation();
+				const val = item.dataset.value;
+				const input = document.getElementById('input-memo');
+				if (input) {
+					input.value = val;
+					this.handleMemoChange(val);
+				}
+				dropdown.style.display = 'none';
+			});
+		});
+	}
+
+	renderTagSuggestions(query = '') {
+		const dropdown = document.getElementById('tags-suggest-dropdown');
+		if (!dropdown) return;
+		const allTags = this.availableTags || [];
+		const q = String(query || '').trim().toLowerCase();
+		const filtered = q
+			? allTags.filter(t => t.toLowerCase().includes(q) && !this.confirmedTags.includes(t))
+			: allTags.filter(t => !this.confirmedTags.includes(t));
+		if (filtered.length === 0) {
+			dropdown.style.display = 'none';
+			dropdown.innerHTML = '';
+			return;
+		}
+		dropdown.innerHTML = filtered.slice(0, 15).map(t => {
+			return `<div class="suggest-item" data-value="${escapeHtml(t)}"><span>🏷️ #${escapeHtml(t)}</span></div>`;
+		}).join('');
+		dropdown.style.display = 'block';
+
+		dropdown.querySelectorAll('.suggest-item').forEach(item => {
+			item.addEventListener('click', (e) => {
+				e.stopPropagation();
+				const val = item.dataset.value;
+				this.addTag(val);
+				const input = document.getElementById('input-tag-text');
+				if (input) input.value = '';
+				dropdown.style.display = 'none';
+			});
+		});
 	}
 
 	async renderUnsettledAdvanceList() {

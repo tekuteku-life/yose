@@ -44,6 +44,9 @@ export class SummaryController {
 				document.querySelectorAll('#control-granularity .segment-btn').forEach(b => b.classList.remove('active'));
 				btn.classList.add('active');
 				this.coordinator.analyticsGranularity = btn.dataset.granularity;
+				if (this.coordinator.txListController) {
+					this.coordinator.txListController.currentPage = 1;
+				}
 				this.renderSummary();
 			});
 		});
@@ -113,22 +116,27 @@ export class SummaryController {
 		});
 
 		document.getElementById('select-status-filter')?.addEventListener('change', () => {
+			if (this.coordinator.txListController) this.coordinator.txListController.currentPage = 1;
 			this.coordinator.txListController.renderMonthTransactions();
 		});
 
 		document.getElementById('select-account-filter')?.addEventListener('change', () => {
+			if (this.coordinator.txListController) this.coordinator.txListController.currentPage = 1;
 			this.coordinator.txListController.renderMonthTransactions();
 		});
 
 		document.getElementById('select-category-filter')?.addEventListener('change', () => {
+			if (this.coordinator.txListController) this.coordinator.txListController.currentPage = 1;
 			this.coordinator.txListController.renderMonthTransactions();
 		});
 
 		document.getElementById('select-tag-filter')?.addEventListener('change', () => {
+			if (this.coordinator.txListController) this.coordinator.txListController.currentPage = 1;
 			this.coordinator.txListController.renderMonthTransactions();
 		});
 
 		document.getElementById('input-tx-search')?.addEventListener('input', () => {
+			if (this.coordinator.txListController) this.coordinator.txListController.currentPage = 1;
 			this.coordinator.txListController.renderMonthTransactions();
 		});
 
@@ -546,7 +554,7 @@ export class SummaryController {
 						</thead>
 						<tbody>
 							${days.map(d => `
-								<tr>
+								<tr class="clickable-row ${this.coordinator.selectedDate === d.date ? 'active' : ''}" data-date="${d.date}" style="cursor: pointer;">
 									<td><strong>${d.date.slice(5)}</strong></td>
 									<td style="color: #10b981;">¥${d.income_confirmed.toLocaleString()}</td>
 									<td style="color: var(--danger);">¥${d.expense_confirmed.toLocaleString()}</td>
@@ -559,6 +567,21 @@ export class SummaryController {
 						</tbody>
 					</table>
 				`;
+
+				tableContainer.querySelectorAll('.clickable-row').forEach(row => {
+					row.addEventListener('click', () => {
+						const date = row.dataset.date;
+						if (date) {
+							this.coordinator.selectedDate = date;
+							tableContainer.querySelectorAll('.clickable-row').forEach(r => r.classList.remove('active'));
+							row.classList.add('active');
+							if (this.coordinator.txListController) {
+								this.coordinator.txListController.currentPage = 1;
+								this.coordinator.txListController.renderMonthTransactions();
+							}
+						}
+					});
+				});
 			}
 		}
 

@@ -4,6 +4,7 @@
  */
 
 import {
+	formatDate,
 	escapeHtml,
 	resolveTransactionDisplayInfo,
 	filterTransactionsByCriteria
@@ -12,6 +13,9 @@ import {
 export class TransactionListController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
+		this.currentPage = 1;
+		this.pageSize = 30;
+		this._paginationEventsAttached = false;
 	}
 
 	get db() {
@@ -130,10 +134,29 @@ export class TransactionListController {
 		const list = document.getElementById('month-tx-list');
 		if (!list) return;
 
-		const [txs, masterConfig] = await Promise.all([
-			this.db.getTransactions({ target_month: this.coordinator.currentMonth }),
-			this.db.getMasterConfig()
-		]);
+		const granularity = this.coordinator.analyticsGranularity || 'monthly';
+		let txs = [];
+		const titleEl = document.getElementById('month-tx-list-title');
+
+		if (granularity === 'yearly') {
+			const targetYear = this.coordinator.selectedYear || new Date().getFullYear();
+			if (titleEl) titleEl.textContent = `📋 ${targetYear}年 (年間) の明細一覧`;
+			const all = await this.db.getTransactions({ includeDeleted: false });
+			txs = all.filter(t => t.date && t.date.startsWith(String(targetYear)));
+		} else if (granularity === 'daily') {
+			const targetDate = this.coordinator.selectedDate || (formatDate ? formatDate(new Date()) : new Date().toISOString().slice(0, 10));
+			if (titleEl) titleEl.textContent = `📋 ${targetDate} (日別) の明細一覧`;
+			const all = await this.db.getTransactions({ includeDeleted: false });
+			txs = all.filter(t => t.date === targetDate);
+		} else {
+			const targetMonth = this.coordinator.currentMonth || (new Date().toISOString().slice(0, 7));
+			if (titleEl) titleEl.textContent = `📋 ${targetMonth} (月別) の明細一覧`;
+			txs = await this.db.getTransactions({ target_month: targetMonth });
+		}
+
+		txs.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.created_at || '').localeCompare(a.created_at || ''));
+
+		const masterConfig = await this.db.getMasterConfig();
 
 		this.populateFilterDropdowns(txs, masterConfig);
 
@@ -151,12 +174,58 @@ export class TransactionListController {
 			keyword: filterKeyword
 		}, masterConfig);
 
+		const paginationControls = document.getElementById('tx-pagination-controls');
+		const paginationInfo = document.getElementById('tx-pagination-info');
+		const btnPrev = document.getElementById('btn-tx-prev-page');
+		const btnNext = document.getElementById('btn-tx-next-page');
+
 		if (filtered.length === 0) {
 			list.innerHTML = '<div style="color: var(--text-muted); padding: 12px; text-align: center;">取引はありません</div>';
+			if (paginationControls) paginationControls.style.display = 'none';
 			return;
 		}
 
-		list.innerHTML = filtered.map(t => this.renderTransactionItemHtml(t, masterConfig, true)).join('');
+		// Pagination logic
+		const totalCount = filtered.length;
+		const totalPages = Math.max(1, Math.ceil(totalCount / this.pageSize));
+		if (this.currentPage > totalPages) this.currentPage = totalPages;
+		if (this.currentPage < 1) this.currentPage = 1;
+
+		const startIdx = (this.currentPage - 1) * this.pageSize;
+		const pageItems = filtered.slice(startIdx, startIdx + this.pageSize);
+
+		list.innerHTML = pageItems.map(t => this.renderTransactionItemHtml(t, masterConfig, true)).join('');
+
+		// Update pagination controls
+		if (paginationControls) {
+			if (totalCount > this.pageSize) {
+				paginationControls.style.display = 'flex';
+				if (paginationInfo) {
+					paginationInfo.textContent = `${this.currentPage} / ${totalPages} ページ (全 ${totalCount} 件)`;
+				}
+				if (btnPrev) btnPrev.disabled = this.currentPage <= 1;
+				if (btnNext) btnNext.disabled = this.currentPage >= totalPages;
+			} else {
+				paginationControls.style.display = 'none';
+			}
+		}
+
+		if (!this._paginationEventsAttached && paginationControls) {
+			btnPrev?.addEventListener('click', () => {
+				if (this.currentPage > 1) {
+					this.currentPage--;
+					this.renderMonthTransactions();
+				}
+			});
+			btnNext?.addEventListener('click', () => {
+				const currentTotalPages = Math.max(1, Math.ceil(filtered.length / this.pageSize));
+				if (this.currentPage < currentTotalPages) {
+					this.currentPage++;
+					this.renderMonthTransactions();
+				}
+			});
+			this._paginationEventsAttached = true;
+		}
 
 		// Attach click listeners to .tx-item.clickable (ignoring clicks on delete button)
 		list.querySelectorAll('.tx-item.clickable').forEach(item => {
