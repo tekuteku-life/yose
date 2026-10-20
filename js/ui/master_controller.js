@@ -285,13 +285,13 @@ export class MasterController {
 				<div class="master-item-row ${!r.is_active ? 'archived' : ''}">
 					<div>
 						<div style="font-weight: 600;">
-							${r.name}
+							${escapeHtml(r.name)}
 							<span class="badge ${r.is_active ? 'badge-success' : 'badge-warning'}" style="margin-left: 6px;">
 								${r.is_active ? '有効' : '停止中'}
 							</span>
 						</div>
 						<div style="font-size: 0.8rem; color: var(--text-muted);">
-							毎月${r.day_of_month}日 | ¥${(r.amount || 0).toLocaleString()} | ${r.type} | 口座: ${r.account_id}
+							毎月${r.day_of_month}日 | ¥${(r.amount || 0).toLocaleString()} | ${escapeHtml(r.type)} | 口座: ${escapeHtml(r.account_id)}
 						</div>
 					</div>
 					<div style="display: flex; gap: 6px;">
@@ -649,17 +649,24 @@ export class MasterController {
 				const name = document.getElementById('m-sub-name').value.trim();
 
 				if (parentItem) {
-					parentItem.subcategories = parentItem.subcategories || [];
+					config.categories = config.categories || [];
+					const targetParent = config.categories.find(c => c.id === parentItem.id) || parentItem;
+					targetParent.subcategories = targetParent.subcategories || [];
+					if (targetParent !== parentItem) {
+						parentItem.subcategories = targetParent.subcategories;
+					}
+
 					if (isNew) {
-						parentItem.subcategories.push({
+						targetParent.subcategories.push({
 							id,
 							name,
-							sort_order: parentItem.subcategories.length + 1,
+							sort_order: targetParent.subcategories.length + 1,
 							is_archived: false
 						});
 					} else {
-						item.id = item.id || id;
-						item.name = name;
+						const sub = targetParent.subcategories.find(s => s.id === item.id) || item;
+						sub.id = sub.id || id;
+						sub.name = name;
 					}
 				}
 

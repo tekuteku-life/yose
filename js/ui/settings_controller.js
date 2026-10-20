@@ -716,7 +716,7 @@ export class SettingsController {
 
 		// Calculate previous year actuals per category
 		const config = await this.db.getMasterConfig();
-		const categories = (config?.categories || []).filter(c => !c.type || c.type === 'expense');
+		const categories = (config?.categories || []).filter(c => !c.is_archived && (!c.type || c.type === 'expense'));
 		const prevYearStr = String(Number(currentYear) - 1);
 		const snapshot = await this.db.getSnapshot();
 		const allTransactions = await this.db.getTransactions({ includeDeleted: false });

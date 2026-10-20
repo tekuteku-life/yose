@@ -330,6 +330,15 @@ export class SummaryController {
 	}
 
 	async applyDrilldownFilter({ accountId = 'all', categoryId = 'all', tag = 'all' } = {}) {
+		if (this.coordinator.analyticsTarget !== 'cashflow') {
+			this.coordinator.analyticsTarget = 'cashflow';
+			const tabBtns = document.querySelectorAll('.tab-btn');
+			tabBtns.forEach(b => {
+				b.classList.toggle('active', b.dataset.analyticsTarget === 'cashflow' || b.dataset.tab === 'tab-cashflow');
+			});
+			await this.renderSummary();
+		}
+
 		const statusSelect = document.getElementById('select-status-filter');
 		const accSelect = document.getElementById('select-account-filter');
 		const catSelect = document.getElementById('select-category-filter');
@@ -632,15 +641,8 @@ export class SummaryController {
 
 	renderYearlyAnalytics(transactions, snapshot) {
 		const yearlyData = aggregateYearlySummaries(transactions, snapshot?.monthly_summaries || {});
-
-		let totalInc = 0;
-		let totalExp = 0;
-		for (const y of Object.values(yearlyData)) {
-			totalInc += y.income;
-			totalExp += y.expense;
-		}
-		const totalNet = totalInc - totalExp;
-		const avgRate = totalInc > 0 ? Math.round((totalNet / totalInc) * 1000) / 10 : 0;
+		const selectedYear = this.coordinator.selectedYear;
+		const targetYearData = yearlyData[selectedYear] || { income: 0, expense: 0, net: 0, savings_rate: 0 };
 
 		const statInc = document.getElementById('stat-income');
 		const statExp = document.getElementById('stat-expense');
@@ -651,14 +653,14 @@ export class SummaryController {
 		const lblNet = document.getElementById('label-stat-net');
 		const lblBal = document.getElementById('label-stat-savings-rate');
 
-		if (lblInc) lblInc.textContent = '全期間 累計収入';
-		if (statInc) statInc.textContent = `¥${totalInc.toLocaleString()}`;
-		if (lblExp) lblExp.textContent = '全期間 累計支出';
-		if (statExp) statExp.textContent = `¥${totalExp.toLocaleString()}`;
-		if (lblNet) lblNet.textContent = '全期間 累計純貯蓄';
-		if (statNet) statNet.textContent = `¥${totalNet.toLocaleString()}`;
-		if (lblBal) lblBal.textContent = '平均貯蓄率';
-		if (statBal) statBal.textContent = `${avgRate}%`;
+		if (lblInc) lblInc.textContent = `${selectedYear}年 年間収入`;
+		if (statInc) statInc.textContent = `¥${(targetYearData.income || 0).toLocaleString()}`;
+		if (lblExp) lblExp.textContent = `${selectedYear}年 年間支出`;
+		if (statExp) statExp.textContent = `¥${(targetYearData.expense || 0).toLocaleString()}`;
+		if (lblNet) lblNet.textContent = `${selectedYear}年 年間純貯蓄`;
+		if (statNet) statNet.textContent = `¥${(targetYearData.net || 0).toLocaleString()}`;
+		if (lblBal) lblBal.textContent = `${selectedYear}年 貯蓄率`;
+		if (statBal) statBal.textContent = `${targetYearData.savings_rate || 0}%`;
 
 		// Table
 		const tableContainer = document.getElementById('breakdown-table-container');
@@ -692,20 +694,14 @@ export class SummaryController {
 			`;
 		}
 
-		// Category breakdown list
-		const combinedCats = {};
-		for (const y of Object.values(yearlyData)) {
-			const src = this.coordinator.useActualCategoryAxis ? y.by_actual_category : y.by_category;
-			if (src) {
-				for (const [k, v] of Object.entries(src)) {
-					const val = typeof v === 'number' ? v : (v.total || 0);
-					combinedCats[k] = (combinedCats[k] || 0) + val;
-				}
-			}
-		}
+		// Category breakdown list: aggregate for selectedYear in yearly mode to isolate current year
+		const src = this.coordinator.useActualCategoryAxis ? targetYearData.by_actual_category : targetYearData.by_category;
 		const catObj = {};
-		for (const [k, v] of Object.entries(combinedCats)) {
-			catObj[k] = { total: v, total_confirmed: v, total_planned: 0 };
+		if (src) {
+			for (const [k, v] of Object.entries(src)) {
+				const val = typeof v === 'number' ? v : (v.total || 0);
+				catObj[k] = { total: val, total_confirmed: val, total_planned: 0 };
+			}
 		}
 		this.renderCategoryBreakdownList(catObj);
 
@@ -905,7 +901,7 @@ export class SummaryController {
 		// Category budget progress breakdown list (Requirement 3.14)
 		const catProgressContainer = document.getElementById('budget-category-progress-container');
 		if (catProgressContainer) {
-			const categories = (config?.categories || []).filter(c => !c.type || c.type === 'expense');
+			const categories = (config?.categories || []).filter(c => !c.is_archived && (!c.type || c.type === 'expense'));
 			const catMap = new Map();
 			for (const c of categories) {
 				catMap.set(c.id, c);
@@ -1143,7 +1139,7 @@ export class SummaryController {
 		const list = document.getElementById('account-balances-list');
 		if (!list) return;
 		const cfg = config || await this.db.getMasterConfig();
-		const accounts = cfg?.accounts || [];
+		const accounts = (cfg?.accounts || []).filter(a => !a.is_archived);
 		const target = this.coordinator.analyticsTarget || 'cashflow';
 		const granularity = this.coordinator.analyticsGranularity || 'monthly';
 
