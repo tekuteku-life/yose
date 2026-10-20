@@ -207,5 +207,144 @@ describe('Integration - Client & GAS Sync Flow', () => {
 		assert.equal(snapAfterRetro.account_balances.acc_bank_main, 1120000);
 		assert.equal(snapAfterRetro.monthly_summaries['2026-09'].expense_total, 30000);
 	});
+	for (const destination of ['2026-10', '2026-08']) {
+		it(`moves an archived transaction to ${destination}, removes the old entry, and recalculates once`, async () => {
+			gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+			const tx = { id: 'move_archived', date: '2026-09-20', target_month: '2026-09', type: 'expense', account_id: 'acc_bank_main', amount: 300, status: 'confirmed', sync_status: 'synced' };
+			gas.saveJsonFile('archives/2026-09.json', { transactions: [tx] });
+			const snapshot = { schema_version: 2, last_closed_month: '2026-09', account_balances: { acc_bank_main: 999700 }, monthly_summaries: { '2026-09': gas.computeMonthlySummary([tx], { acc_bank_main: 1000000 }) } };
+			gas.saveJsonFile('summary_snapshot.json', snapshot);
+			await db.saveSnapshot(snapshot);
+			await db.putTransaction({ ...tx, previous_target_month: '2026-09', target_month: destination, date: destination + '-20', sync_status: 'unsynced' });
+			await syncManager.syncPendingDiffs();
+			const old = gas.loadJsonFile('archives/2026-09.json');
+			assert.equal(old.transactions.some(t => t.id === tx.id), false);
+			const target = destination <= '2026-09' ? gas.loadJsonFile(`archives/${destination}.json`) : gas.loadJsonFile('pending_diffs.json');
+			assert.equal(target.transactions.filter(t => t.id === tx.id).length, 1);
+			const after = gas.loadJsonFile('summary_snapshot.json');
+			assert.equal(after.monthly_summaries['2026-09'].expense_total, 0);
+			assert.equal(after.account_balances.acc_bank_main, destination <= '2026-09' ? 999700 : 1000000);
+			assert.equal((await db.getTransaction(tx.id)).previous_target_month, undefined);
+		});
+	}
+
+	it('keeps failed archived edits pending and retries them into the archive after reconnecting', async () => {
+		gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+		const initial = { id: 'retry_archive', date: '2026-09-20', target_month: '2026-09', type: 'expense', account_id: 'acc_bank_main', amount: 100, status: 'confirmed' };
+		gas.saveJsonFile('archives/2026-09.json', { transactions: [initial] });
+		const snapshot = { schema_version: 2, last_closed_month: '2026-09', account_balances: { acc_bank_main: 999900 }, monthly_summaries: { '2026-09': gas.computeMonthlySummary([initial], { acc_bank_main: 1000000 }) } };
+		gas.saveJsonFile('summary_snapshot.json', snapshot);
+		await db.saveSnapshot(snapshot);
+		await db.putTransaction({ ...initial, amount: 500, sync_status: 'unsynced' });
+		const fetch = syncManager.fetch;
+		syncManager.fetch = async () => { throw new Error('offline'); };
+		await assert.rejects(syncManager.syncPendingDiffs(), /offline/);
+		assert.equal((await db.getTransaction(initial.id)).sync_status, 'unsynced');
+		syncManager.fetch = fetch;
+		await syncManager.syncPendingDiffs();
+		assert.equal(gas.loadJsonFile('archives/2026-09.json').transactions[0].amount, 500);
+		assert.equal(gas.loadJsonFile('summary_snapshot.json').monthly_summaries['2026-09'].expense_total, 500);
+		assert.equal((await db.getTransaction(initial.id)).sync_status, 'synced');
+	});
+
+	for (const [source, intermediate] of [['2026-09', '2026-10'], ['2026-10', '2026-08']]) {
+		it(`deduplicates ${source} to ${intermediate} to November after the first response is lost`, async () => {
+			gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+			const initial = { id: 'lost_response', date: source + '-20', target_month: source, type: 'expense', account_id: 'acc_bank_main', amount: 300, status: 'confirmed' };
+			const snapshot = { schema_version: 2, last_closed_month: '2026-09', account_balances: { acc_bank_main: 1000000 }, monthly_summaries: { '2026-09': gas.computeMonthlySummary(source === '2026-09' ? [initial] : [], { acc_bank_main: 1000000 }) } };
+			gas.saveJsonFile('summary_snapshot.json', snapshot);
+			gas.saveJsonFile(source <= '2026-09' ? `archives/${source}.json` : 'pending_diffs.json', { transactions: [initial] });
+			await db.saveSnapshot(snapshot);
+			await db.putTransaction({ ...initial, date: intermediate + '-20', target_month: intermediate, previous_target_month: source, sync_status: 'unsynced' });
+			const fetch = syncManager.fetch;
+			syncManager.fetch = async (...args) => { await fetch(...args); throw new Error('response lost'); };
+			await assert.rejects(syncManager.syncPendingDiffs(), /response lost/);
+			const applied = gas.loadJsonFile(intermediate <= '2026-09' ? `archives/${intermediate}.json` : 'pending_diffs.json', { transactions: [] });
+			assert.ok(applied.transactions.some(tx => tx.id === initial.id && tx.target_month === intermediate));
+			const pending = await db.getTransaction(initial.id);
+			assert.equal(pending.previous_target_month, source);
+			await db.putTransaction({ ...pending, date: '2026-11-20', target_month: '2026-11' });
+			syncManager.fetch = fetch;
+			await syncManager.syncPendingDiffs();
+			const all = [gas.loadJsonFile('pending_diffs.json'), ...['2026-08', '2026-09', '2026-10'].map(month => gas.loadJsonFile(`archives/${month}.json`, { transactions: [] }))];
+			const instances = all.flatMap(data => data.transactions || []).filter(tx => tx.id === initial.id);
+			assert.equal(instances.length, 1);
+			assert.equal(instances[0].target_month, '2026-11');
+			const finalSnapshot = gas.loadJsonFile('summary_snapshot.json');
+			assert.equal(finalSnapshot.monthly_summaries['2026-09'].expense_total, 0);
+			if (intermediate <= '2026-09') assert.equal(finalSnapshot.monthly_summaries[intermediate].expense_total, 0);
+			assert.equal(finalSnapshot.account_balances.acc_bank_main, 1000000);
+		});
+	}
+
+	it('serializes sync before reading pending records and preserves edits made during that read', async () => {
+		gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+		gas.saveJsonFile('summary_snapshot.json', await db.getSnapshot());
+		const initial = await db.putTransaction({ id: 'read_race', date: '2026-10-20', target_month: '2026-10', type: 'expense', account_id: 'acc_bank_main', amount: 100, status: 'confirmed' });
+		let release;
+		let started;
+		const barrier = new Promise(resolve => { release = resolve; });
+		const reading = new Promise(resolve => { started = resolve; });
+		const getPending = db.getUnsyncedTransactions.bind(db);
+		let calls = 0;
+		db.getUnsyncedTransactions = async () => {
+			const pending = await getPending();
+			if (++calls === 1) { started(); await barrier; }
+			return pending;
+		};
+		const first = syncManager.syncPendingDiffs();
+		try {
+			await reading;
+			await db.putTransaction({ ...initial, amount: 200 });
+			assert.equal((await syncManager.syncPendingDiffs()).status, 'already_syncing');
+			assert.equal(calls, 1);
+		} finally {
+			release();
+			await first;
+		}
+		assert.equal(syncManager.isSyncing, false);
+		assert.equal((await db.getTransaction(initial.id)).amount, 200);
+		assert.equal((await db.getTransaction(initial.id)).sync_status, 'unsynced');
+		await syncManager.syncPendingDiffs();
+		assert.equal(gas.loadJsonFile('pending_diffs.json').transactions.find(tx => tx.id === initial.id).amount, 200);
+		assert.equal((await db.getTransaction(initial.id)).sync_status, 'synced');
+	});
+
+	for (const route of ['push_diff', 'retroactive_update']) {
+		it(`does not acknowledge a concurrently edited version while ${route} is in flight`, async () => {
+			gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+			gas.saveJsonFile('summary_snapshot.json', await db.getSnapshot());
+			const sent = { id: 'concurrent', date: '2026-10-20', target_month: '2026-10', type: 'expense', account_id: 'acc_bank_main', amount: 100, status: 'confirmed', sync_status: 'unsynced', updated_at: '2026-10-20T00:00:00Z', ...(route === 'retroactive_update' ? { previous_target_month: '2026-09' } : {}) };
+			await db.putTransaction(sent);
+			let release;
+			let started;
+			const barrier = new Promise(resolve => { release = resolve; });
+			const requestStarted = new Promise(resolve => { started = resolve; });
+			const fetch = syncManager.fetch;
+			syncManager.fetch = async (...args) => {
+				assert.equal(JSON.parse(args[1].body).action, route);
+				const response = await fetch(...args);
+				started();
+				await barrier;
+				return response;
+			};
+			const sending = syncManager.syncPendingDiffs();
+			await requestStarted;
+			const latest = { ...await db.getTransaction(sent.id), amount: 222, ...(route === 'retroactive_update' ? { target_month: '2026-11', date: '2026-11-20' } : {}) };
+			// Deliberately keep updated_at identical to exercise two edits within one clock tick.
+			await db.putTransaction(latest);
+			release();
+			await sending;
+			const remaining = await db.getTransaction(sent.id);
+			assert.equal(remaining.amount, 222);
+			assert.equal(remaining.sync_status, 'unsynced');
+			if (route === 'retroactive_update') assert.equal(remaining.previous_target_month, '2026-09');
+			syncManager.fetch = fetch;
+			await syncManager.syncPendingDiffs();
+			assert.equal((await db.getTransaction(sent.id)).sync_status, 'synced');
+			assert.equal(gas.loadJsonFile('pending_diffs.json').transactions.find(tx => tx.id === sent.id).amount, 222);
+		});
+	}
+
 });
 

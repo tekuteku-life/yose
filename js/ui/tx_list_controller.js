@@ -15,6 +15,7 @@ export class TransactionListController {
 		this.coordinator = coordinator;
 		this.currentPage = 1;
 		this.pageSize = 30;
+		this.totalPages = 1;
 		this._paginationEventsAttached = false;
 	}
 
@@ -180,6 +181,7 @@ export class TransactionListController {
 		const btnPrev = document.getElementById('btn-tx-prev-page');
 		const btnNext = document.getElementById('btn-tx-next-page');
 
+		this.totalPages = Math.max(1, Math.ceil(filtered.length / this.pageSize));
 		if (filtered.length === 0) {
 			const emptyMsg = txs.length > 0 ? '条件に一致する取引はありません' : '取引はありません';
 			list.innerHTML = `<div style="color: var(--text-muted); padding: 12px; text-align: center;">${emptyMsg}</div>`;
@@ -189,7 +191,7 @@ export class TransactionListController {
 
 		// Pagination logic
 		const totalCount = filtered.length;
-		const totalPages = Math.max(1, Math.ceil(totalCount / this.pageSize));
+		const totalPages = this.totalPages;
 		if (this.currentPage > totalPages) this.currentPage = totalPages;
 		if (this.currentPage < 1) this.currentPage = 1;
 
@@ -220,8 +222,7 @@ export class TransactionListController {
 				}
 			});
 			btnNext?.addEventListener('click', () => {
-				const currentTotalPages = Math.max(1, Math.ceil(filtered.length / this.pageSize));
-				if (this.currentPage < currentTotalPages) {
+				if (this.currentPage < this.totalPages) {
 					this.currentPage++;
 					this.renderMonthTransactions();
 				}

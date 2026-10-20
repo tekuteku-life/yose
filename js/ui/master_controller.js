@@ -168,21 +168,21 @@ export class MasterController {
 							${a.is_archived ? '<span class="badge badge-warning" style="margin-left: 6px;">アーカイブ</span>' : ''}
 						</div>
 						<div style="font-size: 0.8rem; color: var(--text-muted);">
-							種別: ${escapeHtml(a.type)} | 初期残高: ¥${(a.initial_balance || 0).toLocaleString()}
+							種別: ${escapeHtml(a.type)} | 初期残高: ¥${Number(a.initial_balance || 0).toLocaleString()}
 						</div>
 						${(() => {
 							if (a.type !== 'credit_card') return '';
 							const debitId = a.debit_account_id || a.settlement_account_id;
 							const debitAcc = (config.accounts || []).find(acc => acc.id === debitId);
 							const debitInfo = debitAcc
-								? `締: ${a.closing_day || '-'}日 / 引落: ${a.debit_day || '-'}日 (${escapeHtml(debitAcc.name)})`
+								? `締: ${escapeHtml(a.closing_day || '-')}日 / 引落: ${escapeHtml(a.debit_day || '-')}日 (${escapeHtml(debitAcc.name)})`
 								: '引落口座: 未設定';
 							return `<div style="font-size: 0.8rem; color: var(--primary); margin-top: 2px;">💳 ${debitInfo}</div>`;
 						})()}
 					</div>
 					<div style="display: flex; gap: 6px;">
-						<button class="btn btn-secondary btn-sm btn-edit-account" data-id="${a.id}">編集</button>
-						<button class="btn btn-secondary btn-sm btn-archive-account" data-id="${a.id}">
+						<button class="btn btn-secondary btn-sm btn-edit-account" data-id="${escapeHtml(a.id)}">編集</button>
+						<button class="btn btn-secondary btn-sm btn-archive-account" data-id="${escapeHtml(a.id)}">
 							${a.is_archived ? '復元' : 'アーカイブ'}
 						</button>
 					</div>
@@ -223,9 +223,9 @@ export class MasterController {
 							${c.is_archived ? '<span class="badge badge-warning" style="margin-left: 6px;">アーカイブ</span>' : ''}
 						</div>
 						<div style="display: flex; gap: 6px;">
-							<button class="btn btn-secondary btn-sm btn-add-subcat" data-id="${c.id}">+ 内訳追加</button>
-							<button class="btn btn-secondary btn-sm btn-edit-cat" data-id="${c.id}">編集</button>
-							<button class="btn btn-secondary btn-sm btn-archive-cat" data-id="${c.id}">
+							<button class="btn btn-secondary btn-sm btn-add-subcat" data-id="${escapeHtml(c.id)}">+ 内訳追加</button>
+							<button class="btn btn-secondary btn-sm btn-edit-cat" data-id="${escapeHtml(c.id)}">編集</button>
+							<button class="btn btn-secondary btn-sm btn-archive-cat" data-id="${escapeHtml(c.id)}">
 								${c.is_archived ? '復元' : 'アーカイブ'}
 							</button>
 						</div>
@@ -234,8 +234,8 @@ export class MasterController {
 						${(c.subcategories || []).map(s => `
 							<span class="subcat-pill ${s.is_archived ? 'archived' : ''}">
 								${escapeHtml(s.name)}
-								<button type="button" class="btn-edit-subcat" data-cat-id="${c.id}" data-sub-id="${s.id}" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--primary);" title="編集">✏️</button>
-								<button type="button" class="btn-archive-subcat" data-cat-id="${c.id}" data-sub-id="${s.id}" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);" title="${s.is_archived ? '復元' : 'アーカイブ'}">${s.is_archived ? '↩️' : '📦'}</button>
+								<button type="button" class="btn-edit-subcat" data-cat-id="${escapeHtml(c.id)}" data-sub-id="${escapeHtml(s.id)}" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--primary);" title="編集">✏️</button>
+								<button type="button" class="btn-archive-subcat" data-cat-id="${escapeHtml(c.id)}" data-sub-id="${escapeHtml(s.id)}" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);" title="${s.is_archived ? '復元' : 'アーカイブ'}">${s.is_archived ? '↩️' : '📦'}</button>
 							</span>
 						`).join('')}
 					</div>
@@ -300,15 +300,15 @@ export class MasterController {
 							</span>
 						</div>
 						<div style="font-size: 0.8rem; color: var(--text-muted);">
-							毎月${r.day_of_month}日 | ¥${(r.amount || 0).toLocaleString()} | ${escapeHtml(r.type)} | 口座: ${escapeHtml(r.account_id)}
+							毎月${escapeHtml(r.day_of_month)}日 | ¥${Number(r.amount || 0).toLocaleString()} | ${escapeHtml(r.type)} | 口座: ${escapeHtml(r.account_id)}
 						</div>
 					</div>
 					<div style="display: flex; gap: 6px;">
-						<button class="btn btn-secondary btn-sm btn-edit-recurring" data-id="${r.id}">編集</button>
-						<button class="btn btn-secondary btn-sm btn-toggle-recurring" data-id="${r.id}">
+						<button class="btn btn-secondary btn-sm btn-edit-recurring" data-id="${escapeHtml(r.id)}">編集</button>
+						<button class="btn btn-secondary btn-sm btn-toggle-recurring" data-id="${escapeHtml(r.id)}">
 							${r.is_active ? '無効化' : '有効化'}
 						</button>
-						<button class="btn btn-danger btn-sm btn-delete-recurring" data-id="${r.id}">削除</button>
+						<button class="btn btn-danger btn-sm btn-delete-recurring" data-id="${escapeHtml(r.id)}">削除</button>
 					</div>
 				</div>
 			`).join('') || '<div style="color: var(--text-muted); padding: 8px;">定期ルールが登録されていません</div>';
@@ -355,14 +355,14 @@ export class MasterController {
 					return `
 						<details class="holiday-year-group">
 							<summary>
-								<span>📅 <strong>${year}年</strong> (${list.length}日)</span>
+								<span>📅 <strong>${escapeHtml(year)}年</strong> (${list.length}日)</span>
 								<span style="font-size: 0.8rem; color: var(--text-muted);">開閉 ▼</span>
 							</summary>
 							<div class="holiday-year-content subcat-list">
 								${list.map(h => `
 									<span class="subcat-pill">
-										${h}
-										<span class="btn-icon-del btn-del-holiday" data-date="${h}" title="削除">&times;</span>
+										${escapeHtml(h)}
+										<span class="btn-icon-del btn-del-holiday" data-date="${escapeHtml(h)}" title="削除">&times;</span>
 									</span>
 								`).join('')}
 							</div>
@@ -388,6 +388,11 @@ export class MasterController {
 		if (!modal || !title || !body) return;
 
 		const config = await this.db.getMasterConfig();
+		if (parentItem) parentItem = config.categories.find(category => category.id === parentItem.id) || parentItem;
+		if (item) {
+			const collection = type === 'account' ? config.accounts : type === 'category' ? config.categories : type === 'recurring' ? config.recurring_rules : parentItem?.subcategories;
+			item = collection?.find(candidate => candidate.id === item.id) || item;
+		}
 
 		if (type === 'account') {
 			const isNew = !item;
@@ -423,7 +428,7 @@ export class MasterController {
 						</div>
 						<div class="form-group">
 							<label class="form-label" for="m-acc-init-bal">初期残高 (円)</label>
-							<input type="number" id="m-acc-init-bal" class="form-control" value="${item?.initial_balance ?? 0}" step="1">
+							<input type="number" id="m-acc-init-bal" class="form-control" value="${escapeHtml(item?.initial_balance ?? 0)}" step="1">
 						</div>
 					</div>
 					<div id="m-acc-cc-fields" style="display: ${item?.type === 'credit_card' ? 'block' : 'none'}; border-top: 1px dashed var(--border); margin-top: 12px; padding-top: 12px;">
@@ -431,11 +436,11 @@ export class MasterController {
 						<div class="form-row">
 							<div class="form-group">
 								<label class="form-label" for="m-acc-closing-day">締め日 (1〜28、99=末日)</label>
-								<input type="number" id="m-acc-closing-day" class="form-control" value="${item?.closing_day ?? ''}" placeholder="例: 15 (末日: 99)" min="1" max="99">
+								<input type="number" id="m-acc-closing-day" class="form-control" value="${escapeHtml(item?.closing_day ?? '')}" placeholder="例: 15 (末日: 99)" min="1" max="99">
 							</div>
 							<div class="form-group">
 								<label class="form-label" for="m-acc-debit-day">引き落とし日 (1〜28、99=末日)</label>
-								<input type="number" id="m-acc-debit-day" class="form-control" value="${item?.debit_day ?? ''}" placeholder="例: 10 (末日: 99)" min="1" max="99">
+								<input type="number" id="m-acc-debit-day" class="form-control" value="${escapeHtml(item?.debit_day ?? '')}" placeholder="例: 10 (末日: 99)" min="1" max="99">
 							</div>
 						</div>
 						<div class="form-row">
@@ -469,17 +474,17 @@ export class MasterController {
 							</div>
 							<div class="form-group">
 								<label class="form-label" for="m-acc-maturity-amount">満期保険金額・目標額 (円)</label>
-								<input type="number" id="m-acc-maturity-amount" class="form-control" value="${item?.maturity_amount ?? ''}" placeholder="例: 3000000" min="0" step="1">
+								<input type="number" id="m-acc-maturity-amount" class="form-control" value="${escapeHtml(item?.maturity_amount ?? '')}" placeholder="例: 3000000" min="0" step="1">
 							</div>
 						</div>
 						<div class="form-row">
 							<div class="form-group">
 								<label class="form-label" for="m-acc-premium-amount">毎月の保険料 (円・定期出費連動)</label>
-								<input type="number" id="m-acc-premium-amount" class="form-control" value="${item?.premium_amount ?? ''}" placeholder="例: 15000 (0で定期連携なし)" min="0" step="1">
+								<input type="number" id="m-acc-premium-amount" class="form-control" value="${escapeHtml(item?.premium_amount ?? '')}" placeholder="例: 15000 (0で定期連携なし)" min="0" step="1">
 							</div>
 							<div class="form-group">
 								<label class="form-label" for="m-acc-premium-day">引落・支払日 (毎月何日: 1〜31)</label>
-								<input type="number" id="m-acc-premium-day" class="form-control" value="${item?.premium_day ?? 27}" min="1" max="31" step="1">
+								<input type="number" id="m-acc-premium-day" class="form-control" value="${escapeHtml(item?.premium_day ?? 27)}" min="1" max="31" step="1">
 							</div>
 						</div>
 						<div class="form-row">
@@ -522,7 +527,7 @@ export class MasterController {
 				const debitDayVal = document.getElementById('m-acc-debit-day')?.value;
 				const closingDay = closingDayVal ? Number(closingDayVal) : null;
 				const debitDay = debitDayVal ? Number(debitDayVal) : null;
-				const debitOffset = Number(document.getElementById('m-acc-debit-offset')?.value) || 1;
+				const debitOffset = Number(document.getElementById('m-acc-debit-offset')?.value ?? 1);
 				const debitAccId = document.getElementById('m-acc-debit-account')?.value || null;
 
 				const maturityDate = document.getElementById('m-acc-maturity-date')?.value || null;
@@ -719,7 +724,7 @@ export class MasterController {
 						</div>
 						<div class="form-group">
 							<label class="form-label" for="m-rec-amount">想定金額 (円)</label>
-							<input type="number" id="m-rec-amount" class="form-control" value="${item?.amount || ''}" required min="0" step="1">
+							<input type="number" id="m-rec-amount" class="form-control" value="${escapeHtml(item?.amount || '')}" required min="0" step="1">
 						</div>
 					</div>
 					<div class="form-row">
@@ -739,7 +744,7 @@ export class MasterController {
 					<div class="form-row">
 						<div class="form-group">
 							<label class="form-label" for="m-rec-day">発生日 (毎月何日: 1-31)</label>
-							<input type="number" id="m-rec-day" class="form-control" min="1" max="31" value="${item?.day_of_month || 25}" required>
+							<input type="number" id="m-rec-day" class="form-control" min="1" max="31" value="${escapeHtml(item?.day_of_month || 25)}" required>
 						</div>
 						<div class="form-group">
 							<label class="form-label" for="m-rec-holiday">休日補正ルール</label>

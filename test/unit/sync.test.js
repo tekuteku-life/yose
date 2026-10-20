@@ -124,6 +124,19 @@ describe('js/sync.js - Unit Tests', () => {
 	});
 
 	describe('syncPendingDiffs Workflow', () => {
+		it('releases the sync lock after a pending-record read fails and after an empty retry', async () => {
+			const sync = new SyncManager({ db });
+			const getPending = db.getUnsyncedTransactions.bind(db);
+			db.getUnsyncedTransactions = async () => { throw new Error('pending read failed'); };
+			await assert.rejects(sync.syncPendingDiffs(), /pending read failed/);
+			assert.equal(sync.isSyncing, false);
+			assert.equal(sync.lastError, 'pending read failed');
+			db.getUnsyncedTransactions = getPending;
+			assert.equal((await sync.syncPendingDiffs()).status, 'up_to_date');
+			assert.equal(sync.isSyncing, false);
+			assert.equal(sync.lastError, null);
+		});
+
 		it('returns up_to_date if there are no unsynced transactions', async () => {
 			const sync = new SyncManager({
 				db,

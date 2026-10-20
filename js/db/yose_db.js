@@ -6,6 +6,7 @@ import { DEFAULT_MASTER_CONFIG, DEFAULT_SUMMARY_SNAPSHOT } from './defaults.js';
 import { StorageEngine } from './storage_engine.js';
 import { BackupMerger } from './backup_merger.js';
 import { formatDate, calculateCreditCardDebitDate } from '../logic/date_utils.js';
+import { canonicalJsonStringify } from '../crypto.js';
 import { createCreditCardSettlementTransaction } from '../logic/transaction_factory.js';
 
 export class YoseDB extends StorageEngine {
@@ -48,33 +49,28 @@ export class YoseDB extends StorageEngine {
 	}
 
 	async putTransaction(transaction) {
-		const record = {
-			...transaction,
-			updated_at: transaction.updated_at || new Date().toISOString(),
-			sync_status: transaction.sync_status || 'unsynced'
-		};
-		if (!record.created_at) {
-			record.created_at = record.updated_at;
-		}
+		return (await this.putTransactions([transaction]))[0];
+	}
 
-		const toStore = await this.encryptRecord(record, {
+	async putTransactions(txList) {
+		const records = txList.map(transaction => {
+			const updatedAt = transaction.updated_at || new Date().toISOString();
+			return {
+				...transaction,
+				updated_at: updatedAt,
+				created_at: transaction.created_at || updatedAt,
+				sync_status: transaction.sync_status || 'unsynced'
+			};
+		});
+		const encrypted = await Promise.all(records.map(record => this.encryptRecord(record, {
 			id: record.id,
 			target_month: record.target_month,
 			date: record.date,
 			sync_status: record.sync_status,
 			is_deleted: record.is_deleted || false
-		});
-
-		await this.putRaw('transactions', toStore);
-		return record;
-	}
-
-	async putTransactions(txList) {
-		const results = [];
-		for (const t of txList) {
-			results.push(await this.putTransaction(t));
-		}
-		return results;
+		})));
+		await this.putAllRaw('transactions', encrypted);
+		return records;
 	}
 
 	async deleteTransaction(id, soft = true) {
@@ -119,16 +115,25 @@ export class YoseDB extends StorageEngine {
 		return await this.getTransactions({ sync_status: 'unsynced', includeDeleted: true });
 	}
 
-	async markTransactionsSynced(ids) {
+	async markTransactionsSynced(ids, submittedTransactions = null) {
 		if (!Array.isArray(ids) || ids.length === 0) return 0;
+		const submitted = submittedTransactions ? new Map(submittedTransactions.map(tx => [tx.id, tx])) : null;
 		let count = 0;
 		for (const id of ids) {
-			const tx = await this.getTransaction(id);
-			if (tx && tx.sync_status === 'unsynced') {
-				tx.sync_status = 'synced';
-				await this.putTransaction(tx);
-				count++;
-			}
+			const raw = await this.getRaw('transactions', id);
+			const tx = await this.decryptRecord(raw);
+			if (!tx || tx.sync_status !== 'unsynced') continue;
+			if (submitted && canonicalJsonStringify(tx) !== canonicalJsonStringify(submitted.get(id))) continue;
+			const acknowledged = { ...tx, sync_status: 'synced' };
+			delete acknowledged.previous_target_month;
+			const replacement = await this.encryptRecord(acknowledged, {
+				id: tx.id,
+				target_month: tx.target_month,
+				date: tx.date,
+				sync_status: acknowledged.sync_status,
+				is_deleted: tx.is_deleted || false
+			});
+			if (await this.compareAndPutRaw('transactions', id, raw, replacement)) count++;
 		}
 		return count;
 	}
@@ -275,6 +280,8 @@ export class YoseDB extends StorageEngine {
 			}
 		}
 
+		BackupMerger.validateImportData(data, detectedType);
+
 		const stats = {
 			addedTransactions: 0,
 			updatedTransactions: 0,
@@ -394,7 +401,7 @@ export class YoseDB extends StorageEngine {
 		for (const card of creditCards) {
 			const closingDay = card.closing_day || 15;
 			const debitDay = card.debit_day || 10;
-			const offset = card.debit_month_offset || 1;
+			const offset = card.debit_month_offset ?? 1;
 			const debitAccountId = card.debit_account_id;
 
 			const currentCycleInfo = calculateCreditCardDebitDate(todayStr, closingDay, debitDay, offset, config.holidays || []);
@@ -452,7 +459,7 @@ export class YoseDB extends StorageEngine {
 	}
 
 	// --- Installment / Split Transaction Cascading Update (Requirement 3.22) ---
-	async updateInstallmentGroup(groupId, updates = {}, amountAdjustment = null) {
+	async updateInstallmentGroup(groupId, updates = {}, amountAdjustment = null, editedTransaction = null) {
 		if (!groupId) return 0;
 		const all = await this.getTransactions({ group_id: groupId, includeDeleted: true });
 		const activeGroupTxs = all.filter(t => !t.is_deleted);
@@ -479,6 +486,7 @@ export class YoseDB extends StorageEngine {
 		if (paymentTx) {
 			if (newTotal !== undefined) {
 				paymentTx.amount = Math.round(Number(newTotal) || 0);
+				paymentTx.tax_meta = null;
 				if (paymentTx.amortization_meta) {
 					paymentTx.amortization_meta.total_amount = paymentTx.amount;
 				}
@@ -510,6 +518,8 @@ export class YoseDB extends StorageEngine {
 				const atx = amortTxs[i];
 				if (monthlyBase !== null) {
 					atx.amount = i === 0 ? monthlyBase + remainder : monthlyBase;
+					atx.tax_meta = null;
+					if (atx.amortization_meta) atx.amortization_meta.total_amount = newTotal;
 				}
 				if (updates.category_id !== undefined) atx.category_id = updates.category_id;
 				if (updates.subcategory_id !== undefined) atx.subcategory_id = updates.subcategory_id;
@@ -523,6 +533,10 @@ export class YoseDB extends StorageEngine {
 			}
 		}
 
+		if (editedTransaction) {
+			const target = updatedTxs.find(t => t.id === editedTransaction.id);
+			if (target) Object.assign(target, editedTransaction);
+		}
 		await this.putTransactions(updatedTxs);
 		return updatedTxs.length;
 	}

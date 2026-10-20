@@ -2422,3 +2422,21 @@ describe('js/logic.js - Unit Tests', () => {
 	});
 });
 
+
+describe('Canonical GAS snapshot aggregation regression', () => {
+	it('reads canonical snapshot totals in monthly and yearly summaries and respects explicit zero', () => {
+		const history = {
+			'2026-08': { income_total: 1000, expense_total: 200, net_income: 800 },
+			'2026-09': { income_total: 0, expense_total: 0, total_income: 999, total_expense: 888 }
+		};
+		const monthly = aggregateMonthlySummaries([], '2026', history);
+		assert.equal(monthly.months['2026-08'].expense_total, 200);
+		assert.equal(monthly.months['2026-09'].income_total, 0);
+		assert.equal(monthly.total_income, 1000);
+		assert.equal(monthly.total_expense, 200);
+		const yearly = aggregateYearlySummaries([], history)['2026'];
+		assert.equal(yearly.income, 1000);
+		assert.equal(yearly.expense, 200);
+		assert.equal(yearly.net, 800);
+	});
+});

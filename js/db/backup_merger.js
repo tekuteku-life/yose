@@ -5,6 +5,111 @@
 import { FORBIDDEN_PROTOTYPE_KEYS } from './defaults.js';
 
 export class BackupMerger {
+	// Validate the entire payload before the first write, including collections consumed by the UI.
+	static validateImportData(data, detectedType) {
+		const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+		const requireType = (valid, field) => {
+			if (!valid) throw new Error(`Invalid import data: ${field}`);
+		};
+		const requiredFields = {
+			full_backup: ['transactions', 'master_config', 'summary_snapshot'],
+			transactions: ['transactions'],
+			master_config: ['master_config'],
+			annual_budgets: ['annual_budgets'],
+			summary_snapshot: ['summary_snapshot']
+		};
+		requireType(Object.hasOwn(requiredFields, detectedType), 'unknown export type');
+		for (const field of requiredFields[detectedType]) requireType(Object.hasOwn(data, field), field);
+
+		const objects = (value, field) => {
+			requireType(Array.isArray(value), field);
+			for (const item of value) requireType(isObject(item), `${field}[]`);
+			return value;
+		};
+		const optionalStrings = (item, fields, prefix) => {
+			for (const field of fields) {
+				if (item[field] != null) requireType(typeof item[field] === 'string', `${prefix}.${field}`);
+			}
+		};
+		const optionalNumbers = (item, fields, prefix) => {
+			for (const field of fields) {
+				if (item[field] != null) requireType(typeof item[field] === 'number' && Number.isFinite(item[field]), `${prefix}.${field}`);
+			}
+		};
+		const numberMap = (map, prefix) => {
+			requireType(isObject(map), prefix);
+			optionalNumbers(map, Object.keys(map), prefix);
+		};
+		const objectField = (item, field, prefix) => {
+			if (item[field] !== undefined) requireType(isObject(item[field]), `${prefix}.${field}`);
+		};
+		const categorySummary = (map, prefix) => {
+			requireType(isObject(map), prefix);
+			for (const value of Object.values(map)) {
+				if (typeof value === 'number') {
+					requireType(Number.isFinite(value), prefix);
+				} else {
+					requireType(isObject(value), prefix);
+					optionalNumbers(value, ['total', 'confirmed', 'planned', 'total_confirmed', 'total_planned'], prefix);
+					if (value.by_subcategory !== undefined) categorySummary(value.by_subcategory, `${prefix}.by_subcategory`);
+				}
+			}
+		};
+		const budgets = value => {
+			requireType(isObject(value), 'annual_budgets');
+			for (const budget of Object.values(value)) {
+				requireType(isObject(budget), 'annual_budgets.year');
+				optionalNumbers(budget, ['expense_budget', 'savings_target_amount', 'savings_target_rate', 'target_savings_rate'], 'annual_budgets.year');
+				if (budget.category_budgets !== undefined) numberMap(budget.category_budgets, 'category_budgets');
+			}
+		};
+		if (data.transactions !== undefined) {
+			for (const tx of objects(data.transactions, 'transactions')) {
+				optionalStrings(tx, ['id', 'date', 'target_month', 'type', 'status', 'memo', 'created_at', 'updated_at', 'account_id', 'to_account_id', 'category_id', 'subcategory_id', 'actual_category_id', 'actual_subcategory_id', 'group_id', 'previous_target_month'], 'transactions');
+				optionalNumbers(tx, ['amount'], 'transactions');
+				if (tx.tags !== undefined) requireType(Array.isArray(tx.tags) && tx.tags.every(tag => typeof tag === 'string'), 'transactions.tags');
+				for (const field of ['tax_meta', 'amortization_meta', 'auto_settlement_meta']) {
+					if (tx[field] != null) requireType(isObject(tx[field]), `transactions.${field}`);
+				}
+			}
+		}
+		if (data.master_config !== undefined) {
+			const config = data.master_config;
+			requireType(isObject(config), 'master_config');
+			for (const field of ['accounts', 'categories', 'recurring_rules']) {
+				if (config[field] === undefined) continue;
+				for (const item of objects(config[field], `master_config.${field}`)) {
+					optionalStrings(item, ['id', 'name', 'type', 'icon', 'updated_at', 'maturity_date', 'start_date', 'end_date', 'account_id', 'to_account_id', 'category_id', 'subcategory_id', 'actual_category_id', 'actual_subcategory_id', 'memo'], field);
+					optionalNumbers(item, ['initial_balance', 'amount', 'day_of_month', 'closing_day', 'debit_day', 'debit_month_offset', 'premium_amount', 'premium_day', 'maturity_amount', 'interval_months', 'amortize_months'], field);
+					if (item.subcategories !== undefined) {
+						for (const sub of objects(item.subcategories, 'subcategories')) optionalStrings(sub, ['id', 'name'], 'subcategories');
+					}
+				}
+			}
+			if (config.holidays !== undefined) requireType(Array.isArray(config.holidays) && config.holidays.every(day => typeof day === 'string'), 'holidays');
+			if (config.annual_budgets !== undefined) budgets(config.annual_budgets);
+			objectField(config, 'collapsed_panes', 'master_config');
+			objectField(config, 'synced_passkey_bundle', 'master_config');
+		}
+		if (data.annual_budgets !== undefined) budgets(data.annual_budgets);
+		if (data.summary_snapshot !== undefined) {
+			const snapshot = data.summary_snapshot;
+			requireType(isObject(snapshot), 'summary_snapshot');
+			if (snapshot.account_balances !== undefined) numberMap(snapshot.account_balances, 'account_balances');
+			optionalStrings(snapshot, ['last_closed_month', 'calculated_at'], 'summary_snapshot');
+			objectField(snapshot, 'monthly_summaries', 'summary_snapshot');
+			for (const month of Object.values(snapshot.monthly_summaries || {})) {
+				requireType(isObject(month), 'monthly_summaries.month');
+				optionalNumbers(month, ['income_total', 'expense_total', 'net_income', 'income_confirmed', 'expense_confirmed', 'total_income', 'total_expense'], 'monthly_summaries.month');
+				if (month.by_category !== undefined) categorySummary(month.by_category, 'by_category');
+				if (month.by_actual_category !== undefined) categorySummary(month.by_actual_category, 'by_actual_category');
+			}
+			if (snapshot.external_assets !== undefined) {
+				for (const asset of objects(snapshot.external_assets, 'external_assets')) optionalStrings(asset, ['name', 'updated_at'], 'external_assets');
+			}
+		}
+	}
+
 	static isSafeKey(key) {
 		return typeof key === 'string' && key.length > 0 && !FORBIDDEN_PROTOTYPE_KEYS.has(key);
 	}

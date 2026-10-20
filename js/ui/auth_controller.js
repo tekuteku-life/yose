@@ -70,7 +70,7 @@ export class AuthController {
 		this.db.setEncryptionKey(dmk);
 		this.isKeyLocked = false;
 		this.isKeyProtectedWithPin = true;
-		setActiveSession({ dmk, privateKey: priv, publicKey: pub, credentialId: unwrapped.credentialId });
+		setActiveSession(dmk, priv);
 		if (this.syncManager) {
 			this.syncManager.setPrivateKey(priv);
 		}
@@ -149,7 +149,7 @@ export class AuthController {
 						this.db.setEncryptionKey(dmk);
 						this.privateKey = priv;
 						this.isKeyLocked = false;
-						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: res.credentialId || currentWebauthnId });
+						setActiveSession(dmk, priv);
 						if (authScreen) authScreen.classList.add('hidden');
 						await this.coordinator.finishAppInit();
 						return;
@@ -162,7 +162,7 @@ export class AuthController {
 						this.db.setEncryptionKey(dmk);
 						this.privateKey = priv;
 						this.isKeyLocked = false;
-						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: unwrapped.credentialId });
+						setActiveSession(dmk, priv);
 						if (authScreen) authScreen.classList.add('hidden');
 						await this.coordinator.finishAppInit();
 						return;
@@ -200,7 +200,7 @@ export class AuthController {
 				this.db.setEncryptionKey(dmk);
 				this.privateKey = priv;
 				this.isKeyLocked = false;
-				setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey });
+				setActiveSession(dmk, priv);
 				if (pinInput) pinInput.value = '';
 				if (authScreen) authScreen.classList.add('hidden');
 				await this.coordinator.finishAppInit();
@@ -294,7 +294,7 @@ export class AuthController {
 					this.privateKey = kp.privateKey;
 					this.isKeyProtectedWithPin = true;
 					this.isKeyLocked = false;
-					setActiveSession({ dmk, privateKey: kp.privateKey, publicKey: kp.publicKey, credentialId });
+					setActiveSession(dmk, kp.privateKey);
 
 					// Re-save initial master config (including synced_passkey_bundle if created) and snapshot under encryption key
 					const currentConfig = await this.db.getMasterConfig();
@@ -370,7 +370,7 @@ export class AuthController {
 			await this.db.saveSecurityKey('master_keys_package', newPkg);
 
 			this.isKeyLocked = false;
-			setActiveSession({ dmk: this.db.encryptionKey, privateKey: kp.privateKey, publicKey: kp.publicKey });
+			setActiveSession(this.db.encryptionKey, kp.privateKey);
 
 			if (this.syncManager) {
 				this.syncManager.setPrivateKey(this.privateKey);
@@ -466,7 +466,7 @@ export class AuthController {
 						this.db.setEncryptionKey(dmk);
 						this.privateKey = privKey;
 						this.isKeyLocked = false;
-						setActiveSession({ dmk, privateKey: privKey, publicKey: this.publicKey });
+						setActiveSession(dmk, privKey);
 					} else {
 						const enc = await this.db.getSecurityKey('encrypted_private_key');
 						if (!enc) throw new Error('暗号化された秘密鍵が見つかりません');

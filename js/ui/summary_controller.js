@@ -37,6 +37,16 @@ export class SummaryController {
 		return this.coordinator.chartController;
 	}
 
+	setSelectedMonth(month) {
+		const day = Number((this.coordinator.selectedDate || '').slice(8, 10)) || 1;
+		const [year, monthNumber] = month.split('-').map(Number);
+		const lastDay = new Date(year, monthNumber, 0).getDate();
+		this.coordinator.currentMonth = month;
+		this.coordinator.selectedYear = month.slice(0, 4);
+		this.coordinator.selectedDate = `${month}-${String(Math.min(day, lastDay)).padStart(2, '0')}`;
+		this.coordinator.txListController.currentPage = 1;
+	}
+
 	setupSummaryView() {
 		// Granularity toggle: Daily vs Monthly vs Yearly
 		document.querySelectorAll('#control-granularity .segment-btn').forEach(btn => {
@@ -55,11 +65,10 @@ export class SummaryController {
 		document.getElementById('btn-period-prev')?.addEventListener('click', () => {
 			if (this.coordinator.analyticsTarget === 'budget' || this.coordinator.analyticsGranularity === 'yearly') {
 				this.coordinator.selectedYear = String(Number(this.coordinator.selectedYear) - 1);
-				this.coordinator.currentMonth = `${this.coordinator.selectedYear}-${this.coordinator.currentMonth.slice(5, 7)}`;
+				this.setSelectedMonth(`${this.coordinator.selectedYear}-${this.coordinator.currentMonth.slice(5, 7)}`);
 			} else {
 				// daily and monthly both shift by 1 month and update selectedYear
-				this.coordinator.currentMonth = addMonthsToMonthStr(this.coordinator.currentMonth, -1);
-				this.coordinator.selectedYear = this.coordinator.currentMonth.slice(0, 4);
+				this.setSelectedMonth(addMonthsToMonthStr(this.coordinator.currentMonth, -1));
 			}
 			this.renderSummary();
 		});
@@ -67,11 +76,10 @@ export class SummaryController {
 		document.getElementById('btn-period-next')?.addEventListener('click', () => {
 			if (this.coordinator.analyticsTarget === 'budget' || this.coordinator.analyticsGranularity === 'yearly') {
 				this.coordinator.selectedYear = String(Number(this.coordinator.selectedYear) + 1);
-				this.coordinator.currentMonth = `${this.coordinator.selectedYear}-${this.coordinator.currentMonth.slice(5, 7)}`;
+				this.setSelectedMonth(`${this.coordinator.selectedYear}-${this.coordinator.currentMonth.slice(5, 7)}`);
 			} else {
 				// daily and monthly both shift by 1 month and update selectedYear
-				this.coordinator.currentMonth = addMonthsToMonthStr(this.coordinator.currentMonth, 1);
-				this.coordinator.selectedYear = this.coordinator.currentMonth.slice(0, 4);
+				this.setSelectedMonth(addMonthsToMonthStr(this.coordinator.currentMonth, 1));
 			}
 			this.renderSummary();
 		});
@@ -94,10 +102,8 @@ export class SummaryController {
 		periodPicker?.addEventListener('change', (e) => {
 			const val = e.target.value;
 			if (val && /^\d{4}-\d{2}$/.test(val)) {
-				this.coordinator.currentMonth = val;
-				this.coordinator.selectedYear = val.slice(0, 4);
+				this.setSelectedMonth(val);
 				this.renderSummary();
-				this.coordinator.txListController.renderMonthTransactions();
 			}
 		});
 
@@ -347,6 +353,7 @@ export class SummaryController {
 			await this.renderSummary();
 		}
 
+		this.coordinator.txListController.currentPage = 1;
 		const statusSelect = document.getElementById('select-status-filter');
 		const accSelect = document.getElementById('select-account-filter');
 		const catSelect = document.getElementById('select-category-filter');
@@ -499,8 +506,8 @@ export class SummaryController {
 			return `
 				<div class="tx-item">
 					<div class="tx-info">
-						<span class="tx-title">${a.name}</span>
-						<span class="tx-meta">更新日: ${(a.updated_at || '-').slice(0, 10)}</span>
+						<span class="tx-title">${escapeHtml(a.name)}</span>
+						<span class="tx-meta">更新日: ${escapeHtml((a.updated_at || '-').slice(0, 10))}</span>
 					</div>
 					<div style="font-weight: 700; color: #10b981; font-size: 1.05rem;">
 						¥${val.toLocaleString()}
@@ -956,7 +963,7 @@ export class SummaryController {
 						<tbody>
 							${catEntries.map(([catId, p]) => {
 								const catObj = catMap.get(catId);
-								const catName = catObj ? `${catObj.icon || '🏷️'} ${escapeHtml(catObj.name)}` : escapeHtml(catId);
+								const catName = catObj ? `${escapeHtml(catObj.icon || '🏷️')} ${escapeHtml(catObj.name)}` : escapeHtml(catId);
 								let statusBadge = '<span class="badge badge-success">順調</span>';
 								let barColor = '#10b981';
 								if (p.pace_status === 'ahead') {

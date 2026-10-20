@@ -697,6 +697,10 @@ export async function decryptWebAuthnVault(vault, prfKeyRaw) {
  */
 let activeSession = null;
 
+/**
+ * @param {CryptoKey} dmk
+ * @param {CryptoKey} privateKey
+ */
 export function setActiveSession(dmk, privateKey) {
 	activeSession = {
 		dmk,

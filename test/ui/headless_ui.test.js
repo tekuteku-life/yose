@@ -11,7 +11,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 	let driver;
 
 	before(async () => {
-		driver = new HeadlessBrowserDriver();
+		driver = new HeadlessBrowserDriver({ now: '2026-10-20T03:00:00Z' });
 		await driver.launch();
 		await driver.navigate('/index.html');
 	});
@@ -495,7 +495,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 			})()
 		`);
 		assert.equal(await driver.isVisible('#memo-suggest-dropdown'), true);
-		await driver.click('body');
+		await driver.click('header .brand');
 		assert.equal(await driver.isVisible('#memo-suggest-dropdown'), false, 'Clicking outside should close memo suggestion dropdown');
 
 		// Tag suggestion dropdown (#tags-suggest-dropdown)

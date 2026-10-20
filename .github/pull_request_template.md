@@ -81,10 +81,10 @@
 
 ## レビュー結果 (Review Results)
 <!--
-開発プロセス定義書（docs/development_process.md）に基づくGemini 4 Argonサブエージェントによるレビュー結果を記載してください。
+開発プロセス定義書（docs/development_process.md）に基づく独立サブエージェント（Codex 等）によるレビュー結果を記載してください。
 -->
 - **レビュー記録ファイル**: `docs/reviews/review<連番>.md`
-- **レビュー担当**: Gemini 4 Argon サブエージェント（Role: `Security & Architecture Auditor`）
+- **レビュー担当**: 独立サブエージェント（Codex 等）（Role: `Security & Architecture Auditor`）
 - **判定ランク**: `Grade A+` / `Grade A`
 - **主な指摘事項および対応状況**:
   - 指摘事項1: （対応内容）
