@@ -1,13 +1,14 @@
 {
 	"name": "yose",
-	"version": "1.7.3",
+	"version": "1.7.4",
 	"description": "よせあつめ家計簿 - 脱ベンダーロックイン・複式簿記ライクなPWA家計・資産管理システム",
 	"type": "module",
 	"scripts": {
 		"lint:indent": "node scripts/check_indent.js",
 		"check:syntax": "node scripts/check_syntax.js",
-		"lint": "npm run lint:indent && npm run check:syntax",
-		"test": "npm run lint:indent && npm run check:syntax && node --test --experimental-test-coverage test/unit/*.test.js test/integration/*.test.js test/system/*.test.js",
+		"check:types": "tsc --noEmit -p jsconfig.json",
+		"lint": "npm run lint:indent && npm run check:syntax && npm run check:types",
+		"test": "npm run lint && node --test --experimental-test-coverage test/unit/*.test.js test/integration/*.test.js test/system/*.test.js",
 		"test:unit": "node --test test/unit/*.test.js",
 		"test:integration": "node --test test/integration/*.test.js",
 		"test:system": "node --test test/system/*.test.js",
@@ -21,6 +22,8 @@
 		"ed25519"
 	],
 	"author": "",
-	"license": "MIT"
+	"license": "MIT",
+	"devDependencies": {
+		"typescript": "^7.0.2"
+	}
 }
-

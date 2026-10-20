@@ -393,7 +393,7 @@ export class SettingsController {
 		document.getElementById('budget-categories-list-container')?.addEventListener('input', (e) => {
 			if (e.target.classList.contains('input-cat-budget')) {
 				const val = Number(e.target.value) || 0;
-				const hint = e.target.parentElement?.querySelector('.cat-monthly-hint');
+				const hint = e.target.closest('.budget-cat-item')?.querySelector('.cat-monthly-hint');
 				if (hint) {
 					const mVal = val > 0 ? Math.round(val / 12) : 0;
 					hint.textContent = mVal > 0 ? `¥${mVal.toLocaleString()}/月` : '-';
@@ -419,7 +419,7 @@ export class SettingsController {
 			};
 
 			const defaults = calculateAnnualBudgetDefaults({
-				previousYearSummary,
+				previousYearSummary: prevYearSummary,
 				pastTransactions: allTransactions,
 				categories: config?.categories || [],
 				targetYear: year

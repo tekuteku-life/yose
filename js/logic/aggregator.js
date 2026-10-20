@@ -7,9 +7,10 @@ import { formatDate, getLastDayOfMonth } from './date_utils.js';
 
 /**
  * Calculate balances and summaries from snapshot and transactions
- * @param {object} snapshot - summary_snapshot.json
+ * @param {Record<string, any>} snapshot - summary_snapshot.json
  * @param {Array} transactions - all active transactions in local DB
  * @param {string} targetMonth - current selected month (YYYY-MM)
+ * @returns {Record<string, any>}
  */
 export function calculateBalancesAndSummaries(snapshot = {}, transactions = [], targetMonth = formatDate(new Date()).slice(0, 7)) {
 	const lastClosedMonth = snapshot?.last_closed_month || '1970-01';
@@ -484,8 +485,9 @@ export function calculateTotalAssetSummary(accountBalances = {}, accountsMaster 
  * @param {object} [options]
  * @param {boolean} [options.includePlanned=true] - include planned items
  * @param {string} [options.searchQuery] - optional search filter
+ * @param {string} [options.filterTag] - optional tag filter query alias
  * @param {string} [options.targetMonth] - optional target_month filter
- * @returns {{ tags: object, total_expense: number, total_income: number, total_count: number }}
+ * @returns {{ tags: Record<string, any>, tagList: Array<Record<string, any>>, total_expense: number, total_income: number, total_count: number }}
  */
 export function calculateTagSummary(transactions = [], options = {}) {
 	const includePlanned = options.includePlanned !== false;
@@ -571,7 +573,7 @@ export function calculateTagSummary(transactions = [], options = {}) {
  * @param {Array} transactions - transaction records
  * @param {string|Array|null} [targetMonthOrCategories=null] - filter by YYYY-MM string or categories master array
  * @param {boolean} [includePlanned=true] - include planned items
- * @returns {{ matrix: object, rowTotals: object, accrualTotals: object, colTotals: object, actualTotals: object, grandTotal: number, categories: any[], actualCategories: string[] }}
+ * @returns {{ matrix: object, rowTotals: object, accrualTotals: object, colTotals: object, actualTotals: object, grandTotal: number, categories: any[], categoryIds: string[], actualCategories: string[] }}
  */
 export function calculateCrossAccrualActualSummary(transactions = [], targetMonthOrCategories = null, includePlanned = true) {
 	let targetMonth = null;
@@ -649,8 +651,8 @@ export function formatDoughnutTooltipLabel(label = '', value = 0, datasetValues 
 
 /**
  * Resolve Transaction Primary Title (Category > Subcategory) and Secondary Metadata (Requirement 3.29)
- * @param {object} tx - transaction record
- * @param {object} [masterConfig] - master configuration with categories & subcategories
+ * @param {Record<string, any>} tx - transaction record
+ * @param {Record<string, any>} [masterConfig] - master configuration with categories & subcategories
  * @returns {{ icon: string, categoryName: string, subcategoryName: string, primaryTitle: string, memo: string, tags: string[] }}
  */
 export function resolveTransactionDisplayInfo(tx = {}, masterConfig = {}) {
@@ -714,15 +716,17 @@ export function resolveTransactionDisplayInfo(tx = {}, masterConfig = {}) {
  * @param {Array} transactions - list of transactions
  * @param {object} [filters]
  * @param {string} [filters.status='all'] - 'all' | 'confirmed' | 'planned'
+ * @param {boolean} [filters.includePlanned=true] - whether to include planned transactions when status is 'all'
  * @param {string} [filters.accountId='all'] - 'all' or account ID (matches account_id or to_account_id)
  * @param {string} [filters.categoryId='all'] - 'all' or category ID (matches category_id or actual_category_id)
  * @param {string} [filters.tag='all'] - 'all' or tag string
  * @param {string} [filters.keyword=''] - case-insensitive keyword matching memo, category, subcategory, or tags
- * @param {object} [masterConfig] - master configuration for resolving category/subcategory names during keyword search
+ * @param {Record<string, any>} [masterConfig] - master configuration for resolving category/subcategory names during keyword search
  * @returns {Array} filtered transactions
  */
 export function filterTransactionsByCriteria(transactions = [], filters = {}, masterConfig = {}) {
 	const status = filters.status || 'all';
+	const includePlanned = filters.includePlanned !== undefined ? Boolean(filters.includePlanned) : true;
 	const accountId = filters.accountId || 'all';
 	const categoryId = filters.categoryId || 'all';
 	const tag = filters.tag || 'all';
@@ -733,6 +737,7 @@ export function filterTransactionsByCriteria(transactions = [], filters = {}, ma
 
 		if (status === 'confirmed' && tx.status !== 'confirmed') return false;
 		if (status === 'planned' && tx.status !== 'planned') return false;
+		if (status === 'all' && !includePlanned && tx.status === 'planned') return false;
 
 		if (accountId !== 'all') {
 			const matchAccount = tx.account_id === accountId || tx.to_account_id === accountId;

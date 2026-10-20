@@ -28,12 +28,8 @@ export function roundTieredAmount(amt) {
 /**
  * Calculates default annual budget, savings targets, and category budgets based on previous year actuals with tiered rounding.
  * (Requirement 3.14)
- * @param {object} [params]
- * @param {object} [params.previousYearSummary] - Overall summary ({ income, expense, net, savings_rate, by_category }) or null
- * @param {Array<object>} [params.pastTransactions] - Array of transactions from the previous year
- * @param {Array<object>} [params.categories] - Array of category masters ({ id, name, type, ... })
- * @param {string|number} [params.targetYear] - Target year (YYYY)
- * @returns {object} { expense_budget, savings_target_amount, savings_target_rate, category_budgets }
+ * @param {Record<string, any>} [params]
+ * @returns {{ expense_budget: number, savings_target_amount: number, savings_target_rate: number, category_budgets: Record<string, number> }}
  */
 export function calculateAnnualBudgetDefaults({
 	previousYearSummary = null,
@@ -146,8 +142,8 @@ function evaluatePaceStatus(consumptionRate, budget, expectedPaceRate) {
 
 /**
  * Calculates annual budget and savings targets progress and pace metrics (Requirement 3.14).
- * @param {object} [params]
- * @returns {object}
+ * @param {Record<string, any>} [params]
+ * @returns {Record<string, any>}
  */
 export function calculateAnnualBudgetProgress({
 	yearlySummary = null,
@@ -268,12 +264,8 @@ export function calculateAnnualBudgetProgress({
 
 /**
  * Generates monthly trajectory data for 12 months of the year for Chart.js rendering (Requirement 3.14).
- * @param {object} [params]
- * @param {string} [params.year] - YYYY
- * @param {object} [params.monthlySummaries] - Keyed by YYYY-MM
- * @param {number} [params.expenseBudget]
- * @param {number} [params.savingsTarget]
- * @returns {Array<object>}
+ * @param {Record<string, any>} [params]
+ * @returns {Array<Record<string, any>>}
  */
 export function generateAnnualTrajectory({
 	year = String(new Date().getFullYear()),

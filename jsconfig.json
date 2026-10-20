@@ -1,0 +1,24 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"allowJs": true,
+		"checkJs": true,
+		"noEmit": true,
+		"strict": false,
+		"skipLibCheck": true,
+		"lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"]
+	},
+	"include": [
+		"types/**/*",
+		"js/**/*",
+		"sw.js"
+	],
+	"exclude": [
+		"node_modules",
+		"gas",
+		"test"
+	]
+}
+

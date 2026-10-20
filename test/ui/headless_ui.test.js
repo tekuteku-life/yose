@@ -674,4 +674,229 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 		const pageInfo = await driver.textContent('#tx-pagination-info');
 		assert.ok(pageInfo.includes('ページ'), 'Pagination info should display current page');
 	});
+
+	it('11. Settings Tab Complete Verification (Annual Budget, Theme Switching, Backup Modal, Version Check)', async () => {
+		await driver.click('.tab-btn[data-tab="tab-settings"]');
+		await new Promise(r => setTimeout(r, 100));
+
+		// 1) Theme mode switching (system -> dark -> light -> system)
+		await driver.click('#theme-radio-dark');
+		await new Promise(r => setTimeout(r, 80));
+		let themeAttr = await driver.evaluate('document.documentElement.getAttribute("data-theme")');
+		assert.equal(themeAttr, 'dark', 'DOM data-theme should be dark after selecting dark radio');
+
+		await driver.click('#theme-radio-light');
+		await new Promise(r => setTimeout(r, 80));
+		themeAttr = await driver.evaluate('document.documentElement.getAttribute("data-theme")');
+		assert.equal(themeAttr, 'light', 'DOM data-theme should be light after selecting light radio');
+
+		await driver.click('#theme-radio-system');
+		await new Promise(r => setTimeout(r, 80));
+		themeAttr = await driver.evaluate('document.documentElement.getAttribute("data-theme")');
+		assert.ok(themeAttr === 'light' || themeAttr === 'dark', 'DOM data-theme should resolve to light or dark when system');
+
+		// 2) Annual Budget settings persistence
+		await driver.fill('#setting-budget-year', '2026');
+		await driver.fill('#setting-expense-budget', '3600000');
+		await driver.fill('#setting-savings-target-amount', '720000');
+		await driver.fill('#setting-savings-target-rate', '20');
+
+		// Check monthly preview updates
+		const previewText = await driver.textContent('#budget-monthly-preview');
+		assert.ok(previewText.includes('¥300,000'), 'Preview should show ¥300,000 monthly expense budget');
+		assert.ok(previewText.includes('¥60,000'), 'Preview should show ¥60,000 monthly savings target');
+
+		// Save annual budget
+		await driver.click('#btn-save-annual-budget');
+		await new Promise(r => setTimeout(r, 150));
+
+		// Verify saved in DB
+		const savedBudget = await driver.evaluate('window.__yose_app.db.getAnnualBudget("2026")');
+		assert.ok(savedBudget, 'Annual budget for 2026 should be saved in DB');
+		assert.equal(savedBudget.expense_budget, 3600000);
+		assert.equal(savedBudget.savings_target_amount, 720000);
+		assert.equal(savedBudget.savings_target_rate, 20);
+
+		// 3) Backup Export Modal open & close
+		await driver.click('#btn-open-export-modal');
+		await new Promise(r => setTimeout(r, 80));
+		assert.equal(await driver.isVisible('#modal-export-json'), true, 'Export modal should be visible');
+
+		// Verify export buttons exist
+		assert.equal(await driver.isVisible('#btn-export-full'), true);
+		assert.equal(await driver.isVisible('#btn-export-transactions'), true);
+		assert.equal(await driver.isVisible('#btn-export-master'), true);
+		assert.equal(await driver.isVisible('#btn-export-budgets'), true);
+		assert.equal(await driver.isVisible('#btn-export-snapshot'), true);
+
+		await driver.click('#btn-close-export-modal');
+		await new Promise(r => setTimeout(r, 80));
+		assert.equal(await driver.isVisible('#modal-export-json'), false, 'Export modal should close after clicking close');
+
+		// 4) App Version check badge and update check trigger
+		const badgeText = await driver.textContent('#badge-current-version');
+		assert.ok(badgeText.startsWith('v1.'), 'Current version badge should display valid SemVer');
+
+		await driver.click('#btn-check-app-update');
+		await new Promise(r => setTimeout(r, 100));
+		assert.equal(await driver.isVisible('#update-status-msg'), true, 'Update status message should become visible');
+	});
+
+	it('12. Summary Tabs Multi-Criteria Filtering, Axis & Planned Toggles, Drilldowns & Empty States', async () => {
+		// 1) Planned Transaction Toggle: Add planned transaction for 2026-10
+		await driver.evaluate(`
+			window.__yose_app.db.putTransaction({
+				id: 'tx_planned_trip',
+				group_id: 'grp_planned_trip',
+				date: '2026-10-28',
+				target_month: '2026-10',
+				status: 'planned',
+				type: 'expense',
+				amount: 25000,
+				account_id: 'acc_wallet',
+				category_id: 'cat_hobby',
+				subcategory_id: null,
+				memo: '秋の旅行予定',
+				tags: ['旅行予定タグ'],
+				created_at: new Date('2026-10-20T14:00:00Z').toISOString(),
+				updated_at: new Date('2026-10-20T14:00:00Z').toISOString(),
+				is_deleted: false,
+				sync_status: 'unsynced'
+			})
+		`);
+
+		await driver.click('.tab-btn[data-analytics-target="cashflow"]');
+		await new Promise(r => setTimeout(r, 100));
+		await driver.click('#control-granularity .segment-btn[data-granularity="monthly"]');
+		await new Promise(r => setTimeout(r, 100));
+
+		// Initially showPlanned is true (予定: ON)
+		let listText = await driver.textContent('#month-tx-list');
+		assert.ok(listText.includes('秋の旅行予定'), 'Planned transaction should appear when planned toggle is initially ON');
+
+		// Toggle Planned to OFF
+		await driver.click('#btn-toggle-planned');
+		await new Promise(r => setTimeout(r, 120));
+		let plannedBtnText = await driver.textContent('#btn-toggle-planned');
+		assert.ok(plannedBtnText.includes('OFF'), 'Planned button should show OFF');
+
+		listText = await driver.textContent('#month-tx-list');
+		assert.equal(listText.includes('秋の旅行予定'), false, 'Planned transaction should be hidden when planned toggle is OFF');
+
+		// Toggle Planned back to ON
+		await driver.click('#btn-toggle-planned');
+		await new Promise(r => setTimeout(r, 120));
+		plannedBtnText = await driver.textContent('#btn-toggle-planned');
+		assert.ok(plannedBtnText.includes('ON'), 'Planned button should show ON');
+		listText = await driver.textContent('#month-tx-list');
+		assert.ok(listText.includes('秋の旅行予定'), 'Planned transaction should appear when planned toggle is ON again');
+
+		// 2) Axis Toggle (🏷️ 計上分類ベース <-> 📦 実態分類ベース)
+		await driver.evaluate(`
+			window.__yose_app.db.putTransaction({
+				id: 'tx_axis_diff_test',
+				group_id: 'grp_axis_diff_test',
+				date: '2026-10-22',
+				target_month: '2026-10',
+				status: 'confirmed',
+				type: 'expense',
+				amount: 8800,
+				account_id: 'acc_wallet',
+				category_id: 'cat_food',
+				actual_category_id: 'cat_housing',
+				subcategory_id: null,
+				memo: '食費計上だが実態は住居通信',
+				tags: [],
+				created_at: new Date('2026-10-22T10:00:00Z').toISOString(),
+				updated_at: new Date('2026-10-22T10:00:00Z').toISOString(),
+				is_deleted: false,
+				sync_status: 'unsynced'
+			})
+		`);
+
+		// Refresh summary
+		await driver.click('.tab-btn[data-analytics-target="cashflow"]');
+		await new Promise(r => setTimeout(r, 100));
+
+		// In default accrual axis (計上分類), 8800 is counted under 食費
+		let catBreakdownText = await driver.textContent('#category-breakdown-list');
+		assert.ok(catBreakdownText.includes('食費'), 'Accrual category breakdown should show 食費');
+
+		// Toggle to Actual Category axis (実態分類ベース)
+		await driver.click('#btn-toggle-axis');
+		await new Promise(r => setTimeout(r, 120));
+		let axisBtnText = await driver.textContent('#btn-toggle-axis');
+		assert.ok(axisBtnText.includes('実態分類ベース'), 'Axis toggle button text should switch to 実態分類ベース');
+
+		// Category breakdown should now include 住居・通信 with ¥8,800
+		catBreakdownText = await driver.textContent('#category-breakdown-list');
+		assert.ok(catBreakdownText.includes('住居・通信'), 'Actual category breakdown should include 住居・通信');
+		assert.ok(catBreakdownText.includes('¥8,800'), 'Category breakdown should show ¥8,800 under 住居・通信');
+
+		// Toggle back to Accrual axis
+		await driver.click('#btn-toggle-axis');
+		await new Promise(r => setTimeout(r, 120));
+		axisBtnText = await driver.textContent('#btn-toggle-axis');
+		assert.ok(axisBtnText.includes('計上分類ベース'), 'Axis toggle button text should switch back to 計上分類ベース');
+
+		// 3) Multi-Criteria Filtering (Status, Account, Category, Keyword)
+		// Select Status: confirmed
+		await driver.select('#select-status-filter', 'confirmed');
+		// Select Account: acc_wallet
+		await driver.select('#select-account-filter', 'acc_wallet');
+		// Search keyword: '本日10月20日'
+		await driver.fill('#input-tx-search', '本日10月20日');
+		await new Promise(r => setTimeout(r, 100));
+
+		listText = await driver.textContent('#month-tx-list');
+		assert.ok(listText.includes('本日10月20日支出'), 'Filtered list should match keyword and criteria');
+		assert.equal(listText.includes('食費計上だが実態は日用品'), false, 'Non-matching keyword should be excluded');
+
+		// Test Empty State when criteria matches 0 items
+		await driver.fill('#input-tx-search', 'まったく存在しないキーワードXYZ123');
+		await new Promise(r => setTimeout(r, 100));
+		listText = await driver.textContent('#month-tx-list');
+		assert.ok(listText.includes('条件に一致する取引はありません') || listText.includes('取引はありません'), 'Empty state should be displayed cleanly');
+
+		// Clear search filter
+		await driver.fill('#input-tx-search', '');
+		await driver.select('#select-status-filter', 'all');
+		await driver.select('#select-account-filter', 'all');
+		await new Promise(r => setTimeout(r, 100));
+
+		// 4) Period navigation (Prev, Next, and Month Picker jump)
+		await driver.click('#btn-period-prev');
+		await new Promise(r => setTimeout(r, 100));
+		let periodText = await driver.textContent('#period-display');
+		assert.ok(periodText.includes('2026-09'), 'Period display should navigate to previous month 2026-09');
+
+		await driver.click('#btn-period-next');
+		await new Promise(r => setTimeout(r, 100));
+		periodText = await driver.textContent('#period-display');
+		assert.ok(periodText.includes('2026-10'), 'Period display should navigate to next month 2026-10');
+
+		// Quick jump using Month Picker input (#input-period-picker)
+		await driver.evaluate(`
+			(() => {
+				const picker = document.getElementById('input-period-picker');
+				picker.value = '2026-05';
+				picker.dispatchEvent(new Event('change', { bubbles: true }));
+			})()
+		`);
+		await new Promise(r => setTimeout(r, 100));
+		periodText = await driver.textContent('#period-display');
+		assert.ok(periodText.includes('2026-05'), 'Period display should jump to 2026-05 after picker change');
+
+		// Return back to 2026-10
+		await driver.evaluate(`
+			(() => {
+				const picker = document.getElementById('input-period-picker');
+				picker.value = '2026-10';
+				picker.dispatchEvent(new Event('change', { bubbles: true }));
+			})()
+		`);
+		await new Promise(r => setTimeout(r, 100));
+		periodText = await driver.textContent('#period-display');
+		assert.ok(periodText.includes('2026-10'), 'Period display should return to 2026-10');
+	});
 });

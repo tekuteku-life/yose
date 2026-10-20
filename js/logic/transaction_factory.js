@@ -17,7 +17,7 @@ import {
  * @param {number} baseAmount - Tax excluded amount
  * @param {number} taxRate - e.g. 0.08 or 0.10
  * @param {"floor" | "round"} rounding - Rounding method
- * @returns {{ amount: number, tax_meta: object }}
+ * @returns {{ amount: number, tax_meta: Record<string, any> }}
  */
 export function calculateTax(baseAmount, taxRate = 0.10, rounding = 'floor') {
 	const numBase = Math.round(Number(baseAmount) || 0);
@@ -361,7 +361,7 @@ export function createAdvanceRepaymentTransaction({
 
 /**
  * Create linked point payment transactions
- * @param {object} params
+ * @param {Record<string, any>} params
  * @returns {object[]} array of 2 linked transactions
  */
 export function createPointPaymentTransactions({
@@ -559,7 +559,7 @@ export function createCreditCardSettlementTransaction({
  * @param {string} expression - e.g. "1500 + 500", "200 × 5"
  * @param {string|null} [taxAction] - '+10%', '+8%', 'inc10%', 'inc8%'
  * @param {'floor'|'round'} [rounding] - 'floor' or 'round'
- * @returns {{ success: boolean, amount: number, base_amount: number, tax_meta: object|null, error?: string }}
+ * @returns {{ success: boolean, amount: number, result: number, base_amount: number, tax_meta: Record<string, any>|null, error?: string }}
  */
 export function evaluateCalculatorExpression(expression = '', taxAction = null, rounding = 'floor') {
 	let raw = String(expression || '').trim();
@@ -628,8 +628,8 @@ export function evaluateCalculatorExpression(expression = '', taxAction = null, 
 /**
  * Synchronize an Insurance Account's recurring expense rule (`rec_ins_<id>`) in master_config (Requirement 3.35).
  * Automatically creates, updates, or deactivates the linked recurring rule when an insurance account is saved/updated.
- * @param {object} config - master_config object
- * @param {object} account - account object from master_config.accounts
+ * @param {Record<string, any>} config - master_config object
+ * @param {Record<string, any>} account - account object from master_config.accounts
  * @param {string} [todayStr] - YYYY-MM-DD
  * @returns {object|null} the created/updated recurring rule, or null
  */
