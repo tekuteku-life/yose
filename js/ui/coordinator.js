@@ -25,6 +25,7 @@ export class AppCoordinator {
 		this.syncManager = null;
 		this.currentMonth = formatDate(new Date()).slice(0, 7);
 		this.selectedYear = String(new Date().getFullYear());
+		this.selectedDate = formatDate(new Date());
 		this.currentMode = 'normal';
 		this.analyticsTarget = 'cashflow'; // 'cashflow' | 'budget' | 'assets'
 		this.analyticsGranularity = 'monthly'; // 'daily' | 'monthly' | 'yearly'

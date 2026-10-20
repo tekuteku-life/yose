@@ -35,6 +35,7 @@ export const DEFAULT_MASTER_CONFIG = {
 			type: 'credit_card',
 			initial_balance: 0,
 			is_asset: false,
+			debit_account_id: 'acc_bank_main',
 			settlement_account_id: 'acc_bank_main',
 			sort_order: 3,
 			is_archived: false

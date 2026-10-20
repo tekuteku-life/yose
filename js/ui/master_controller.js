@@ -170,6 +170,15 @@ export class MasterController {
 						<div style="font-size: 0.8rem; color: var(--text-muted);">
 							種別: ${escapeHtml(a.type)} | 初期残高: ¥${(a.initial_balance || 0).toLocaleString()}
 						</div>
+						${(() => {
+							if (a.type !== 'credit_card') return '';
+							const debitId = a.debit_account_id || a.settlement_account_id;
+							const debitAcc = (config.accounts || []).find(acc => acc.id === debitId);
+							const debitInfo = debitAcc
+								? `締: ${a.closing_day || '-'}日 / 引落: ${a.debit_day || '-'}日 (${escapeHtml(debitAcc.name)})`
+								: '引落口座: 未設定';
+							return `<div style="font-size: 0.8rem; color: var(--primary); margin-top: 2px;">💳 ${debitInfo}</div>`;
+						})()}
 					</div>
 					<div style="display: flex; gap: 6px;">
 						<button class="btn btn-secondary btn-sm btn-edit-account" data-id="${a.id}">編集</button>
@@ -442,7 +451,11 @@ export class MasterController {
 								<label class="form-label" for="m-acc-debit-account">引き落とし口座 (銀行)</label>
 								<select id="m-acc-debit-account" class="form-control">
 									<option value="">設定なし (自動振替オフ)</option>
-									${(config.accounts || []).filter(a => a.type === 'bank' && a.id !== item?.id).map(a => `<option value="${escapeHtml(a.id)}" ${item?.debit_account_id === a.id ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
+									${(() => {
+										const currentDebitId = item?.debit_account_id || item?.settlement_account_id || '';
+										const eligible = (config.accounts || []).filter(a => !a.is_archived && a.id !== item?.id && ['bank', 'cash', 'asset'].includes(a.type));
+										return eligible.map(a => `<option value="${escapeHtml(a.id)}" ${currentDebitId === a.id ? 'selected' : ''}>${escapeHtml(a.name)} (${escapeHtml(a.type)})</option>`).join('');
+									})()}
 								</select>
 							</div>
 						</div>
@@ -525,7 +538,8 @@ export class MasterController {
 
 				config.accounts = config.accounts || [];
 				let targetAccount;
-				if (isNew) {
+				const existingAcc = item ? config.accounts.find(a => a.id === item.id) : null;
+				if (!existingAcc) {
 					targetAccount = {
 						id,
 						name,
@@ -537,6 +551,7 @@ export class MasterController {
 						debit_day: accType === 'credit_card' ? debitDay : null,
 						debit_month_offset: accType === 'credit_card' ? debitOffset : 1,
 						debit_account_id: accType === 'credit_card' ? debitAccId : null,
+						settlement_account_id: accType === 'credit_card' ? debitAccId : null,
 						maturity_date: accType === 'insurance' ? maturityDate : null,
 						maturity_amount: accType === 'insurance' ? maturityAmount : null,
 						premium_amount: accType === 'insurance' ? premiumAmount : null,
@@ -548,22 +563,23 @@ export class MasterController {
 					};
 					config.accounts.push(targetAccount);
 				} else {
-					item.id = item.id || id;
-					item.name = name;
-					item.type = accType;
-					item.initial_balance = initBal;
-					item.is_asset = isAsset;
-					item.closing_day = accType === 'credit_card' ? closingDay : null;
-					item.debit_day = accType === 'credit_card' ? debitDay : null;
-					item.debit_month_offset = accType === 'credit_card' ? debitOffset : 1;
-					item.debit_account_id = accType === 'credit_card' ? debitAccId : null;
-					item.maturity_date = accType === 'insurance' ? maturityDate : null;
-					item.maturity_amount = accType === 'insurance' ? maturityAmount : null;
-					item.premium_amount = accType === 'insurance' ? premiumAmount : null;
-					item.premium_day = accType === 'insurance' ? premiumDay : null;
-					item.premium_pay_account_id = accType === 'insurance' ? premiumPayAccId : null;
-					item.premium_category_id = accType === 'insurance' ? premiumCatId : null;
-					targetAccount = item;
+					existingAcc.id = existingAcc.id || id;
+					existingAcc.name = name;
+					existingAcc.type = accType;
+					existingAcc.initial_balance = initBal;
+					existingAcc.is_asset = isAsset;
+					existingAcc.closing_day = accType === 'credit_card' ? closingDay : null;
+					existingAcc.debit_day = accType === 'credit_card' ? debitDay : null;
+					existingAcc.debit_month_offset = accType === 'credit_card' ? debitOffset : 1;
+					existingAcc.debit_account_id = accType === 'credit_card' ? debitAccId : null;
+					existingAcc.settlement_account_id = accType === 'credit_card' ? debitAccId : null;
+					existingAcc.maturity_date = accType === 'insurance' ? maturityDate : null;
+					existingAcc.maturity_amount = accType === 'insurance' ? maturityAmount : null;
+					existingAcc.premium_amount = accType === 'insurance' ? premiumAmount : null;
+					existingAcc.premium_day = accType === 'insurance' ? premiumDay : null;
+					existingAcc.premium_pay_account_id = accType === 'insurance' ? premiumPayAccId : null;
+					existingAcc.premium_category_id = accType === 'insurance' ? premiumCatId : null;
+					targetAccount = existingAcc;
 				}
 
 				syncInsuranceRecurringRule(config, targetAccount);
@@ -605,7 +621,8 @@ export class MasterController {
 				const catType = document.getElementById('m-cat-type').value;
 
 				config.categories = config.categories || [];
-				if (isNew) {
+				const existingCat = item ? config.categories.find(c => c.id === item.id) : null;
+				if (!existingCat) {
 					config.categories.push({
 						id,
 						name,
@@ -615,9 +632,9 @@ export class MasterController {
 						subcategories: []
 					});
 				} else {
-					item.id = item.id || id;
-					item.name = name;
-					item.type = catType;
+					existingCat.id = existingCat.id || id;
+					existingCat.name = name;
+					existingCat.type = catType;
 				}
 
 				modal.classList.remove('active');
@@ -751,7 +768,8 @@ export class MasterController {
 				const holidayAdj = document.getElementById('m-rec-holiday').value;
 
 				config.recurring_rules = config.recurring_rules || [];
-				if (isNew) {
+				const existingRule = item ? config.recurring_rules.find(r => r.id === item.id) : null;
+				if (!existingRule) {
 					config.recurring_rules.push({
 						id,
 						name,
@@ -771,14 +789,14 @@ export class MasterController {
 						subcategory_id: null
 					});
 				} else {
-					item.id = item.id || id;
-					item.name = name;
-					item.type = recType;
-					item.amount = amount;
-					item.account_id = accId;
-					item.category_id = catId;
-					item.day_of_month = day;
-					item.holiday_adjustment = holidayAdj;
+					existingRule.id = existingRule.id || id;
+					existingRule.name = name;
+					existingRule.type = recType;
+					existingRule.amount = amount;
+					existingRule.account_id = accId;
+					existingRule.category_id = catId;
+					existingRule.day_of_month = day;
+					existingRule.holiday_adjustment = holidayAdj;
 				}
 
 				modal.classList.remove('active');

@@ -459,4 +459,219 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 			'Clicking an account row to drill down into transactions from Assets tab should switch to or display #card-month-tx-list'
 		);
 	});
+
+	it('8. Tag & Memo Custom Suggestion Dropdown Placement, Interactivity & Dismissal', async () => {
+		await driver.click('.tab-btn[data-tab="tab-input"]');
+
+		// Focus on #input-memo
+		await driver.evaluate(`
+			(() => {
+				const memo = document.getElementById('input-memo');
+				memo.focus();
+				memo.dispatchEvent(new Event('input', { bubbles: true }));
+			})()
+		`);
+		await new Promise(r => setTimeout(r, 80));
+
+		// Suggestion dropdown (#memo-suggest-dropdown) should exist, be positioned below the input, and contain previous memos
+		assert.equal(await driver.isVisible('#memo-suggest-dropdown'), true, '#memo-suggest-dropdown should be visible on memo focus/input');
+		const memoSuggestText = await driver.textContent('#memo-suggest-dropdown');
+		assert.ok(memoSuggestText.includes('スーパー買い出し'), 'Memo dropdown should include previously registered memo');
+
+		// Clicking a candidate should fill #input-memo, auto-select category/subcategory, and close the dropdown
+		await driver.click('#memo-suggest-dropdown .suggest-item[data-value="スーパー買い出し"]');
+		assert.equal(await driver.evaluate('document.getElementById("input-memo").value'), 'スーパー買い出し');
+		assert.equal(await driver.isVisible('#memo-suggest-dropdown'), false, 'Memo dropdown should close after candidate selection');
+
+		// Category should be auto-selected to 食費 (cat_food)
+		assert.equal(await driver.evaluate('document.getElementById("select-category").value'), 'cat_food');
+
+		// Clicking outside should close suggestion dropdown
+		await driver.evaluate(`
+			(() => {
+				const memo = document.getElementById('input-memo');
+				memo.focus();
+				memo.dispatchEvent(new Event('input', { bubbles: true }));
+			})()
+		`);
+		assert.equal(await driver.isVisible('#memo-suggest-dropdown'), true);
+		await driver.click('body');
+		assert.equal(await driver.isVisible('#memo-suggest-dropdown'), false, 'Clicking outside should close memo suggestion dropdown');
+
+		// Tag suggestion dropdown (#tags-suggest-dropdown)
+		await driver.evaluate(`
+			(() => {
+				const tagInput = document.getElementById('input-tag-text');
+				tagInput.focus();
+				tagInput.dispatchEvent(new Event('input', { bubbles: true }));
+			})()
+		`);
+		await new Promise(r => setTimeout(r, 80));
+		assert.equal(await driver.isVisible('#tags-suggest-dropdown'), true, '#tags-suggest-dropdown should be visible on tag focus/input');
+		const tagSuggestText = await driver.textContent('#tags-suggest-dropdown');
+		assert.ok(tagSuggestText.includes('週末まとめ買い'), 'Tag dropdown should include previously registered tag');
+
+		// Clicking candidate adds chip and closes dropdown
+		await driver.click('#tags-suggest-dropdown .suggest-item[data-value="週末まとめ買い"]');
+		assert.equal(await driver.isVisible('#tags-suggest-dropdown'), false, 'Tag dropdown should close after candidate selection');
+		const currentChips = await driver.textContent('#tags-chips-list');
+		assert.ok(currentChips.includes('週末まとめ買い'), 'Tag chip should be added');
+	});
+
+	it('9. Credit Card Master Account Settings & Debit Bank Account Selection & Display', async () => {
+		await driver.click('.tab-btn[data-tab="tab-settings"]');
+		await new Promise(r => setTimeout(r, 80));
+		await driver.click('.master-tab-btn[data-master="accounts"]');
+
+		// 1) Verify acc_card_a in #master-accounts-list displays debit bank account info
+		const cardRowText = await driver.evaluate(`
+			(() => {
+				const row = document.querySelector('.btn-edit-account[data-id="acc_card_a"]')?.closest('.master-item-row');
+				return row ? row.textContent : '';
+			})()
+		`);
+		assert.ok(cardRowText.includes('メイン銀行'), 'Credit card row in account list should display linked debit account name');
+
+		// 2) Open Edit Account modal for acc_card_a
+		await driver.click('.btn-edit-account[data-id="acc_card_a"]');
+		await new Promise(r => setTimeout(r, 100));
+		assert.equal(await driver.isVisible('#modal-master-item'), true);
+
+		// #m-acc-debit-account dropdown should be populated with bank accounts and acc_bank_main should be selected
+		const debitAccVal = await driver.evaluate('document.getElementById("m-acc-debit-account").value');
+		assert.equal(debitAccVal, 'acc_bank_main', 'Debit account select in credit card modal should select acc_bank_main');
+
+		// Set closing day to 15, debit day to 10, save
+		await driver.fill('#m-acc-closing-day', '15');
+		await driver.fill('#m-acc-debit-day', '10');
+		await driver.select('#m-acc-debit-account', 'acc_bank_main');
+		await driver.evaluate('document.getElementById("form-master-account").requestSubmit()');
+		await new Promise(r => setTimeout(r, 120));
+
+		// Check updated debit info in #master-accounts-list
+		let updatedCardRow = '';
+		for (let i = 0; i < 20; i++) {
+			updatedCardRow = await driver.evaluate(`
+				(() => {
+					const row = document.querySelector('.btn-edit-account[data-id="acc_card_a"]')?.closest('.master-item-row');
+					return row ? row.textContent : '';
+				})()
+			`);
+			if (updatedCardRow && updatedCardRow.includes('15日')) break;
+			await new Promise(r => setTimeout(r, 100));
+		}
+		assert.ok(updatedCardRow.includes('15日'), 'Credit card row should show closing day');
+		assert.ok(updatedCardRow.includes('10日'), 'Credit card row should show debit day');
+		assert.ok(updatedCardRow.includes('メイン銀行'), 'Credit card row should show debit account');
+	});
+
+	it('10. Cashflow Granularity (Daily, Monthly, Yearly) & Transaction List Alignment & Pagination', async () => {
+		// Insert test transactions across 2026:
+		// tx_2026_feb in 2026-02-15 (¥15,000)
+		// tx_today in 2026-10-20 (¥3,000)
+		await driver.evaluate(`
+			Promise.all([
+				window.__yose_app.db.putTransaction({
+					id: 'tx_2026_feb',
+					group_id: 'grp_2026_feb',
+					date: '2026-02-15',
+					target_month: '2026-02',
+					status: 'confirmed',
+					type: 'expense',
+					amount: 15000,
+					account_id: 'acc_wallet',
+					category_id: 'cat_food',
+					subcategory_id: null,
+					memo: '2026年2月支出',
+					tags: [],
+					created_at: new Date('2026-02-15T12:00:00Z').toISOString(),
+					updated_at: new Date('2026-02-15T12:00:00Z').toISOString(),
+					is_deleted: false,
+					sync_status: 'unsynced'
+				}),
+				window.__yose_app.db.putTransaction({
+					id: 'tx_today_oct',
+					group_id: 'grp_today_oct',
+					date: '2026-10-20',
+					target_month: '2026-10',
+					status: 'confirmed',
+					type: 'expense',
+					amount: 3000,
+					account_id: 'acc_wallet',
+					category_id: 'cat_food',
+					subcategory_id: null,
+					memo: '本日10月20日支出',
+					tags: [],
+					created_at: new Date('2026-10-20T12:00:00Z').toISOString(),
+					updated_at: new Date('2026-10-20T12:00:00Z').toISOString(),
+					is_deleted: false,
+					sync_status: 'unsynced'
+				})
+			])
+		`);
+
+		await driver.click('.tab-btn[data-analytics-target="cashflow"]');
+		await new Promise(r => setTimeout(r, 100));
+
+		// 1) Monthly mode (default for 2026-10)
+		await driver.click('#control-granularity .segment-btn[data-granularity="monthly"]');
+		await new Promise(r => setTimeout(r, 120));
+		let monthList = await driver.textContent('#month-tx-list');
+		assert.ok(monthList.includes('本日10月20日支出'), 'Monthly list should include October transaction');
+		assert.equal(monthList.includes('2026年2月支出'), false, 'Monthly list for October must NOT include February transaction');
+		assert.equal(monthList.includes('2025年の趣味支出'), false, 'Monthly list for October must NOT include 2025 transaction');
+
+		// 2) Yearly mode (2026)
+		await driver.click('#control-granularity .segment-btn[data-granularity="yearly"]');
+		await new Promise(r => setTimeout(r, 150));
+		let yearlyList = await driver.textContent('#month-tx-list');
+		assert.ok(yearlyList.includes('本日10月20日支出'), 'Yearly list for 2026 should include October transaction');
+		assert.ok(yearlyList.includes('2026年2月支出'), 'Yearly list for 2026 should include February transaction');
+		assert.equal(yearlyList.includes('2025年の趣味支出'), false, 'Yearly list for 2026 must NOT include 2025 transaction');
+		const yearlyTitle = await driver.textContent('#month-tx-list-title');
+		assert.ok(yearlyTitle.includes('年'), 'Header should indicate yearly transactions');
+
+		// 3) Daily mode (2026-10-20)
+		await driver.click('#control-granularity .segment-btn[data-granularity="daily"]');
+		await new Promise(r => setTimeout(r, 150));
+		let dailyList = await driver.textContent('#month-tx-list');
+		assert.ok(dailyList.includes('本日10月20日支出'), 'Daily list for 2026-10-20 should include today transaction');
+		assert.equal(dailyList.includes('2026年2月支出'), false, 'Daily list must NOT include other date transaction');
+		const dailyTitle = await driver.textContent('#month-tx-list-title');
+		assert.ok(dailyTitle.includes('日'), 'Header should indicate daily transactions');
+
+		// 4) Pagination verification with multiple transactions
+		await driver.evaluate(`
+			(() => {
+				const txs = [];
+				for (let i = 1; i <= 35; i++) {
+					txs.push({
+						id: 'tx_bulk_page_' + i,
+						group_id: 'grp_bulk_' + i,
+						date: '2026-03-01',
+						target_month: '2026-03',
+						status: 'confirmed',
+						type: 'expense',
+						amount: 100 * i,
+						account_id: 'acc_wallet',
+						category_id: 'cat_food',
+						subcategory_id: null,
+						memo: '大量明細テスト_' + i,
+						tags: [],
+						created_at: new Date('2026-03-01T10:00:00Z').toISOString(),
+						updated_at: new Date('2026-03-01T10:00:00Z').toISOString(),
+						is_deleted: false,
+						sync_status: 'unsynced'
+					});
+				}
+				return window.__yose_app.db.putTransactions(txs);
+			})()
+		`);
+
+		await driver.click('#control-granularity .segment-btn[data-granularity="yearly"]');
+		await new Promise(r => setTimeout(r, 150));
+		assert.equal(await driver.isVisible('#tx-pagination-controls'), true, 'Pagination controls should be visible when items exceed page size');
+		const pageInfo = await driver.textContent('#tx-pagination-info');
+		assert.ok(pageInfo.includes('ページ'), 'Pagination info should display current page');
+	});
 });
