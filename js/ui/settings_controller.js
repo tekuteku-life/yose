@@ -745,7 +745,7 @@ export class SettingsController {
 						<div class="budget-cat-item" data-cat-id="${escapeHtml(cat.id)}" data-cat-name="${escapeHtml(cat.name)}">
 							<div style="flex: 2; min-width: 140px;">
 								<div style="font-weight: 600; font-size: 0.9rem;">
-									${cat.icon || '🏷️'} ${escapeHtml(cat.name)}
+									${escapeHtml(cat.icon || '🏷️')} ${escapeHtml(cat.name)}
 								</div>
 								<div style="font-size: 0.75rem; color: var(--text-muted);">
 									前年実績(${prevYearStr}年): ¥${prevAmt.toLocaleString()}

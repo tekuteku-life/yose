@@ -926,3 +926,21 @@ describe('js/db.js - Unit Tests', () => {
 		});
 	});
 });
+
+describe('Import structural validation before mutation', () => {
+	it('rejects unknown, mismatched, and nested malformed payloads without writing earlier valid entries', async () => {
+		const db = new YoseDB(null);
+		await db.init();
+		for (const payload of [
+			{},
+			{ export_type: 'transactions', transactions: {} },
+			{ transactions: [{ id: 'valid_first' }, { id: 'bad', tags: {} }] },
+			{ transactions: [{ id: 'valid_first' }], master_config: { categories: [{ id: 'cat_bad', subcategories: {} }] } },
+			{ transactions: [{ id: 'valid_first' }], summary_snapshot: { monthly_summaries: [] } }
+		]) {
+			await assert.rejects(db.importFullData(payload), /Invalid/);
+			assert.equal((await db.getTransactions()).length, 0);
+			assert.equal((await db.getMasterConfig()).categories.length, DEFAULT_MASTER_CONFIG.categories.length);
+		}
+	});
+});

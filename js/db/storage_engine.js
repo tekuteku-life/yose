@@ -2,7 +2,7 @@
  * Yoseatsume Kakeibo - Low-Level Storage Engine & AES-GCM-256 At-Rest Wrapper
  */
 
-import { encryptObject, decryptObject } from '../crypto.js';
+import { encryptObject, decryptObject, canonicalJsonStringify } from '../crypto.js';
 import {
 	DB_NAME,
 	DB_VERSION,
@@ -157,6 +157,52 @@ export class StorageEngine {
 			const req = key !== undefined ? store.put(value, key) : store.put(value);
 			req.onsuccess = () => resolve(value);
 			req.onerror = () => reject(req.error);
+		});
+	}
+
+	async putAllRaw(storeName, values) {
+		if (values.length === 0) return;
+		if (this.memoryDb) {
+			const prepared = values.map(value => JSON.parse(JSON.stringify(value)));
+			const store = this.memoryDb.stores[storeName];
+			for (const value of prepared) store.set(value.id, value);
+			return;
+		}
+		return new Promise((resolve, reject) => {
+			const transaction = this.db.transaction([storeName], 'readwrite');
+			transaction.oncomplete = () => resolve(undefined);
+			transaction.onerror = () => reject(transaction.error || new Error('IndexedDB batch write failed'));
+			transaction.onabort = () => reject(transaction.error || new Error('IndexedDB batch write aborted'));
+			try {
+				const store = transaction.objectStore(storeName);
+				for (const value of values) store.put(value);
+			} catch (error) {
+				transaction.abort();
+				reject(error);
+			}
+		});
+	}
+
+	async compareAndPutRaw(storeName, key, expected, replacement) {
+		if (this.memoryDb) {
+			const store = this.memoryDb.stores[storeName];
+			if (canonicalJsonStringify(store.get(key)) !== canonicalJsonStringify(expected)) return false;
+			store.set(key, JSON.parse(JSON.stringify(replacement)));
+			return true;
+		}
+		return new Promise((resolve, reject) => {
+			const transaction = this.db.transaction([storeName], 'readwrite');
+			let changed = false;
+			transaction.oncomplete = () => resolve(changed);
+			transaction.onerror = () => reject(transaction.error || new Error('IndexedDB conditional write failed'));
+			transaction.onabort = () => reject(transaction.error || new Error('IndexedDB conditional write aborted'));
+			const store = transaction.objectStore(storeName);
+			const request = store.get(key);
+			request.onsuccess = () => {
+				if (canonicalJsonStringify(request.result) !== canonicalJsonStringify(expected)) return;
+				store.put(replacement);
+				changed = true;
+			};
 		});
 	}
 

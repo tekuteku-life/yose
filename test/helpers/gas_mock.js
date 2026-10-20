@@ -118,6 +118,10 @@ export class MockSpreadsheet {
 		return this.name;
 	}
 
+	getSheets() {
+		return Array.from(this.sheets.values());
+	}
+
 	getSheetByName(name) {
 		return this.sheets.get(name) || null;
 	}

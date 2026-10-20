@@ -86,7 +86,7 @@ export function createMockIndexedDB() {
 				onabort: null,
 				objectStore: (name) => new MockObjectStore(name)
 			};
-			queueMicrotask(() => {
+			setImmediate(() => {
 				if (tx.oncomplete) tx.oncomplete();
 			});
 			return tx;

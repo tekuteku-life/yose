@@ -246,12 +246,12 @@ export function aggregateMonthlySummaries(transactions = [], targetYear = String
 
 		months[monthKey] = {
 			month: monthKey,
-			income_confirmed: hist ? (hist.income_confirmed || hist.total_income || 0) : 0,
+			income_confirmed: hist ? (hist.income_total ?? hist.income_confirmed ?? hist.total_income ?? 0) : 0,
 			income_planned: 0,
-			income_total: hist ? (hist.income_confirmed || hist.total_income || 0) : 0,
-			expense_confirmed: hist ? (hist.expense_confirmed || hist.total_expense || 0) : 0,
+			income_total: hist ? (hist.income_total ?? hist.income_confirmed ?? hist.total_income ?? 0) : 0,
+			expense_confirmed: hist ? (hist.expense_total ?? hist.expense_confirmed ?? hist.total_expense ?? 0) : 0,
 			expense_planned: 0,
-			expense_total: hist ? (hist.expense_confirmed || hist.total_expense || 0) : 0,
+			expense_total: hist ? (hist.expense_total ?? hist.expense_confirmed ?? hist.total_expense ?? 0) : 0,
 			net: 0,
 			by_category: normalizedByCat,
 			by_actual_category: normalizedByActCat
@@ -324,8 +324,8 @@ export function aggregateYearlySummaries(transactions = [], historicalSummaries 
 				by_actual_category: {}
 			};
 		}
-		const inc = hist.income_confirmed || hist.total_income || 0;
-		const exp = hist.expense_confirmed || hist.total_expense || 0;
+		const inc = hist.income_total ?? hist.income_confirmed ?? hist.total_income ?? 0;
+		const exp = hist.expense_total ?? hist.expense_confirmed ?? hist.total_expense ?? 0;
 		years[yKey].income += inc;
 		years[yKey].expense += exp;
 

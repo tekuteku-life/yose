@@ -8,6 +8,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 const MIME_TYPES = {
 	'.html': 'text/html; charset=utf-8',
@@ -45,6 +46,12 @@ export class HeadlessBrowserDriver {
 		this.chromeBin = options.chromeBin || process.env.CHROME_BIN || '/usr/bin/chromium';
 		this.rootDir = options.rootDir || process.cwd();
 		this.origin = options.origin || 'https://yose.local';
+		this.now = options.now || null;
+		this.commandTimeoutMs = options.commandTimeoutMs || 10000;
+		this.responses = new Map();
+		this.requests = [];
+		this.stderr = '';
+		this.decoder = new StringDecoder('utf8');
 		this.proc = null;
 		this.sessionId = null;
 		this.msgId = 1;
@@ -62,6 +69,9 @@ export class HeadlessBrowserDriver {
 			this.chromeBin,
 			[
 				'--headless',
+				'--no-first-run',
+				'--no-default-browser-check',
+				'--window-size=1280,1000',
 				'--no-sandbox',
 				'--disable-gpu',
 				'--disable-dev-shm-usage',
@@ -75,27 +85,41 @@ export class HeadlessBrowserDriver {
 			}
 		);
 
+		this.proc.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk).slice(-8000); });
+		const failPending = error => {
+			for (const { reject } of this.pending.values()) reject(error);
+			this.pending.clear();
+		};
+		this.proc.on('error', failPending);
+		this.proc.on('exit', (code, signal) => failPending(new Error(`Chromium exited (${code ?? signal}): ${this.stderr}`)));
+
 		this.proc.stdio[4].on('data', (chunk) => {
 			this._onPipeData(chunk);
 		});
 
-		const { targetInfos } = await this.send('Target.getTargets');
-		const pageTarget = targetInfos.find(t => t.type === 'page');
-		if (!pageTarget) {
-			throw new Error('No page target found in Headless Chromium');
-		}
+		const { browserContextId } = await this.send('Target.createBrowserContext', { disposeOnDetach: true });
+		const { targetId } = await this.send('Target.createTarget', { url: 'about:blank', browserContextId });
 
 		const { sessionId } = await this.send('Target.attachToTarget', {
-			targetId: pageTarget.targetId,
+			targetId,
 			flatten: true
 		});
 		this.sessionId = sessionId;
 
+		await this.send('Emulation.setTimezoneOverride', { timezoneId: 'Asia/Tokyo' }, this.sessionId);
 		await this.send('Page.enable', {}, this.sessionId);
 		await this.send('Runtime.enable', {}, this.sessionId);
 		await this.send('DOM.enable', {}, this.sessionId);
 		await this.send('Page.addScriptToEvaluateOnNewDocument', {
 			source: `
+				if (${JSON.stringify(this.now)}) {
+					const NativeDate = Date;
+					const fixedNow = NativeDate.parse(${JSON.stringify(this.now)});
+					window.Date = class extends NativeDate {
+						constructor(...args) { super(...(args.length ? args : [fixedNow])); }
+						static now() { return fixedNow; }
+					};
+				}
 				if (navigator.credentials) {
 					navigator.credentials.create = async () => { throw new Error('WebAuthn disabled in headless test'); };
 					navigator.credentials.get = async () => { throw new Error('WebAuthn disabled in headless test'); };
@@ -112,7 +136,7 @@ export class HeadlessBrowserDriver {
 				};
 				window.prompt = (msg, def) => {
 					window.__dialogs.push({ type: 'prompt', message: String(msg), defaultPrompt: def });
-					return window.__nextPromptText || def || '';
+					return window.__nextPromptText;
 				};
 			`
 		}, this.sessionId);
@@ -122,7 +146,7 @@ export class HeadlessBrowserDriver {
 	}
 
 	_onPipeData(chunk) {
-		this._readBuffer += chunk.toString('utf8');
+		this._readBuffer += this.decoder.write(chunk);
 		const parts = this._readBuffer.split('\0');
 		this._readBuffer = parts.pop();
 
@@ -144,7 +168,7 @@ export class HeadlessBrowserDriver {
 					resolve(msg.result);
 				}
 			} else if (msg.method) {
-				this._handleEvent(msg).catch(() => {});
+				this._handleEvent(msg).catch(error => this.pageErrors.push(`CDP event error: ${error.message}`));
 			}
 		}
 	}
@@ -154,6 +178,21 @@ export class HeadlessBrowserDriver {
 
 		if (method === 'Fetch.requestPaused') {
 			const reqUrl = new URL(params.request.url);
+			this.requests.push({ url: params.request.url, method: params.request.method, body: params.request.postData });
+			const response = this.responses.get(reqUrl.href) || this.responses.get(reqUrl.pathname);
+			if (response) {
+				if (response.wait) await response.wait;
+				if (response.error) {
+					await this.send('Fetch.failRequest', { requestId: params.requestId, errorReason: 'Failed' }, sessionId);
+				} else {
+					await this.send('Fetch.fulfillRequest', {
+						requestId: params.requestId, responseCode: response.status || 200,
+						responseHeaders: [{ name: 'Content-Type', value: response.contentType || 'application/json' }, { name: 'Access-Control-Allow-Origin', value: '*' }],
+						body: Buffer.from(response.body ?? JSON.stringify(response.json ?? {})).toString('base64')
+					}, sessionId);
+				}
+				return;
+			}
 			if (reqUrl.origin === this.origin) {
 				let relPath = decodeURIComponent(reqUrl.pathname);
 				if (relPath === '/' || relPath === '') {
@@ -221,15 +260,27 @@ export class HeadlessBrowserDriver {
 	}
 
 	send(method, params = {}, sessionId = undefined) {
-		if (!this.proc || this.proc.killed) {
-			return Promise.reject(new Error('Chromium process is not running'));
+		if (!this.proc || this.proc.killed || this.proc.exitCode !== null) {
+			return Promise.reject(new Error(`Chromium process is not running: ${this.stderr}`));
 		}
 		const id = this.msgId++;
 		const payload = { id, method, params };
 		if (sessionId) payload.sessionId = sessionId;
-		this.proc.stdio[3].write(JSON.stringify(payload) + '\0');
 		return new Promise((resolve, reject) => {
-			this.pending.set(id, { resolve, reject });
+			const timer = setTimeout(() => {
+				this.pending.delete(id);
+				reject(new Error(`CDP command timed out: ${method}. ${this.stderr}`));
+			}, this.commandTimeoutMs);
+			this.pending.set(id, {
+				resolve: value => { clearTimeout(timer); resolve(value); },
+				reject: error => { clearTimeout(timer); reject(error); }
+			});
+			this.proc.stdio[3].write(JSON.stringify(payload) + '\0', error => {
+				if (error && this.pending.has(id)) {
+					this.pending.get(id).reject(error);
+					this.pending.delete(id);
+				}
+			});
 		});
 	}
 
@@ -257,6 +308,16 @@ export class HeadlessBrowserDriver {
 			}
 			await new Promise(r => setTimeout(r, 50));
 		}
+		throw new Error(`Application did not become ready within ${timeoutMs}ms: ${this.pageErrors.join('\n')}`);
+	}
+
+	async waitFor(expression, timeoutMs = 5000) {
+		const started = Date.now();
+		while (Date.now() - started < timeoutMs) {
+			if (typeof expression === 'function' ? await expression() : await this.evaluate(expression)) return;
+			await new Promise(resolve => setTimeout(resolve, 25));
+		}
+		throw new Error(`Timed out waiting for: ${expression}`);
 	}
 
 	async evaluate(expression, awaitPromise = true) {
@@ -274,18 +335,24 @@ export class HeadlessBrowserDriver {
 	}
 
 	async click(selector) {
-		const found = await this.evaluate(`
+		const point = await this.evaluate(`
 			(() => {
 				const el = document.querySelector(${JSON.stringify(selector)});
-				if (!el) return false;
-				el.click();
-				return true;
+				if (!el || !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) || el.disabled) {
+					throw new Error('Element is absent, hidden, or disabled: ' + ${JSON.stringify(selector)});
+				}
+				el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+				const rect = el.getBoundingClientRect();
+				const x = rect.x + rect.width / 2;
+				const y = rect.y + rect.height / 2;
+				const target = document.elementFromPoint(x, y);
+				if (!target || !(el === target || el.contains(target))) throw new Error('Element is covered: ' + ${JSON.stringify(selector)});
+				return { x, y };
 			})()
 		`);
-		if (!found) {
-			throw new Error(`Element not found for click: ${selector}`);
-		}
-		await new Promise(r => setTimeout(r, 80));
+		await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 }, this.sessionId);
+		await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 }, this.sessionId);
+		await new Promise(resolve => setTimeout(resolve, 30));
 	}
 
 	async fill(selector, value) {
@@ -293,11 +360,11 @@ export class HeadlessBrowserDriver {
 			(() => {
 				const el = document.querySelector(${JSON.stringify(selector)});
 				if (!el) return false;
-				el.dispatchEvent(new FocusEvent('focus', { bubbles: false }));
+				el.focus();
 				el.value = ${JSON.stringify(String(value))};
 				el.dispatchEvent(new Event('input', { bubbles: true }));
 				el.dispatchEvent(new Event('change', { bubbles: true }));
-				el.dispatchEvent(new FocusEvent('blur', { bubbles: false }));
+				el.blur();
 				return true;
 			})()
 		`);
@@ -312,6 +379,7 @@ export class HeadlessBrowserDriver {
 			(() => {
 				const el = document.querySelector(${JSON.stringify(selector)});
 				if (!el) return false;
+				if (!Array.from(el.options).some(o => o.value === ${JSON.stringify(String(value))})) throw new Error('Select option does not exist');
 				el.value = ${JSON.stringify(String(value))};
 				el.dispatchEvent(new Event('change', { bubbles: true }));
 				return true;
@@ -336,14 +404,32 @@ export class HeadlessBrowserDriver {
 		return this.evaluate(`
 			(() => {
 				const el = document.querySelector(${JSON.stringify(selector)});
-				if (!el) return false;
-				if (el.classList.contains('hidden')) return false;
-				const style = window.getComputedStyle(el);
-				if (style.display === 'none' || style.visibility === 'hidden') return false;
-				if (style.opacity === '0' && !el.classList.contains('active')) return false;
-				return true;
+				return Boolean(el?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
 			})()
 		`);
+	}
+
+	async key(selector, key) {
+		await this.evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
+		await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key }, this.sessionId);
+		await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key }, this.sessionId);
+	}
+
+	async setConfirm(accept) {
+		await this.evaluate(`window.__nextConfirmAccept = ${Boolean(accept)}`);
+	}
+
+	async importFile(text, filename = 'import.json') {
+		await this.evaluate(`
+			(() => {
+				const input = document.getElementById('file-import-input');
+				const transfer = new DataTransfer();
+				transfer.items.add(new File([${JSON.stringify(text)}], ${JSON.stringify(filename)}, { type: 'application/json' }));
+				input.files = transfer.files;
+				input.dispatchEvent(new Event('change', { bubbles: true }));
+			})()
+		`);
+		await this.waitFor('document.getElementById("file-import-input").value === ""');
 	}
 
 	async close() {
@@ -352,7 +438,10 @@ export class HeadlessBrowserDriver {
 		}
 		this.pending.clear();
 		if (this.proc && !this.proc.killed) {
-			this.proc.kill('SIGKILL');
+			await new Promise(resolve => {
+				this.proc.once('exit', resolve);
+				this.proc.kill('SIGKILL');
+			});
 		}
 	}
 }

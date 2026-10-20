@@ -116,32 +116,36 @@ export class SyncManager {
 	async syncPendingDiffs({ keepalive = false } = {}) {
 		if (this.isSyncing) return { status: 'already_syncing' };
 
-		const unsynced = await this.db.getUnsyncedTransactions();
-		if (!unsynced || unsynced.length === 0) {
-			return { status: 'up_to_date', synced_count: 0 };
-		}
-
 		this.isSyncing = true;
 		this.lastError = null;
 
 		try {
-			const response = await this.sendRequest('push_diff', {
-				transactions: unsynced
-			}, { keepalive });
-
-			// Mark local transactions as synced
-			const syncedIds = unsynced.map(t => t.id);
-			await this.db.markTransactionsSynced(syncedIds);
-
-			// If server returned updated snapshot, save it
-			if (response.snapshot) {
-				await this.db.saveSnapshot(response.snapshot);
+			const unsynced = await this.db.getUnsyncedTransactions();
+			if (!unsynced || unsynced.length === 0) {
+				return { status: 'up_to_date', synced_count: 0 };
 			}
-
+			const snapshot = await this.db.getSnapshot();
+			const retroactive = unsynced.filter(tx => tx.previous_target_month || (snapshot?.last_closed_month && tx.target_month <= snapshot.last_closed_month));
+			const retroactiveIds = new Set(retroactive.map(tx => tx.id));
+			const pending = unsynced.filter(tx => !retroactiveIds.has(tx.id));
+			let response = null;
+			for (const transaction of retroactive) {
+				response = await this.sendRequest('retroactive_update', {
+					transaction,
+					...(transaction.previous_target_month ? { previous_target_month: transaction.previous_target_month } : {})
+				}, { keepalive });
+				if (response.snapshot) await this.db.saveSnapshot(response.snapshot);
+				await this.db.markTransactionsSynced([transaction.id], [transaction]);
+			}
+			if (pending.length > 0) {
+				response = await this.sendRequest('push_diff', { transactions: pending }, { keepalive });
+				if (response.snapshot) await this.db.saveSnapshot(response.snapshot);
+				await this.db.markTransactionsSynced(pending.map(tx => tx.id), pending);
+			}
 			this.lastSyncedAt = new Date().toISOString();
 			return {
 				status: 'synced',
-				synced_count: syncedIds.length,
+				synced_count: unsynced.length,
 				response: response
 			};
 		} catch (err) {
@@ -197,14 +201,15 @@ export class SyncManager {
 
 		try {
 			// First save locally
-			await this.db.putTransaction(transaction);
+			const submitted = await this.db.putTransaction(transaction);
 
 			const response = await this.sendRequest('retroactive_update', {
-				transaction: transaction
+				transaction: submitted,
+				...(submitted.previous_target_month ? { previous_target_month: submitted.previous_target_month } : {})
 			});
 
 			// Mark transaction as synced
-			await this.db.markTransactionsSynced([transaction.id]);
+			await this.db.markTransactionsSynced([submitted.id], [submitted]);
 
 			// Update local snapshot with newly cascaded snapshot from server
 			if (response.snapshot) {

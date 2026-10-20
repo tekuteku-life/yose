@@ -3,11 +3,12 @@
  * Manages transaction editing modal, past closed month retroactive updates, and deletion.
  */
 
-import { calculateTax, escapeHtml } from '../logic.js';
+import { escapeHtml } from '../logic.js';
 
 export class TransactionEditController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
+		this.currentTaxMeta = null;
 	}
 
 	get db() {
@@ -29,6 +30,8 @@ export class TransactionEditController {
 		const actCatSelect = document.getElementById('edit-tx-actual-category');
 
 		if (!modal) return;
+
+		document.getElementById('edit-tx-amount')?.addEventListener('input', () => { this.currentTaxMeta = null; });
 
 		btnClose?.addEventListener('click', () => modal.classList.remove('active'));
 
@@ -54,7 +57,11 @@ export class TransactionEditController {
 
 		form?.addEventListener('submit', async (e) => {
 			e.preventDefault();
-			await this.handleEditFormSubmit();
+			try {
+				await this.handleEditFormSubmit();
+			} catch (error) {
+				alert(`明細の保存に失敗しました: ${error.message}`);
+			}
 		});
 
 		btnDelete?.addEventListener('click', async () => {
@@ -71,6 +78,7 @@ export class TransactionEditController {
 		if (!modal) return;
 		const tx = await this.db.getTransaction(id);
 		if (!tx) return;
+		this.currentTaxMeta = tx.tax_meta || null;
 
 		const config = await this.db.getMasterConfig();
 		const activeAccounts = (config?.accounts || []).filter(a => !a.is_archived);
@@ -101,10 +109,16 @@ export class TransactionEditController {
 
 		if (idInput) idInput.value = tx.id;
 		if (dateInput) dateInput.value = tx.date;
-		if (typeSelect) typeSelect.value = tx.type;
+		if (typeSelect) {
+			typeSelect.value = tx.type;
+			typeSelect.disabled = Boolean(tx.amortization_meta);
+		}
 		if (amountInput) amountInput.value = tx.amount;
 		if (accSelect) accSelect.value = tx.account_id || '';
-		if (toAccSelect) toAccSelect.value = tx.to_account_id || '';
+		if (toAccSelect) {
+			toAccSelect.value = tx.to_account_id || '';
+			toAccSelect.disabled = Boolean(tx.amortization_meta?.is_payment_record);
+		}
 
 		const catId = tx.category_id || (activeCats[0]?.id || '');
 		if (catSelect) catSelect.value = catId;
@@ -143,67 +157,80 @@ export class TransactionEditController {
 		const editAccount = document.getElementById('edit-tx-account')?.value;
 		const editToAccount = document.getElementById('edit-tx-to-account')?.value;
 		const editCat = document.getElementById('edit-tx-category')?.value;
-		const editSub = document.getElementById('edit-tx-subcategory')?.value;
+		const editSub = document.getElementById('edit-tx-subcategory')?.value || null;
 		const editActCat = document.getElementById('edit-tx-actual-category')?.value;
-		const editActSub = document.getElementById('edit-tx-actual-subcategory')?.value;
+		const editActSub = document.getElementById('edit-tx-actual-subcategory')?.value || null;
 		const editMemo = document.getElementById('edit-tx-memo')?.value || '';
 		const editTags = (document.getElementById('edit-tx-tags')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
 		const editStatus = document.getElementById('edit-tx-status')?.value || 'confirmed';
 
-		if (tx.group_id) {
-			const shouldCascade = confirm('この取引は分割計上（または連動グループ）の一部です。\n他の関連する明細も連動更新しますか？\n（YES: 費目・メモ・タグ・金額按分を全期間に連動更新 / NO: この明細のみ修正）');
-			if (shouldCascade) {
-				const groupTxs = await this.db.getTransactionsByGroupId(tx.group_id);
-				const amortCount = groupTxs.filter(t => !t.amortization_meta?.is_payment_record && t.type === 'expense').length || 1;
-				const isMainPayment = Boolean(tx.amortization_meta?.is_payment_record || tx.id === tx.group_id);
-				const newTotal = isMainPayment ? editAmount : (editAmount * amortCount);
+		const previousMonth = tx.previous_target_month || (tx.target_month !== editDate.slice(0, 7) ? tx.target_month : null);
+		const movement = previousMonth ? { previous_target_month: previousMonth } : {};
+		const groupTxs = tx.group_id && (tx.amortization_meta || tx.group_id.startsWith('grp_prepaid'))
+			? await this.db.getTransactionsByGroupId(tx.group_id)
+			: [];
+		const paymentTx = groupTxs.find(t => t.amortization_meta?.is_payment_record);
+		const amortTxs = groupTxs.filter(t => t.type === 'expense' && t.amortization_meta && !t.amortization_meta.is_payment_record);
+		const cascade = paymentTx && amortTxs.length > 0 && groupTxs.length > 1 && confirm('この取引は前払分割計上の一部です。\n関連する明細の費目・メモ・タグと、変更された金額を連動更新しますか？\n（キャンセル: この明細のみ修正）');
+		let changedTxs;
 
-				await this.db.updateInstallmentGroup(tx.group_id, {
-					amount: newTotal,
-					total_amount: newTotal,
-					category_id: editType === 'transfer' ? null : editCat,
-					subcategory_id: editType === 'transfer' ? null : editSub,
-					actual_category_id: editType === 'transfer' ? null : editActCat,
-					actual_subcategory_id: editType === 'transfer' ? null : editActSub,
-					memo: editMemo,
-					tags: editTags
-				});
-
-				document.getElementById('modal-edit-tx')?.classList.remove('active');
-				this.coordinator.showToast('✅ 関連明細を一括修正しました');
-				this.syncManager?.syncPendingDiffs().catch(e => console.log('Sync deferred:', e.message));
-				await this.coordinator.refreshAllViews();
-				return;
+		if (cascade) {
+			/** @type {Record<string, any>} */
+			const updates = { memo: editMemo, tags: editTags };
+			if (editAmount !== tx.amount) {
+				updates.total_amount = tx.amortization_meta?.is_payment_record ? editAmount : editAmount * amortTxs.length;
 			}
+			if (tx.type === 'expense') {
+				Object.assign(updates, {
+					category_id: editCat,
+					subcategory_id: editSub,
+					actual_category_id: editActCat,
+					actual_subcategory_id: editActSub
+				});
+			}
+			await this.db.updateInstallmentGroup(tx.group_id, updates, null, {
+				id,
+				date: editDate,
+				target_month: editDate.slice(0, 7),
+				account_id: editAccount,
+				status: editStatus,
+				tax_meta: this.currentTaxMeta,
+				...movement,
+				updated_at: new Date().toISOString(),
+				sync_status: 'unsynced'
+			});
+			changedTxs = await this.db.getTransactionsByGroupId(tx.group_id);
+		} else {
+			Object.assign(tx, {
+				...movement,
+				date: editDate,
+				target_month: editDate.slice(0, 7),
+				type: editType,
+				amount: editAmount,
+				account_id: editAccount,
+				to_account_id: editType === 'transfer' ? editToAccount : null,
+				category_id: editType === 'transfer' ? null : editCat,
+				subcategory_id: editType === 'transfer' ? null : editSub,
+				actual_category_id: editType === 'transfer' ? null : editActCat,
+				actual_subcategory_id: editType === 'transfer' ? null : editActSub,
+				memo: editMemo,
+				tags: editTags,
+				status: editStatus,
+				tax_meta: this.currentTaxMeta,
+				updated_at: new Date().toISOString(),
+				sync_status: 'unsynced'
+			});
+			await this.db.putTransaction(tx);
+			changedTxs = [tx];
 		}
 
-		tx.date = editDate;
-		tx.target_month = editDate.slice(0, 7);
-		tx.type = editType;
-		tx.amount = editAmount;
-		tx.account_id = editAccount;
-		tx.to_account_id = editType === 'transfer' ? editToAccount : null;
-		tx.category_id = editType === 'transfer' ? null : editCat;
-		tx.subcategory_id = editType === 'transfer' ? null : editSub;
-		tx.actual_category_id = editType === 'transfer' ? null : editActCat;
-		tx.actual_subcategory_id = editType === 'transfer' ? null : editActSub;
-		tx.memo = editMemo;
-		tx.tags = editTags;
-		tx.status = editStatus;
-		tx.updated_at = new Date().toISOString();
-		tx.sync_status = 'unsynced';
-
-		await this.db.putTransaction(tx);
-		this.coordinator.showToast('✅ 明細を修正しました');
-
-		const snapshot = await this.db.getSnapshot();
-		const isPastClosed = snapshot?.last_closed_month && tx.target_month <= snapshot.last_closed_month;
-
 		document.getElementById('modal-edit-tx')?.classList.remove('active');
-
-		if (isPastClosed && this.syncManager?.gasUrl && this.syncManager?.privateKey) {
+		this.coordinator.showToast(cascade ? '✅ 関連明細を一括修正しました' : '✅ 明細を修正しました');
+		const snapshot = await this.db.getSnapshot();
+		const closedTxs = changedTxs.filter(t => t.previous_target_month || (snapshot?.last_closed_month && t.target_month <= snapshot.last_closed_month));
+		if (closedTxs.length > 0 && this.syncManager?.gasUrl && this.syncManager?.privateKey) {
 			try {
-				await this.syncManager.sendRetroactiveUpdate(tx);
+				await this.syncManager.syncPendingDiffs();
 				alert('過去締め月の明細を修正し、スナップショットを再計算しました');
 			} catch (err) {
 				alert(`遡及更新エラー: ${err.message}`);
@@ -211,7 +238,6 @@ export class TransactionEditController {
 		} else {
 			this.syncManager?.syncPendingDiffs().catch(e => console.log('Sync deferred:', e.message));
 		}
-
 		await this.coordinator.refreshAllViews();
 	}
 

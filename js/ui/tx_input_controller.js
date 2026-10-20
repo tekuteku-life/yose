@@ -5,7 +5,6 @@
 
 import {
 	formatDate,
-	calculateTax,
 	evaluateCalculatorExpression,
 	createPrepaidAmortizationTransactions,
 	createAdvancePaymentTransactions,
@@ -45,8 +44,8 @@ export class TransactionInputController {
 		// Mode buttons
 		const modeBtns = document.querySelectorAll('.mode-tab-btn');
 		modeBtns.forEach(btn => {
-			btn.addEventListener('click', () => {
-				this.switchInputMode(btn.dataset.mode);
+			btn.addEventListener('click', async () => {
+				await this.switchInputMode(btn.dataset.mode);
 			});
 		});
 
@@ -57,12 +56,11 @@ export class TransactionInputController {
 				const val = typeSelect.value;
 				this.coordinator.currentTaxMeta = null;
 				if (['advance', 'repay', 'prepaid', 'point'].includes(val)) {
-					this.switchInputMode(val);
+					await this.switchInputMode(val);
 				} else {
-					this.switchInputMode('normal');
+					await this.switchInputMode('normal');
 					this.updateFormFieldsForType(val);
 				}
-				await this.populateCategoryDropdowns(val);
 			});
 		}
 
@@ -249,7 +247,7 @@ export class TransactionInputController {
 		if (disp) disp.textContent = `¥${self.toLocaleString()}`;
 	}
 
-	switchInputMode(mode) {
+	async switchInputMode(mode) {
 		this.coordinator.currentMode = mode;
 		this.coordinator.currentTaxMeta = null;
 
@@ -310,6 +308,7 @@ export class TransactionInputController {
 			const type = document.getElementById('input-type')?.value;
 			this.updateFormFieldsForType(type);
 		}
+		await this.populateCategoryDropdowns(typeSelect?.value || 'expense');
 	}
 
 	updateFormFieldsForType(type) {
@@ -661,6 +660,8 @@ export class TransactionInputController {
 			}
 			if (this.calcTargetInputId === 'input-amount') {
 				this.coordinator.currentTaxMeta = this.calcTaxMeta;
+			} else if (this.calcTargetInputId === 'edit-tx-amount') {
+				this.coordinator.txEditController.currentTaxMeta = this.calcTaxMeta;
 			}
 			modal.classList.remove('active');
 		});
@@ -675,11 +676,11 @@ export class TransactionInputController {
 		const accountId = document.getElementById('select-account')?.value;
 		const toAccountId = document.getElementById('select-to-account')?.value;
 		const categoryId = document.getElementById('select-category')?.value;
-		const subcategoryId = document.getElementById('select-subcategory')?.value;
+		const subcategoryId = document.getElementById('select-subcategory')?.value || null;
 
 		const chkSync = document.getElementById('chk-sync-actual-category')?.checked;
 		const actualCategoryId = chkSync ? categoryId : document.getElementById('select-actual-category')?.value;
-		const actualSubcategoryId = chkSync ? subcategoryId : document.getElementById('select-actual-subcategory')?.value;
+		const actualSubcategoryId = chkSync ? subcategoryId : document.getElementById('select-actual-subcategory')?.value || null;
 
 		let txRecordsToSave = [];
 
