@@ -38,7 +38,7 @@ export class ChartController {
 
 	updateThemeMode(isDark) {
 		this.isDark = isDark;
-		if (typeof window !== 'undefined' && window.Chart) {
+		if (typeof window !== 'undefined' && window.Chart?.defaults) {
 			window.Chart.defaults.color = isDark ? '#94a3b8' : '#64748b';
 			window.Chart.defaults.borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)';
 		}

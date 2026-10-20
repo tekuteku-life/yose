@@ -609,6 +609,27 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * 「費目別推移・内訳」（`#category-breakdown-list`）の各費目行をタッチすると、`#select-category-filter` に当該費目IDをセットし、明細一覧へドリルダウンする。
    * 「タグ別集計・内訳」（`#tag-breakdown-list`）の各タグ行をタッチすると、`#select-tag-filter` に当該タグ名をセットし、明細一覧へドリルダウンする。
 
+### 3.39 ヘッドレスChrome実ブラウザUIテストによる網羅的品質保証とUI/UX・安全性不具合の恒久的修正要件
+
+1. **背景と目的**
+   * ヘッドレスChromeによる実ブラウザEnd-to-End（E2E）UIテストの導入に伴い、実際のブラウザDOMイベント実行時に顕在化した初期化例外、データ欠落、DOM XSS脆弱性、およびUI表示不整合をシステム全体のあるべき姿に基づいて根本から是正し、恒久的な品質と安全性を保証する。
+2. **仕様およびあるべき姿**
+   * **3.39.1 Chart.js未初期化時のテーマ更新安全ガード**:
+     * `ChartController.updateThemeMode(isDark)` において、CDNライブラリ読み込み遅延時やオフライン起動時でも `window.Chart?.defaults` をオプショナルチェーンで安全に参照し、未定義時の `TypeError` による `finishAppInit` 中断を完全に防止する。
+   * **3.39.2 中項目（内訳）追加時における最新マスタ参照解決**:
+     * `MasterController.openMasterModal('subcategory', item, parentItem)` において、モーダル保存時に `const targetParent = config.categories?.find(c => c.id === parentItem.id)` により新しく取得した `config` 内の同一カテゴリーを確実に特定して `subcategories` を追加・更新し、DB保存時に中項目が消失する不具合を解消する。
+   * **3.39.3 定期支出ルール一覧における完全なHTMLエスケープ（DOM XSS防御）**:
+     * `MasterController.renderMasterManagement()` 内の定期ルール一覧（`#master-recurring-list`）描画において、`r.name`, `r.type`, `r.account_id` をすべて `escapeHtml(...)` でサニタイズし、悪意あるスクリプト挿入を完全に無害化する。
+   * **3.39.4 アーカイブ済み口座・費目のアクティブ一覧非表示制御**:
+     * `SummaryController.renderAccountBalances()` において `accounts.filter(a => !a.is_archived)` を適用し、アーカイブ済み口座を収支・予算・資産一覧から除外する。
+     * `SettingsController.renderAnnualBudgetSettings()` および `SummaryController.renderBudgetAnalytics()` において `categories.filter(c => !c.is_archived && ...)` を適用し、アーカイブ済み費目が年間予算リストに残存しないよう制御する。
+   * **3.39.5 年別粒度（yearly）選択時における対象年（`selectedYear`）単独集計保証**:
+     * 要件 3.36 に従い、`SummaryController.renderYearlyAnalytics()` において、費目別内訳（`#category-breakdown-list`）およびドーナツグラフが集計全年度の合算ではなく選択中の `this.coordinator.selectedYear` に限定して集計・表示されるように修正する。
+   * **3.39.6 全サマリタブ（資産・予算・収支）からの口座明細一覧ドリルダウン連動**:
+     * 資産タブや予算実績タブから `#account-balances-list` 内の口座行をタッチした際、`SummaryController.applyDrilldownFilter()` が自動的に `this.coordinator.analyticsTarget` を `'cashflow'` に切り替えて `#card-month-tx-list` を可視化し、該当口座の明細一覧へスムーズに案内する。
+   * **3.39.7 初回セットアップ直後再ロック時のPINフォーム表示整合性保証**:
+     * `AuthController.lockPrivateKey()` 実行時に、`#auth-setup-container` を非表示、`#auth-pin-container` を表示（`display: block`）状態に設定し、初回PINセットアップ直後にページ再読み込みを行わなくても即座にPIN入力によるロック解除が行える状態を保証する。
+
 ---
 
 ## 4. 同期トリガー・通信・セキュリティ要件
@@ -1687,6 +1708,7 @@ flowchart TD
 | **3.36** | 集計・グラフタブの3分割（収支・予算/実績・資産の独立トップレベルタブ化） | `index.html`, `js/ui/coordinator.js`, `js/ui/summary_controller.js` | - | - | `test/system/e2e_scenario.test.js`, `test/unit/master_management.test.js` |
 | **3.37** | 各タブ（収支・予算/実績・資産・設定）内の各ペインの表示・非表示（折りたたみ）切り替え | `js/ui/coordinator.js`, `css/style.css`, `index.html`, `js/db/backup_merger.js` | - | `master_config` (`collapsed_panes`) | `test/unit/master_management.test.js`, `test/unit/db.test.js` |
 | **3.38** | 収支タブの口座別・費目別・タグ別集計項目のタッチによる明細一覧フィルター連動 | `js/ui/summary_controller.js`, `js/ui/tx_list_controller.js`, `js/logic/aggregator.js`, `index.html` | - | - | `test/unit/logic.test.js`, `test/unit/tx_edit.test.js` |
+| **3.39** | ヘッドレスChrome UIテストによる品質保証とUI/UX・安全性不具合の恒久的修正（Chartガード、中項目参照、XSS防御、アーカイブ非表示、年別集計分離、口座ドリルダウン、PIN表示） | `js/ui/chart_controller.js`, `js/ui/master_controller.js`, `js/ui/summary_controller.js`, `js/ui/settings_controller.js`, `js/ui/auth_controller.js` | - | `master_config` | `test/ui/headless_ui.test.js`, `test/unit/master_management.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |

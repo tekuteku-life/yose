@@ -124,6 +124,100 @@ export class AuthController {
 			}
 		});
 
+		const attemptWebAuthnUnlock = async () => {
+			const currentWebauthnId = (await this.db.getSecurityKey('webauthn_credential_id')) || syncedBundle?.credentialId || null;
+			if (!currentWebauthnId || !isWebAuthnSupported()) return;
+			try {
+				if (errorMsg) errorMsg.style.display = 'none';
+				const res = await authenticateWithWebAuthn(currentWebauthnId, undefined, { allowDiscoverable: true });
+				if (res.success) {
+					const prfKeyRaw = res.prfKeyRaw || res.prfKey || null;
+					const vault = await this.db.getSecurityKey('webauthn_vault');
+					if (vault) {
+						let dmk, priv;
+						if (vault.ciphertext) {
+							if (!prfKeyRaw) {
+								throw new Error('PRF key is required for encrypted WebAuthn vault');
+							}
+							const decrypted = await decryptWebAuthnVault(vault, prfKeyRaw);
+							dmk = await importAesKeyRaw(decrypted.dmkRaw);
+							priv = await importPrivateKeyPkcs8(decrypted.privateKeyPkcs8);
+						} else {
+							dmk = await importAesKeyRaw(base64ToBytes(vault.dmk));
+							priv = await importPrivateKeyPkcs8(base64ToBytes(vault.priv));
+						}
+						this.db.setEncryptionKey(dmk);
+						this.privateKey = priv;
+						this.isKeyLocked = false;
+						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: res.credentialId || currentWebauthnId });
+						if (authScreen) authScreen.classList.add('hidden');
+						await this.coordinator.finishAppInit();
+						return;
+					} else if (syncedBundle && prfKeyRaw) {
+						const unwrapped = await verifyAndUnwrapPasskeyBundle(syncedBundle, prfKeyRaw);
+						const dmk = await importAesKeyRaw(unwrapped.dmkRaw);
+						const priv = await importPrivateKeyPkcs8(unwrapped.privateKeyPkcs8);
+						await this.db.saveSecurityKey('webauthn_credential_id', unwrapped.credentialId);
+						await this.db.saveSecurityKey('webauthn_vault', syncedBundle.vault);
+						this.db.setEncryptionKey(dmk);
+						this.privateKey = priv;
+						this.isKeyLocked = false;
+						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: unwrapped.credentialId });
+						if (authScreen) authScreen.classList.add('hidden');
+						await this.coordinator.finishAppInit();
+						return;
+					}
+				}
+			} catch (authErr) {
+				console.warn('WebAuthn authentication failed or was cancelled:', authErr);
+				if (errorMsg) {
+					errorMsg.textContent = '生体認証がキャンセルされたか失敗しました。PINで解除してください。';
+					errorMsg.style.display = 'block';
+				}
+			}
+		};
+
+		const attemptPinUnlock = async () => {
+			const pinInput = document.getElementById('auth-pin-input');
+			const pin = pinInput?.value?.trim();
+			if (!pin) {
+				if (errorMsg) {
+					errorMsg.textContent = 'PINコードを入力してください';
+					errorMsg.style.display = 'block';
+				}
+				return;
+			}
+
+			try {
+				if (errorMsg) errorMsg.style.display = 'none';
+				const currentPkg = await this.db.getSecurityKey('master_keys_package');
+				if (!currentPkg) {
+					throw new Error('暗号化された秘密鍵パッケージが見つかりません');
+				}
+				const { dmkRaw, privateKeyPkcs8 } = await decryptMasterKeysWithPin(currentPkg, pin);
+				const dmk = await importAesKeyRaw(dmkRaw);
+				const priv = await importPrivateKeyPkcs8(privateKeyPkcs8);
+				this.db.setEncryptionKey(dmk);
+				this.privateKey = priv;
+				this.isKeyLocked = false;
+				setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey });
+				if (pinInput) pinInput.value = '';
+				if (authScreen) authScreen.classList.add('hidden');
+				await this.coordinator.finishAppInit();
+			} catch (err) {
+				if (errorMsg) {
+					errorMsg.textContent = 'PINコードが正しくありません';
+					errorMsg.style.display = 'block';
+				}
+			}
+		};
+
+		document.getElementById('btn-auth-webauthn')?.addEventListener('click', attemptWebAuthnUnlock);
+		document.getElementById('btn-auth-pin')?.addEventListener('click', attemptPinUnlock);
+		document.getElementById('auth-pin-input')?.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') attemptPinUnlock();
+		});
+
 		if (!masterPkg) {
 			// First Time Setup Mode
 			if (authScreen) authScreen.classList.remove('hidden');
@@ -238,96 +332,6 @@ export class AuthController {
 		if (webauthnContainer) {
 			webauthnContainer.style.display = hasWebAuthn ? 'block' : 'none';
 		}
-
-		const attemptWebAuthnUnlock = async () => {
-			if (!hasWebAuthn) return;
-			try {
-				if (errorMsg) errorMsg.style.display = 'none';
-				const res = await authenticateWithWebAuthn(effectiveWebauthnId, undefined, { allowDiscoverable: true });
-				if (res.success) {
-					const prfKeyRaw = res.prfKeyRaw || res.prfKey || null;
-					const vault = await this.db.getSecurityKey('webauthn_vault');
-					if (vault) {
-						let dmk, priv;
-						if (vault.ciphertext) {
-							if (!prfKeyRaw) {
-								throw new Error('PRF key is required for encrypted WebAuthn vault');
-							}
-							const decrypted = await decryptWebAuthnVault(vault, prfKeyRaw);
-							dmk = await importAesKeyRaw(decrypted.dmkRaw);
-							priv = await importPrivateKeyPkcs8(decrypted.privateKeyPkcs8);
-						} else {
-							dmk = await importAesKeyRaw(base64ToBytes(vault.dmk));
-							priv = await importPrivateKeyPkcs8(base64ToBytes(vault.priv));
-						}
-						this.db.setEncryptionKey(dmk);
-						this.privateKey = priv;
-						this.isKeyLocked = false;
-						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: res.credentialId || effectiveWebauthnId });
-						if (authScreen) authScreen.classList.add('hidden');
-						await this.coordinator.finishAppInit();
-						return;
-					} else if (syncedBundle && prfKeyRaw) {
-						const unwrapped = await verifyAndUnwrapPasskeyBundle(syncedBundle, prfKeyRaw);
-						const dmk = await importAesKeyRaw(unwrapped.dmkRaw);
-						const priv = await importPrivateKeyPkcs8(unwrapped.privateKeyPkcs8);
-						await this.db.saveSecurityKey('webauthn_credential_id', unwrapped.credentialId);
-						await this.db.saveSecurityKey('webauthn_vault', syncedBundle.vault);
-						this.db.setEncryptionKey(dmk);
-						this.privateKey = priv;
-						this.isKeyLocked = false;
-						setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey, credentialId: unwrapped.credentialId });
-						if (authScreen) authScreen.classList.add('hidden');
-						await this.coordinator.finishAppInit();
-						return;
-					}
-				}
-			} catch (authErr) {
-				console.warn('WebAuthn authentication failed or was cancelled:', authErr);
-				if (errorMsg) {
-					errorMsg.textContent = '生体認証がキャンセルされたか失敗しました。PINで解除してください。';
-					errorMsg.style.display = 'block';
-				}
-			}
-		};
-
-		document.getElementById('btn-auth-webauthn')?.addEventListener('click', attemptWebAuthnUnlock);
-
-		const attemptPinUnlock = async () => {
-			const pinInput = document.getElementById('auth-pin-input');
-			const pin = pinInput?.value?.trim();
-			if (!pin) {
-				if (errorMsg) {
-					errorMsg.textContent = 'PINコードを入力してください';
-					errorMsg.style.display = 'block';
-				}
-				return;
-			}
-
-			try {
-				if (errorMsg) errorMsg.style.display = 'none';
-				const { dmkRaw, privateKeyPkcs8 } = await decryptMasterKeysWithPin(masterPkg, pin);
-				const dmk = await importAesKeyRaw(dmkRaw);
-				const priv = await importPrivateKeyPkcs8(privateKeyPkcs8);
-				this.db.setEncryptionKey(dmk);
-				this.privateKey = priv;
-				this.isKeyLocked = false;
-				setActiveSession({ dmk, privateKey: priv, publicKey: this.publicKey });
-				if (pinInput) pinInput.value = '';
-				if (authScreen) authScreen.classList.add('hidden');
-				await this.coordinator.finishAppInit();
-			} catch (err) {
-				if (errorMsg) {
-					errorMsg.textContent = 'PINコードが正しくありません';
-					errorMsg.style.display = 'block';
-				}
-			}
-		};
-
-		document.getElementById('btn-auth-pin')?.addEventListener('click', attemptPinUnlock);
-		document.getElementById('auth-pin-input')?.addEventListener('keydown', (e) => {
-			if (e.key === 'Enter') attemptPinUnlock();
-		});
 	}
 
 	async generateNewKeyPair() {
@@ -520,7 +524,18 @@ export class AuthController {
 			this.syncManager.setPrivateKey(null);
 		}
 		this.updateKeyDisplay();
-		document.getElementById('auth-screen')?.classList.remove('hidden');
+
+		const authScreen = document.getElementById('auth-screen');
+		const authTitle = document.getElementById('auth-title');
+		const authDesc = document.getElementById('auth-description');
+		const setupContainer = document.getElementById('auth-setup-container');
+		const pinContainer = document.getElementById('auth-pin-container');
+		if (authTitle) authTitle.textContent = '🔐 よせあつめ家計簿';
+		if (authDesc) authDesc.innerHTML = '安全のためデータは暗号化されています。<br>生体認証（Passkey）またはPINで解除してください。';
+		if (setupContainer) setupContainer.style.display = 'none';
+		if (pinContainer) pinContainer.style.display = 'block';
+		if (authScreen) authScreen.classList.remove('hidden');
+
 		alert('秘密鍵およびDB暗号化セッションをロックしました');
 	}
 
