@@ -11,6 +11,18 @@ export class BackupMerger {
 		const requireType = (valid, field) => {
 			if (!valid) throw new Error(`Invalid import data: ${field}`);
 		};
+		const inspect = (value, path, seen = new Set()) => {
+			if (!value || typeof value !== 'object') return;
+			requireType(!seen.has(value), `${path}: circular structure`);
+			seen.add(value);
+			for (const [key, child] of Object.entries(value)) {
+				requireType(!FORBIDDEN_PROTOTYPE_KEYS.has(key), `${path}.${key}: unsafe key`);
+				if (key === 'id') requireType(!FORBIDDEN_PROTOTYPE_KEYS.has(child), `${path}.id: unsafe ID`);
+				inspect(child, `${path}.${key}`, seen);
+			}
+			seen.delete(value);
+		};
+		inspect(data, 'data');
 		const requiredFields = {
 			full_backup: ['transactions', 'master_config', 'summary_snapshot'],
 			transactions: ['transactions'],
@@ -23,7 +35,12 @@ export class BackupMerger {
 
 		const objects = (value, field) => {
 			requireType(Array.isArray(value), field);
-			for (const item of value) requireType(isObject(item), `${field}[]`);
+			const ids = new Set();
+			for (const item of value) {
+				requireType(isObject(item), `${field}[]`);
+				requireType(BackupMerger.isSafeKey(item.id) && !ids.has(item.id), `${field}.id: 不正または重複したID`);
+				ids.add(item.id);
+			}
 			return value;
 		};
 		const optionalStrings = (item, fields, prefix) => {

@@ -50,17 +50,26 @@ describe('Analytics, pagination, and navigation', { timeout: 120000 }, () => {
 		const d = fixture.driver;
 		await seed(d, Array.from({ length: 65 }, (_, i) => transaction(`filter_${i}`, { memo: i < 31 ? '選択グループ' : 'その他' })));
 		await cashflow(d);
+		// A completed input event must not be mistaken for completed asynchronous rendering.
+		await d.evaluate(`const db=window.__yose_app.db, read=db.getTransactions.bind(db); db.getTransactions=async(...args)=>{ const rows=await read(...args); await new Promise(resolve=>setTimeout(resolve,80)); return rows; };`);
+		const waitPage = (page, pages, total, count) => d.waitFor(`document.getElementById('tx-pagination-info').textContent === '${page} / ${pages} ページ (全 ${total} 件)' && document.querySelectorAll('#month-tx-list .tx-item').length === ${count}`);
 		await d.click('#btn-tx-next-page');
+		await waitPage(2, 3, 65, 30);
 		await d.fill('#input-tx-search', '選択グループ');
+		await waitPage(1, 2, 31, 30);
 		assert.ok((await d.textContent('#tx-pagination-info')).startsWith('1 / 2'));
 		await d.click('#btn-tx-next-page');
+		await waitPage(2, 2, 31, 1);
 		assert.equal((await rowIds(d)).length, 1);
 		await d.fill('#input-tx-search', '存在しない');
+		await d.waitFor('document.getElementById("month-tx-list").textContent.includes("条件に一致する取引はありません") && document.querySelectorAll("#month-tx-list .tx-item").length === 0 && document.getElementById("tx-pagination-controls").style.display === "none"');
 		assert.ok((await d.textContent('#month-tx-list')).includes('条件に一致する取引はありません'));
 		assert.equal(await d.isVisible('#tx-pagination-controls'), false);
 		await d.fill('#input-tx-search', '');
+		await waitPage(1, 3, 65, 30);
 		assert.ok((await d.textContent('#tx-pagination-info')).startsWith('1 / 3'));
 		await d.click('#btn-tx-next-page');
+		await waitPage(2, 3, 65, 30);
 		assert.ok((await d.textContent('#tx-pagination-info')).startsWith('2 / 3'));
 	});
 
@@ -159,6 +168,7 @@ describe('Analytics, pagination, and navigation', { timeout: 120000 }, () => {
 		const first = await d.evaluate('window.__yose_app.db.getTransactions()');
 		assert.equal(first.length, 1);
 		assert.equal(first[0].status, 'planned');
+		await d.waitFor('!window.__yose_app.summaryController.generatingRecurring');
 		await d.click('#btn-generate-recurring');
 		await waitForDialog(d, 'すでに生成');
 		assert.equal((await d.evaluate('window.__yose_app.db.getTransactions()')).length, 1);

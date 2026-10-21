@@ -166,7 +166,7 @@ describe('Integration - Recurring, Prepaid Amortization & Advances Workflows', (
 			totalAmount: 5000,
 			pointUsed: 1000,
 			payingAccountId: 'acc_bank_main',
-			categoryId: 'cat_daily'
+			categoryId: 'cat_food'
 		});
 		assert.equal(offsetTxs.length, 2);
 		await db.putTransactions(offsetTxs);

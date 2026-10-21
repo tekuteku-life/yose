@@ -382,15 +382,8 @@ export class AppCoordinator {
 			}
 		}
 		try {
-			const config = await this.db.getMasterConfig();
-			if (config) {
-				if (!config.collapsed_panes || typeof config.collapsed_panes !== 'object') {
-					config.collapsed_panes = {};
-				}
-				config.collapsed_panes[paneId] = Boolean(isCollapsed);
-				await this.db.saveMasterConfig(config);
-			}
-		} catch (e) {}
+			await this.persistDisplaySetting(config => ({ ...config, collapsed_panes: { ...(config.collapsed_panes || {}), [paneId]: Boolean(isCollapsed) } }));
+		} catch (error) { this.showToast(`表示設定の保存に失敗しました: ${error.message}`); }
 	}
 
 	showToast(message = '✅ 登録が完了しました', durationMs = 2200) {
@@ -509,15 +502,23 @@ export class AppCoordinator {
 		}
 	}
 
+
+	persistDisplaySetting(mutator) {
+		const encryptionKey = this.db.encryptionKey;
+		const previous = this.pendingDisplaySettings || Promise.resolve();
+		const pending = previous.catch(() => {}).then(async () => {
+			if (this.db.encryptionKey !== encryptionKey) throw new Error('待機中に認証が変更されました。解除後に操作し直してください。');
+			await this.db.mutateMasterConfig(mutator);
+		});
+		this.pendingDisplaySettings = pending;
+		return pending;
+	}
+
 	async setTheme(theme) {
 		this.applyTheme(theme);
 		try {
-			const config = await this.db.getMasterConfig();
-			if (config) {
-				config.theme = theme;
-				await this.db.saveMasterConfig(config);
-			}
-		} catch (e) {}
+			await this.persistDisplaySetting(config => ({ ...config, theme }));
+		} catch (error) { this.showToast(`テーマの保存に失敗しました: ${error.message}`); }
 	}
 
 	// Facade delegation methods for 100% backward compatibility

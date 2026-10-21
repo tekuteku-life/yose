@@ -69,6 +69,15 @@ export async function seed(driver, records) {
 	await driver.evaluate(`window.__yose_app.db.putTransactions(${JSON.stringify(records)})`);
 }
 
+// Existing legacy/history fixtures bypass creation validation explicitly; product writes use seed().
+export async function seedLegacy(driver, records) {
+	await driver.evaluate(`(async () => {
+		const db = window.__yose_app.db;
+		const records = ${JSON.stringify(records)};
+		await db.putAllRaw('transactions', await Promise.all(records.map(record => db.encryptRecord(record, { id: record.id, target_month: record.target_month, date: record.date, sync_status: record.sync_status, is_deleted: Boolean(record.is_deleted) }))));
+	})()`);
+}
+
 export async function records(driver) {
 	return driver.evaluate('window.__yose_app.db.getTransactions({ includeDeleted: true })');
 }

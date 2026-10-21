@@ -1,14 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { useBrowser, seed, transaction, records, cashflow, submit, value } from '../helpers/ui_fixture.js';
+import { useBrowser, seed, seedLegacy, transaction, records, cashflow, submit, value } from '../helpers/ui_fixture.js';
 
 describe('Editor and mobile usability', { timeout: 120000 }, () => {
 	const fixture = useBrowser();
 	async function typeText(d, selector, text) {
 		await d.evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); el.focus(); el.value = ${JSON.stringify(text)}; el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
 	}
-	async function open(d, tx = transaction('edit', { tags: ['既存'] })) {
-		await seed(d, [tx]);
+	async function open(d, tx = transaction('edit', { tags: ['既存'] }), legacy = false) {
+		await (legacy ? seedLegacy : seed)(d, [tx]);
 		await cashflow(d);
 		await d.click(`#month-tx-list [data-id="${tx.id}"]`);
 		await d.waitFor('document.getElementById("modal-edit-tx").classList.contains("active")');
@@ -266,11 +266,11 @@ describe('Editor and mobile usability', { timeout: 120000 }, () => {
 		const d = fixture.driver;
 		await d.evaluate(`(async () => {
 			const db = window.__yose_app.db, config = await db.getMasterConfig();
-			config.accounts.push({ id: 'old_acc', name: '旧口座', is_archived: true });
-			config.categories.push({ id: 'old_cat', name: '旧費目', is_archived: true, subcategories: [{ id: 'old_sub', name: '旧内訳', is_archived: true }] });
+			config.accounts.push({ id: 'old_acc', name: '旧口座', type: 'bank', is_archived: true });
+			config.categories.push({ id: 'old_cat', name: '旧費目', type: 'expense', is_archived: true, subcategories: [{ id: 'old_sub', name: '旧内訳', is_archived: true }] });
 			await db.saveMasterConfig(config);
 		})()`);
-		await open(d, transaction('archived', { account_id: 'old_acc', to_account_id: 'old_acc', category_id: 'old_cat', subcategory_id: 'old_sub', actual_category_id: 'old_cat', actual_subcategory_id: 'old_sub' }));
+		await open(d, transaction('archived', { account_id: 'old_acc', to_account_id: 'old_acc', category_id: 'old_cat', subcategory_id: 'old_sub', actual_category_id: 'old_cat', actual_subcategory_id: 'old_sub' }), true);
 		for (const [selector, expected] of [['#edit-tx-account', 'old_acc'], ['#edit-tx-category', 'old_cat'], ['#edit-tx-subcategory', 'old_sub'], ['#edit-tx-to-account', 'old_acc'], ['#edit-tx-actual-category', 'old_cat'], ['#edit-tx-actual-subcategory', 'old_sub']]) assert.equal(await value(d, selector), expected);
 		await d.fill('#edit-tx-memo', 'メモだけ更新');
 		await submit(d, '#edit-tx-form');
@@ -281,8 +281,8 @@ describe('Editor and mobile usability', { timeout: 120000 }, () => {
 		assert.equal(tx.subcategory_id, 'old_sub');
 		assert.equal(tx.actual_category_id, 'old_cat');
 		assert.equal(tx.actual_subcategory_id, 'old_sub');
-		await d.evaluate(`(async () => { const db=window.__yose_app.db, config=await db.getMasterConfig(); config.accounts.push({id:'old_to',name:'旧振替先',is_archived:true}); await db.saveMasterConfig(config); })()`);
-		await open(d, transaction('archived_transfer', { type: 'transfer', account_id: 'old_acc', to_account_id: 'old_to', category_id: null, actual_category_id: null }));
+		await d.evaluate(`(async () => { const db=window.__yose_app.db, config=await db.getMasterConfig(); config.accounts.push({id:'old_to',name:'旧振替先',type:'bank',is_archived:true}); await db.saveMasterConfig(config); })()`);
+		await open(d, transaction('archived_transfer', { type: 'transfer', account_id: 'old_acc', to_account_id: 'old_to', category_id: null, actual_category_id: null }), true);
 		assert.equal(await value(d, '#edit-tx-to-account'), 'old_to');
 		await d.fill('#edit-tx-memo', '振替先を維持');
 		await submit(d, '#edit-tx-form');
@@ -293,8 +293,8 @@ describe('Editor and mobile usability', { timeout: 120000 }, () => {
 	for (const parent of ['missing_parent', 'parent_without_children']) {
 		it(`preserves missing child IDs for ${parent} during unrelated edits`, async () => {
 			const d = fixture.driver;
-			if (parent === 'parent_without_children') await d.evaluate(`(async () => { const db=window.__yose_app.db, config=await db.getMasterConfig(); config.categories.push({id:'parent_without_children',name:'内訳なし'}); await db.saveMasterConfig(config); })()`);
-			await open(d, transaction('missing_child_tx', { category_id: parent, subcategory_id: 'missing_child', actual_category_id: parent, actual_subcategory_id: 'missing_actual_child' }));
+			if (parent === 'parent_without_children') await d.evaluate(`(async () => { const db=window.__yose_app.db, config=await db.getMasterConfig(); config.categories.push({id:'parent_without_children',name:'内訳なし',type:'expense'}); await db.saveMasterConfig(config); })()`);
+			await open(d, transaction('missing_child_tx', { category_id: parent, subcategory_id: 'missing_child', actual_category_id: parent, actual_subcategory_id: 'missing_actual_child' }), true);
 			assert.equal(await value(d, '#edit-tx-subcategory'), 'missing_child');
 			assert.equal(await value(d, '#edit-tx-actual-subcategory'), 'missing_actual_child');
 			await d.fill('#edit-tx-memo', '参照を維持');
@@ -323,7 +323,7 @@ describe('Editor and mobile usability', { timeout: 120000 }, () => {
 		const d = fixture.driver;
 		await d.evaluate(`(async () => {
 			const app=window.__yose_app, db=app.db, config=await db.getMasterConfig();
-			config.categories=[{id:'race_a',name:'A',subcategories:[{id:'sub_a',name:'A内訳'}]},{id:'race_b',name:'B',subcategories:[{id:'sub_b',name:'B内訳'}]}];
+			config.recurring_rules=[]; config.categories=[{id:'race_a',name:'A',type:'expense',subcategories:[{id:'sub_a',name:'A内訳'}]},{id:'race_b',name:'B',type:'expense',subcategories:[{id:'sub_b',name:'B内訳'}]}];
 			await db.saveMasterConfig(config); await app.txInputController.populateMasterDropdowns();
 			const read=db.getMasterConfig.bind(db), update=app.txInputController.updateSubcategories.bind(app.txInputController);
 			window.__holdRead=true;

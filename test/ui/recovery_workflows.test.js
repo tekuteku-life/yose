@@ -4,11 +4,16 @@ import { useBrowser, seed, transaction, records, cashflow, settings, submit, wai
 
 const gasUrl = 'https://yose.local/recovery-gas';
 
+// Master preflight succeeds separately from a delayed or failed transaction response.
+function setGasResponse(d, response) {
+	d.responses.set('/recovery-gas', request => JSON.parse(request.postData || '{}').action === 'fetch_master' ? { json: { success: true } } : response);
+}
+
 describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, () => {
 	const fixture = useBrowser();
 
 	async function configureGas(d, response) {
-		d.responses.set('/recovery-gas', { json: response });
+		setGasResponse(d, { json: response });
 		await settings(d);
 		await d.fill('#input-gas-url', gasUrl);
 		await d.click('#btn-save-gas-url');
@@ -74,7 +79,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 			await d.fill('#edit-tx-date', destination);
 			await submit(d, '#edit-tx-form');
 			await d.waitFor(async () => d.requests.some(r => r.url === gasUrl && JSON.parse(r.body).action === 'retroactive_update'));
-			const request = JSON.parse(d.requests.find(r => r.url === gasUrl).body);
+			const request = JSON.parse(d.requests.find(r => r.url === gasUrl && JSON.parse(r.body).action === 'retroactive_update').body);
 			assert.equal(request.payload.previous_target_month, '2026-09');
 			assert.equal(request.payload.transaction.target_month, destination.slice(0, 7));
 			await d.waitFor('(async () => (await window.__yose_app.db.getTransaction("move")).sync_status === "synced")()');
@@ -94,12 +99,12 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 		await submit(d, '#edit-tx-form');
 		await waitForDialog(d, '遡及更新エラー');
 		assert.equal((await records(d))[0].sync_status, 'unsynced');
-		d.responses.set('/recovery-gas', { json: { success: true, snapshot: { schema_version: 2, last_closed_month: '2026-09', account_balances: {}, monthly_summaries: { '2026-09': { income_total: 0, expense_total: 222, net_income: -222 } } } } });
+		setGasResponse(d, { json: { success: true, snapshot: { schema_version: 2, last_closed_month: '2026-09', account_balances: {}, monthly_summaries: { '2026-09': { income_total: 0, expense_total: 222, net_income: -222 } } } } });
 		const start = d.requests.length;
 		await d.click('#btn-header-sync');
 		await waitForDialog(d, '差分同期完了');
 		const retried = d.requests.slice(start).filter(r => r.url === gasUrl).map(r => JSON.parse(r.body));
-		assert.deepEqual(retried.map(r => r.action), ['fetch_state', 'retroactive_update', 'fetch_state']);
+		assert.deepEqual(retried.map(r => r.action), ['fetch_state', 'fetch_master', 'retroactive_update', 'fetch_state']);
 		assert.equal((await records(d))[0].sync_status, 'synced');
 		assert.equal((await d.evaluate('window.__yose_app.db.getSnapshot()')).monthly_summaries['2026-09'].expense_total, 222);
 	});
@@ -140,7 +145,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 			});
 			assert.equal((await records(d))[0].previous_target_month, '2026-09');
 		}
-		d.responses.set('/recovery-gas', { json: { success: true } });
+		setGasResponse(d, { json: { success: true } });
 		await d.click('#btn-header-sync');
 		await waitForDialog(d, '差分同期完了');
 		const request = d.requests.filter(r => r.url === gasUrl).map(r => JSON.parse(r.body)).filter(r => r.action === 'retroactive_update').at(-1);
@@ -218,7 +223,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 			let release;
 			const barrier = new Promise(resolve => { release = resolve; });
 			await configureGas(d, { success: true });
-			d.responses.set('/recovery-gas', { json: { success: true }, wait: barrier });
+			setGasResponse(d, { json: { success: true }, wait: barrier });
 			try {
 				await cashflow(d);
 				await d.fill('#input-period-picker', source);

@@ -10,7 +10,7 @@ import path from 'node:path';
 
 const TARGET_DIRECTORIES = ['js', 'gas', 'test', 'scripts', 'css'];
 const TARGET_INDIVIDUAL_FILES = ['sw.js', 'index.html', 'package.json', 'manifest.json', 'version.json'];
-const CODE_EXTENSIONS = ['.js', '.gs', '.css', '.html', '.sh', '.json'];
+const CODE_EXTENSIONS = ['.js', '.mjs', '.gs', '.css', '.html', '.sh', '.json'];
 
 function collectFiles(dir) {
 	const results = [];

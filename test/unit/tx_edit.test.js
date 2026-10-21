@@ -1,3 +1,4 @@
+import { transactionFixture } from '../helpers/data_fixture.js';
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { YoseDB } from '../../js/db.js';
@@ -11,7 +12,7 @@ describe('Transaction Editing & Retroactive Sync - Unit Tests', () => {
 	});
 
 	it('updates fields of an existing transaction in local DB', async () => {
-		const initialTx = {
+		const initialTx = transactionFixture({
 			id: 'tx_edit_sample',
 			group_id: 'grp_sample',
 			date: '2026-10-10',
@@ -26,7 +27,7 @@ describe('Transaction Editing & Retroactive Sync - Unit Tests', () => {
 			tags: ['初期'],
 			is_deleted: false,
 			sync_status: 'synced'
-		};
+		});
 		await db.putTransaction(initialTx);
 
 		// Retrieve and edit
@@ -57,8 +58,8 @@ describe('Transaction Editing & Retroactive Sync - Unit Tests', () => {
 			return tx.target_month <= snap.last_closed_month;
 		};
 
-		const sepTx = { id: 'tx_sep', target_month: '2026-09' };
-		const octTx = { id: 'tx_oct', target_month: '2026-10' };
+		const sepTx = transactionFixture({ id: 'tx_sep', target_month: '2026-09' });
+		const octTx = transactionFixture({ id: 'tx_oct', target_month: '2026-10' });
 
 		assert.equal(isPastClosedMonth(sepTx, snapshot), true);
 		assert.equal(isPastClosedMonth(octTx, snapshot), false);

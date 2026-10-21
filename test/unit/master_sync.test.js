@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { sharedMasterConfig, mergeMasterConfigs, assertMasterReferences } from '../../js/logic/master_sync.js';
 import { YoseDB, DEFAULT_MASTER_CONFIG } from '../../js/db.js';
+import { transaction } from '../helpers/ui_fixture.js';
 import { SyncManager } from '../../js/sync.js';
 import { generateEd25519KeyPair, generateDatabaseMasterKey, canonicalJsonStringify } from '../../js/crypto.js';
 
@@ -11,6 +12,7 @@ const equal = (a, b) => assert.deepEqual(a, b);
 
 async function setup(remote = master()) {
 	const db = new YoseDB(null); await db.init();
+	await db.saveSnapshot({ schema_version: 2, last_closed_month: null, account_balances: {}, monthly_summaries: {} });
 	await db.saveMasterConfig(master());
 	await db.commitMasterSync(await db.getMasterConfig(), remote);
 	const keys = await generateEd25519KeyPair();
@@ -87,10 +89,10 @@ describe('shared master merge and synchronization', () => {
 
 	it('retries an atomic compare failure without advancing the base alone', async () => {
 		const { db } = await setup();
-		const original = db.compareAndPutRawBatch.bind(db); let calls = 0;
-		db.compareAndPutRawBatch = async (store, entries) => {
-			if (calls++ === 0) { await db.saveMasterConfig({ ...await db.getMasterConfig(), accounts: [{ id: 'a', name: '並行編集' }] }); return false; }
-			return original(store, entries);
+		const original = db.replaceImportBatch.bind(db); let calls = 0;
+		db.replaceImportBatch = async (...args) => {
+			if (calls++ === 0) { await db.saveMasterConfig({ ...await db.getMasterConfig(), accounts: [{ id: 'a', name: '並行編集', type: 'cash' }] }); return false; }
+			return original(...args);
 		};
 		await db.commitMasterSync(await db.getMasterConfig(), { ...master(), holidays: ['2026-01-01'] });
 		assert.equal((await db.getMasterConfig()).accounts[0].name, '並行編集');
@@ -172,7 +174,7 @@ describe('shared master merge and synchronization', () => {
 	it('synchronizes both masters and pending transactions from an actual online event', async () => {
 		const { db, sync, actions } = await setup();
 		await db.saveMasterConfig(master('オンライン復帰'));
-		await db.putTransaction({ id: 'offline_tx', target_month: '2026-10', amount: 1 });
+		await db.putTransaction(transaction('offline_tx', { account_id: 'a', category_id: null, actual_category_id: null, amount: 1 }));
 		const previousWindow = globalThis.window, previousDocument = globalThis.document;
 		const listeners = new Map();
 		globalThis.window = { addEventListener: (name, listener) => listeners.set(name, listener), removeEventListener: name => listeners.delete(name) };

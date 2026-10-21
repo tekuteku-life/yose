@@ -20,6 +20,15 @@ const tx = (id, fields = {}) => ({ id, type: 'expense', date: '2026-10-01', targ
 const source = { kind: 'category', id: 'old' };
 const target = { id: 'new', subcategoryId: 'newsub' };
 
+async function historicalFixture() {
+	const db = new YoseDB(null); await db.init();
+	await db.saveSnapshot({ schema_version: 2, last_closed_month: null, account_balances: {}, monthly_summaries: {} });
+	await db.saveMasterConfig(config);
+	// These records represent downloaded history that already used the archived settings.
+	await db.mergeRemoteTransactions([tx('a'), tx('b')]);
+	return db;
+}
+
 describe('archived master maintenance', () => {
 	it('lists archived references including actual axes, transfer destinations and archived parents, excluding deleted rows', () => {
 		const result = findArchivedReferences([
@@ -76,8 +85,7 @@ describe('archived master maintenance', () => {
 		});
 	}
 	it('commits all rows atomically, marks them unsynced, and retains approved closed months', async () => {
-		const db = new YoseDB(null); await db.init(); await db.saveMasterConfig(config);
-		await db.putTransactions([tx('a'), tx('b')]);
+		const db = await historicalFixture();
 		const before = await db.getTransactions(); const master = await db.getMasterConfig();
 		await db.migrateArchivedMaster(source, target, before, master, ['2026-10']);
 		const after = await db.getTransactions();
@@ -85,8 +93,7 @@ describe('archived master maintenance', () => {
 		assert.ok(after.every(t => t.reclose_approved_months.includes('2026-10')));
 	});
 	it('rejects changed source references even when both migration outputs would be identical', async () => {
-		const db = new YoseDB(null); await db.init(); await db.saveMasterConfig(config);
-		await db.putTransactions([tx('a'), tx('b')]);
+		const db = await historicalFixture();
 		const before = await db.getTransactions(); const master = await db.getMasterConfig();
 		await db.putTransaction({ ...before[1], subcategory_id: null });
 		const expected = await db.getTransactions();
@@ -95,8 +102,7 @@ describe('archived master maintenance', () => {
 	});
 	for (const race of ['transaction', 'master']) {
 		it(`rejects a changed ${race} without partially saving the batch`, async () => {
-			const db = new YoseDB(null); await db.init(); await db.saveMasterConfig(config);
-			await db.putTransactions([tx('a'), tx('b')]);
+			const db = await historicalFixture();
 			const before = await db.getTransactions(); const master = await db.getMasterConfig();
 			if (race === 'transaction') await db.putTransaction({ ...before[1], memo: '別編集' });
 			else await db.saveMasterConfig({ ...master, holidays: ['2027-01-01'] });

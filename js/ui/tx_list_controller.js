@@ -245,7 +245,8 @@ export class TransactionListController {
 				e.stopPropagation();
 				const id = btn.dataset.id;
 				if (confirm('この明細を削除しますか？')) {
-					await this.coordinator.txEditController.handleEditDelete(id);
+					try { await this.coordinator.txEditController.handleEditDelete(id); }
+					catch (error) { alert(`明細の削除に失敗しました: ${error.message}`); }
 				}
 			});
 		});

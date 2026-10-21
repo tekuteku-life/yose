@@ -36,12 +36,12 @@ describe('Bidirectional sync and explicit month closing', () => {
 	});
 
 	it('migrates archived master references through signed sync and recalculates closed summaries', async () => {
+		const original = transaction('maintenance_closed', { date: '2026-09-10', target_month: '2026-09', sync_status: 'synced' });
+		await db.putTransaction(original);
 		const config = await db.getMasterConfig();
 		config.categories.find(category => category.id === 'cat_food').is_archived = true;
 		await db.saveMasterConfig(config);
 		gas.saveJsonFile('master_config.json', config);
-		const original = transaction('maintenance_closed', { date: '2026-09-10', target_month: '2026-09', sync_status: 'synced' });
-		await db.putTransaction(original);
 		gas.saveJsonFile('archives/2026-09.json', { transactions: [original] });
 		await db.migrateArchivedMaster({ kind: 'category', id: 'cat_food' }, { id: 'cat_housing', subcategoryId: null }, await db.getTransactions(), await db.getMasterConfig(), ['2026-09']);
 		await sync.syncBidirectional();

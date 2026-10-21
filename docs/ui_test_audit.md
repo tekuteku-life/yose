@@ -91,3 +91,24 @@ Chart.jsはCDNを使わないスタブであり、実ライブラリの描画品
 `replacement_import`は既定差分と完全取込選択、対象/サーバー置換説明、正確なマジックワード、取消・ESC・戻る・認証ロック、再表示時入力消去、暗号化中の取消、確認中原本変更、実IndexedDBの途中書込例外で全storeロールバック、保留版の明示再承認を検証する。Node側では全5種別の全置換、暗号化/認証境界、正規休日調整の月跨ぎ、型/参照の全検証、outboxのCAS、送信後編集を保護するACKを確認する。
 
 サーバー置換はGAS模擬環境と実DBを組み合わせ、署名・版競合・復旧ジャーナルの停止箇所・応答喪失と再送・後続編集・締め済み明細とsnapshot維持を検証する。本番GASや利用者データには接続しない。レビューと最終結果は[review50](reviews/review50.md)に記録する。
+
+## 1.11.1 全更新境界の整合性監査
+
+追加・編集・削除・生成・取込・同期を保存境界単位で再監査した。UIの候補制限に加え、直接DB API、JSON、別端末由来の受信データ、および署名後のGAS更新候補にも同じ整合性規則を適用する。
+
+| 対象 | 追加・補完した確認 | 回帰テスト |
+| --- | --- | --- |
+| マスタ編集/アーカイブ/JSON/予算 | 編集開始版の比較、別フィールド変更の保持、親子・収支種別・引落先役割、既存アーカイブ参照の保持 | integrity_workflows、integrity_boundaries、data_integrity |
+| 明細登録/編集/削除/一括編集 | 原本比較、同時操作、削除済みを含むグループ比較、失敗時入力保持、未入力/明示0/確定の区別 | integrity_workflows、integrity_boundaries、transaction_workflows |
+| 立替/ポイント/定期/カード精算 | 元明細との比較、ポイント超過拒否、安定ID、並行二重生成、請求周期、確定額だけの精算 | generated_integrity、integrity_boundaries、integrity_workflows |
+| 折畳み/テーマ | 保存順逆転、先行失敗後の操作継続、キュー待機中ロック | integrity_workflows、section_and_edit_categories |
+| 差分インポート | 合成前の危険キー/ID/重複拒否、合成後の参照検査、同時マスタ追加、暗号化途中失敗時の全原本保持 | import_payload_validation、integrity_boundaries、settings_workflows |
+| 完全インポート/ACK | 候補全体の厳格検査、確認済みplanの変更、応答型不正、認証変更、送信中の手元変更保持 | replacement_integrity_boundaries、replacement_import、full_import_sync |
+| 同期受信/送信応答 | master先行、競合取消時の全原本保持、ACK/明細/snapshot一括反映、不正snapshot、署名鍵変更 | data_integrity_sync、bidirectional_sync、recovery_workflows |
+| GAS通常更新/月締め | 不正候補拒否、多ファイル途中失敗と再要求復旧、破損JSON/読取失敗、実態子分類、残高再計算 | data_integrity_gas、sync_flow、master_sync_gas |
+| 共通検証/暗号化 | 既存問題の悪化拒否と修復許可、明示不正値と省略の区別、同値平文の暗号化移行、最終commit前ロック | data_integrity、integrity_boundaries、storage_atomicity |
+| 旧不正行の完全削除/再生成 | 最小削除通知の生成後検査、月のない削除の承認・再集計・他端末伝播、JSON往復、未来版の明示再生成 | invalid_record_replacement_scenario、integrity_workflows、integrity_boundaries |
+
+正常fixtureはSchema v2の型と有効な参照先を補った。既存の不正データ・旧形式・アーカイブ履歴を扱うケースはraw暗号化fixtureまたは履歴受信として明示し、通常の新規登録で不正値を作成しない。期待する操作結果と全原本保持のassertは維持した。詳細な先行RED、再入、独立レビュー、最終一括検証は[review51](reviews/review51.md)に記録する。
+
+最終一括実行はNode730件、実ブラウザUI243件で、すべて合格・失敗0件である。静的検査と独立コードレビューもPASSである。NodeカバレッジはLine99.40%・Branch90.52%で、全対象各97%以上の最終受入ゲートは未達である。

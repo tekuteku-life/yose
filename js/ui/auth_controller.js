@@ -31,8 +31,7 @@ export class AuthController {
 			await this.db.getSnapshot();
 			await this.db.getTransactions({ includeDeleted: true });
 			if (config?.synced_passkey_bundle) {
-				delete config.synced_passkey_bundle;
-				await this.db.saveMasterConfig(config);
+				await this.db.mutateMasterConfig(current => { delete current.synced_passkey_bundle; return current; });
 			}
 			await this.db.deleteSecurityKey('webauthn_vault');
 			await this.db.deleteSecurityKey('webauthn_credential_id');

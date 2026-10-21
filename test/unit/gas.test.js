@@ -10,6 +10,9 @@ import {
 	createSignedRequest
 } from '../../js/crypto.js';
 import { MockGasEnvironment } from '../helpers/gas_mock.js';
+import { transaction } from '../helpers/ui_fixture.js';
+import { transactionContentVersion } from '../../js/sync.js';
+const gasTransaction = (id, fields) => transaction(id, { category_id: null, actual_category_id: null, ...fields });
 
 describe('gas/Code.gs - Unit Tests', () => {
 	let keyPair;
@@ -19,6 +22,7 @@ describe('gas/Code.gs - Unit Tests', () => {
 	beforeEach(async () => {
 		gasEnv = new MockGasEnvironment();
 		gasEnv.setupGlobals();
+		gas.saveJsonFile('master_config.json', { schema_version: 2, accounts: [{ id: 'acc_wallet', name: '現金', type: 'cash', initial_balance: 0 }, { id: 'acc_bank', name: '銀行', type: 'bank', initial_balance: 0 }], categories: [], recurring_rules: [], holidays: [] });
 		keyPair = await generateEd25519KeyPair();
 		pubKeyBase64 = await exportPublicKeyBase64(keyPair.publicKey);
 	});
@@ -204,7 +208,7 @@ describe('gas/Code.gs - Unit Tests', () => {
 			globalThis.PropertiesService.getScriptProperties().setProperty('USER_PUBLIC_KEYS', pubKeyBase64);
 
 			const txs = [
-				{ id: 'tx_gas_1', target_month: '2026-10', amount: 5000, type: 'expense', account_id: 'acc_wallet', is_deleted: false }
+				gasTransaction('tx_gas_1', { target_month: '2026-10', amount: 5000, type: 'expense', account_id: 'acc_wallet', is_deleted: false })
 			];
 			const envelope = await createSignedRequest('push_diff', { transactions: txs }, keyPair.privateKey, Date.now());
 
@@ -219,14 +223,14 @@ describe('gas/Code.gs - Unit Tests', () => {
 
 			// 1. Push diffs for 2026-10
 			const txs = [
-				{ id: 'tx_c1', target_month: '2026-10', type: 'income', amount: 300000, account_id: 'acc_bank', is_deleted: false, status: 'confirmed' },
-				{ id: 'tx_c2', target_month: '2026-10', type: 'expense', amount: 100000, account_id: 'acc_bank', is_deleted: false, status: 'planned' }
+				gasTransaction('tx_c1', { target_month: '2026-10', type: 'income', amount: 300000, account_id: 'acc_bank', is_deleted: false, status: 'confirmed' }),
+				gasTransaction('tx_c2', { target_month: '2026-10', type: 'expense', amount: 100000, account_id: 'acc_bank', is_deleted: false, status: 'planned' })
 			];
 			const pushEnv = await createSignedRequest('push_diff', { transactions: txs }, keyPair.privateKey, Date.now());
 			gas.doPost({ postData: { contents: JSON.stringify(pushEnv) } });
 
 			// 2. Close month 2026-10
-			const closeEnv = await createSignedRequest('close_month', { target_month: '2026-10', approved_planned: [{ id: txs[1].id, version: gas.canonicalJsonStringify(txs[1]) }] }, keyPair.privateKey, Date.now());
+			const closeEnv = await createSignedRequest('close_month', { target_month: '2026-10', approved_planned: [{ id: txs[1].id, version: transactionContentVersion(txs[1]) }] }, keyPair.privateKey, Date.now());
 			const res = gas.doPost({ postData: { contents: JSON.stringify(closeEnv) } });
 
 			assert.equal(res.success, true);
@@ -243,9 +247,10 @@ describe('gas/Code.gs - Unit Tests', () => {
 
 			// Setup initial master accounts
 			const masterEnv = await createSignedRequest('update_master', {
-				base_version: '{"schema_version":2}',
+				base_version: gas.canonicalJsonStringify(gas.handleFetchState().master_config),
 				master_config: {
-					accounts: [{ id: 'acc_bank', initial_balance: 100000 }]
+					schema_version: 2, categories: [], recurring_rules: [], holidays: [],
+					accounts: [{ id: 'acc_bank', name: '銀行', type: 'bank', initial_balance: 100000 }]
 				}
 			}, keyPair.privateKey, Date.now());
 			gas.doPost({ postData: { contents: JSON.stringify(masterEnv) } });
@@ -253,7 +258,7 @@ describe('gas/Code.gs - Unit Tests', () => {
 			// Close 2026-09 with income 50,000
 			const pushSep = await createSignedRequest('push_diff', {
 				transactions: [
-					{ id: 'tx_sep_1', target_month: '2026-09', type: 'income', amount: 50000, account_id: 'acc_bank', is_deleted: false }
+					gasTransaction('tx_sep_1', { target_month: '2026-09', type: 'income', amount: 50000, account_id: 'acc_bank', is_deleted: false })
 				]
 			}, keyPair.privateKey, Date.now());
 			gas.doPost({ postData: { contents: JSON.stringify(pushSep) } });
@@ -264,7 +269,7 @@ describe('gas/Code.gs - Unit Tests', () => {
 			// Close 2026-10 with expense 20,000
 			const pushOct = await createSignedRequest('push_diff', {
 				transactions: [
-					{ id: 'tx_oct_1', target_month: '2026-10', type: 'expense', amount: 20000, account_id: 'acc_bank', is_deleted: false }
+					gasTransaction('tx_oct_1', { target_month: '2026-10', type: 'expense', amount: 20000, account_id: 'acc_bank', is_deleted: false })
 				]
 			}, keyPair.privateKey, Date.now());
 			gas.doPost({ postData: { contents: JSON.stringify(pushOct) } });
@@ -277,6 +282,7 @@ describe('gas/Code.gs - Unit Tests', () => {
 
 			// Now retroactively modify September: add extra expense 10,000 to September
 			const retroTx = {
+				...gasTransaction('tx_sep_retro_expense', {}),
 				status: 'confirmed',
 				reclose_approved_months: ['2026-09'],
 				id: 'tx_sep_retro_expense',
@@ -511,18 +517,19 @@ describe('gas/Code.gs - Unit Tests', () => {
 			// handleCloseMonth without target_month
 			const closeErr = gas.handleCloseMonth({});
 			assert.equal(closeErr.success, false);
-			assert.equal(closeErr.error, 'Missing target_month');
+			assert.equal(closeErr.error, 'Invalid target_month');
 
 			// handleCloseMonth with empty snapshot initial balances from master_config
 			gas.saveJsonFile('master_config.json', {
-				accounts: [{ id: 'acc_master_init', initial_balance: 70000 }]
+				schema_version: 2, categories: [], recurring_rules: [], holidays: [],
+				accounts: [{ id: 'acc_master_init', name: '期首口座', type: 'bank', initial_balance: 70000 }]
 			});
 			gas.saveJsonFile('summary_snapshot.json', {
 				schema_version: 2,
 				account_balances: {}
 			});
 			gas.saveJsonFile('pending_diffs.json', {
-				transactions: [{ id: 't_init', target_month: '2026-01', amount: 5000, type: 'expense', account_id: 'acc_master_init' }]
+				transactions: [gasTransaction('t_init', { target_month: '2026-01', amount: 5000, type: 'expense', account_id: 'acc_master_init' })]
 			});
 			const closeRes = gas.handleCloseMonth({ target_month: '2026-01' });
 			assert.equal(closeRes.success, true);
@@ -536,6 +543,7 @@ describe('gas/Code.gs - Unit Tests', () => {
 			// handleRetroactiveUpdate on unclosed future month (saves to pending_diffs)
 			const retroFuture = gas.handleRetroactiveUpdate({
 				transaction: {
+					...gasTransaction('tx_fut_retro', { account_id: 'acc_master_init' }),
 					id: 'tx_fut_retro',
 					target_month: '2028-12',
 					amount: 8888,
@@ -668,11 +676,11 @@ describe('gas/Code.gs - Unit Tests', () => {
 
 			// 5. handleUpdateExternalAssets with empty / non-array payload
 			const extRes = gas.handleUpdateExternalAssets({});
-			assert.equal(extRes.success, true);
+			assert.equal(extRes.success, false);
 
 			// 6. handlePushDiff merging both existing and incoming transactions
-			gas.saveJsonFile('pending_diffs.json', { schema_version: 2, transactions: [{ id: 'tx_exist', amount: 100 }] });
-			const pushRes = gas.handlePushDiff({ transactions: [{ id: 'tx_exist', amount: 200 }, { id: 'tx_new', amount: 300 }] });
+			gas.saveJsonFile('pending_diffs.json', { schema_version: 2, transactions: [gasTransaction('tx_exist', { amount: 100 })] });
+			const pushRes = gas.handlePushDiff({ transactions: [gasTransaction('tx_exist', { amount: 200 }), gasTransaction('tx_new', { amount: 300 })] });
 			assert.equal(pushRes.success, true);
 			assert.equal(pushRes.updated_count, 2);
 		});
@@ -794,13 +802,13 @@ describe('gas/Code.gs - Unit Tests', () => {
 			assert.match(resReplay.error, /Replay detected/);
 
 			// 12. handleCloseMonth idempotency and safe merging when archive already exists
-			gas.saveJsonFile('archives/2026-08.json', { schema_version: 2, transactions: [{ id: 'tx_arch_1', target_month: '2026-08', amount: 1000 }] });
+			gas.saveJsonFile('archives/2026-08.json', { schema_version: 2, transactions: [gasTransaction('tx_arch_1', { target_month: '2026-08', amount: 1000 })] });
 			// When targetMonth has 0 pending items, it preserves existing archive
 			const closeDupRes = gas.handleCloseMonth({ target_month: '2026-08' });
 			assert.equal(closeDupRes.success, true);
 			assert.equal(closeDupRes.archived_count, 1);
 			// When targetMonth has pending items, it merges into existing archive
-			gas.saveJsonFile('pending_diffs.json', { schema_version: 2, transactions: [{ id: 'tx_arch_2', target_month: '2026-08', amount: 2000 }] });
+			gas.saveJsonFile('pending_diffs.json', { schema_version: 2, transactions: [gasTransaction('tx_arch_2', { target_month: '2026-08', amount: 2000 })] });
 			const closeMergeRes = gas.handleCloseMonth({ target_month: '2026-08' });
 			assert.equal(closeMergeRes.success, true);
 			const updatedArch = gas.loadJsonFile('archives/2026-08.json');

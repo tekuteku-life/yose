@@ -154,7 +154,7 @@ export function calculateBalancesAndSummaries(snapshot = {}, transactions = [], 
 
 			// Actual category
 			const actCatId = tx.actual_category_id || catId;
-			const actSubId = tx.actual_subcategory_id || subId;
+			const actSubId = (tx.actual_subcategory_id !== undefined ? tx.actual_subcategory_id : actCatId === catId ? tx.subcategory_id : null) || 'sub_unclassified';
 			if (!summary.by_actual_category[actCatId]) {
 				summary.by_actual_category[actCatId] = { total_confirmed: 0, total_planned: 0, total: 0, by_subcategory: {} };
 			}

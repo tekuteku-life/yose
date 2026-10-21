@@ -7,13 +7,13 @@ export function createMockIndexedDB() {
 	const allKeyPaths = new Map();
 
 	class MockObjectStore {
-		constructor(name, keyPath = null) {
+		constructor(name, keyPath = null, transactionData = null) {
 			this.name = name;
 			this.keyPath = keyPath || allKeyPaths.get(name) || null;
 			if (!allStores.has(name)) {
 				allStores.set(name, new Map());
 			}
-			this.data = allStores.get(name);
+			this.data = transactionData || allStores.get(name);
 		}
 
 		createIndex() {
@@ -48,6 +48,11 @@ export function createMockIndexedDB() {
 			return req;
 		}
 
+		clear() {
+			this.data.clear();
+			return { onsuccess: null, onerror: null };
+		}
+
 		getAll() {
 			const req = { onsuccess: null, onerror: null, result: [] };
 			queueMicrotask(() => {
@@ -80,13 +85,16 @@ export function createMockIndexedDB() {
 		}
 
 		transaction(storeNames, mode) {
+			let aborted = false;
+			const snapshots = new Map(storeNames.map(name => [name, new Map([...(allStores.get(name) || [])].map(([key, value]) => [key, structuredClone(value)]))]));
 			const tx = {
-				oncomplete: null,
-				onerror: null,
-				onabort: null,
-				objectStore: (name) => new MockObjectStore(name)
+				oncomplete: null, onerror: null, onabort: null, error: null,
+				objectStore: name => new MockObjectStore(name, null, snapshots.get(name)),
+				abort: () => { aborted = true; queueMicrotask(() => tx.onabort?.()); }
 			};
 			setImmediate(() => {
+				if (aborted) return;
+				if (mode === 'readwrite') for (const [name, values] of snapshots) allStores.set(name, values);
 				if (tx.oncomplete) tx.oncomplete();
 			});
 			return tx;

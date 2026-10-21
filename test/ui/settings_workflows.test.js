@@ -310,7 +310,7 @@ describe('Settings, files, security rendering, and persistence', { timeout: 1200
 		const d = fixture.driver;
 		await seed(d, [
 			transaction('prev_expense', { date: '2025-10-01', target_month: '2025-10', amount: 12345 }),
-			transaction('prev_income', { date: '2025-10-01', target_month: '2025-10', amount: 100000, type: 'income', category_id: 'cat_income_main' })
+			transaction('prev_income', { date: '2025-10-01', target_month: '2025-10', amount: 100000, type: 'income', category_id: 'cat_income_main', actual_category_id: 'cat_income_main' })
 		]);
 		await settings(d);
 		await d.click('#btn-budget-auto-calc');

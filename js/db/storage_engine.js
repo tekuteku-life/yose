@@ -153,9 +153,11 @@ export class StorageEngine {
 		}
 		return new Promise((resolve, reject) => {
 			const tx = this.db.transaction([storeName], 'readwrite');
+			tx.oncomplete = () => resolve(value);
+			tx.onerror = () => reject(tx.error || new Error('IndexedDB write failed'));
+			tx.onabort = () => reject(tx.error || new Error('IndexedDB write aborted'));
 			const store = tx.objectStore(storeName);
 			const req = key !== undefined ? store.put(value, key) : store.put(value);
-			req.onsuccess = () => resolve(value);
 			req.onerror = () => reject(req.error);
 		});
 	}
@@ -183,88 +185,6 @@ export class StorageEngine {
 		});
 	}
 
-	async compareAndPutRaw(storeName, key, expected, replacement) {
-		if (this.memoryDb) {
-			const store = this.memoryDb.stores[storeName];
-			if (canonicalJsonStringify(store.get(key) ?? null) !== canonicalJsonStringify(expected ?? null)) return false;
-			store.set(key, JSON.parse(JSON.stringify(replacement)));
-			return true;
-		}
-		return new Promise((resolve, reject) => {
-			const transaction = this.db.transaction([storeName], 'readwrite');
-			let changed = false;
-			transaction.oncomplete = () => resolve(changed);
-			transaction.onerror = () => reject(transaction.error || new Error('IndexedDB conditional write failed'));
-			transaction.onabort = () => reject(transaction.error || new Error('IndexedDB conditional write aborted'));
-			const store = transaction.objectStore(storeName);
-			const request = store.get(key);
-			request.onsuccess = () => {
-				if (canonicalJsonStringify(request.result ?? null) !== canonicalJsonStringify(expected ?? null)) return;
-				store.put(replacement);
-				changed = true;
-			};
-		});
-	}
-
-	async compareAndPutMaintenanceBatch(expectedMaster, expectedRecords, replacements) {
-		const equalRecords = records => canonicalJsonStringify([...records].sort((a, b) => a.id.localeCompare(b.id))) === canonicalJsonStringify([...expectedRecords].sort((a, b) => a.id.localeCompare(b.id)));
-		if (this.memoryDb) {
-			if (canonicalJsonStringify(this.memoryDb.stores.master_config.get('current')) !== canonicalJsonStringify(expectedMaster) || !equalRecords(this.memoryDb.stores.transactions.values())) return false;
-			for (const replacement of replacements) this.memoryDb.stores.transactions.set(replacement.id, JSON.parse(JSON.stringify(replacement)));
-			return true;
-		}
-		return new Promise((resolve, reject) => {
-			const transaction = this.db.transaction(['master_config', 'transactions'], 'readwrite');
-			let applied = false;
-			transaction.oncomplete = () => resolve(applied);
-			transaction.onerror = () => reject(transaction.error || new Error('Maintenance batch failed'));
-			transaction.onabort = () => reject(transaction.error || new Error('Maintenance batch aborted'));
-			const master = transaction.objectStore('master_config').get('current');
-			const records = transaction.objectStore('transactions').getAll();
-			let remaining = 2;
-			const commit = () => {
-				if (--remaining) return;
-				if (canonicalJsonStringify(master.result) !== canonicalJsonStringify(expectedMaster) || !equalRecords(records.result)) return;
-				const store = transaction.objectStore('transactions');
-				for (const replacement of replacements) store.put(replacement);
-				applied = true;
-			};
-			master.onsuccess = commit;
-			records.onsuccess = commit;
-		});
-	}
-
-
-	async compareAndPutRawBatch(storeName, entries) {
-		if (this.memoryDb) {
-			const store = this.memoryDb.stores[storeName];
-			if (entries.some(entry => canonicalJsonStringify(store.get(entry.key) ?? null) !== canonicalJsonStringify(entry.expected ?? null))) return false;
-			const replacements = entries.map(entry => ({ key: entry.key, value: structuredClone(entry.replacement) }));
-			for (const entry of replacements) store.set(entry.key, entry.value);
-			return true;
-		}
-		return new Promise((resolve, reject) => {
-			const transaction = this.db.transaction([storeName], 'readwrite');
-			const store = transaction.objectStore(storeName);
-			let remaining = entries.length, matches = true, changed = false;
-			transaction.oncomplete = () => resolve(changed);
-			transaction.onerror = () => reject(transaction.error || new Error('IndexedDB batch comparison failed'));
-			transaction.onabort = () => reject(transaction.error || new Error('IndexedDB batch comparison aborted'));
-			for (const entry of entries) {
-				const request = store.get(entry.key);
-				request.onsuccess = () => {
-					if (canonicalJsonStringify(request.result ?? null) !== canonicalJsonStringify(entry.expected ?? null)) matches = false;
-					if (--remaining || !matches) return;
-					for (const replacement of entries) {
-						if (store.keyPath) store.put(replacement.replacement);
-						else store.put(replacement.replacement, replacement.key);
-					}
-					changed = true;
-				};
-			}
-		});
-	}
-
 	async replaceImportBatch(expected, replacements, isSessionValid) {
 		const same = (a, b) => canonicalJsonStringify(a ?? null) === canonicalJsonStringify(b ?? null);
 		const sameTransactions = records => same([...records].sort((a, b) => a.id.localeCompare(b.id)), [...expected.transactions].sort((a, b) => a.id.localeCompare(b.id)));
@@ -278,7 +198,7 @@ export class StorageEngine {
 			if (Object.hasOwn(prepared, 'master')) stores.master_config.set('current', prepared.master);
 			if (Object.hasOwn(prepared, 'snapshot')) stores.summary_snapshot.set('current', prepared.snapshot);
 			if (Object.hasOwn(prepared, 'base')) stores.master_config.set('sync_base', prepared.base);
-			stores.master_config.set('pending_import', prepared.pending);
+			if (Object.hasOwn(prepared, 'pending')) stores.master_config.set('pending_import', prepared.pending);
 			return true;
 		}
 		return new Promise((resolve, reject) => {
@@ -303,7 +223,7 @@ export class StorageEngine {
 					if (Object.hasOwn(prepared, 'master')) masterStore.put(prepared.master, 'current');
 					if (Object.hasOwn(prepared, 'snapshot')) transaction.objectStore('summary_snapshot').put(prepared.snapshot, 'current');
 					if (Object.hasOwn(prepared, 'base')) masterStore.put(prepared.base, 'sync_base');
-					masterStore.put(prepared.pending, 'pending_import');
+					if (Object.hasOwn(prepared, 'pending')) masterStore.put(prepared.pending, 'pending_import');
 					applied = true;
 				} catch (error) { transaction.abort(); reject(error); }
 			};
@@ -316,8 +236,10 @@ export class StorageEngine {
 		}
 		return new Promise((resolve, reject) => {
 			const tx = this.db.transaction([storeName], 'readwrite');
+			tx.oncomplete = () => resolve(true);
+			tx.onerror = () => reject(tx.error || new Error('IndexedDB delete failed'));
+			tx.onabort = () => reject(tx.error || new Error('IndexedDB delete aborted'));
 			const req = tx.objectStore(storeName).delete(key);
-			req.onsuccess = () => resolve(true);
 			req.onerror = () => reject(req.error);
 		});
 	}

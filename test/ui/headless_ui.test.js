@@ -420,6 +420,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 	});
 
 	it('7C. Yearly Granularity (#control-granularity yearly) Isolates Category Breakdown & KPI Cards to selectedYear', async () => {
+		await driver.evaluate(`(async()=> { const db=window.__yose_app.db, config=await db.getMasterConfig(); config.categories.push({id:'cat_hobby',name:'趣味・娯楽',type:'expense',subcategories:[]}); await db.saveMasterConfig(config); })()`);
 		// Insert a transaction in previous year (2025-05-10, cat_hobby, ¥99,000)
 		await driver.evaluate(`
 			window.__yose_app.db.putTransaction({

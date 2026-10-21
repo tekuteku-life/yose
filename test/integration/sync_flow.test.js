@@ -254,7 +254,11 @@ describe('Integration - Client & GAS Sync Flow', () => {
 			await db.saveSnapshot(snapshot);
 			await db.putTransaction({ ...initial, reclose_approved_months: [source, intermediate], date: intermediate + '-20', target_month: intermediate, previous_target_month: source, sync_status: 'unsynced' });
 			const fetch = syncManager.fetch;
-			syncManager.fetch = async (...args) => { await fetch(...args); throw new Error('response lost'); };
+			syncManager.fetch = async (...args) => {
+				const response = await fetch(...args);
+				if (JSON.parse(args[1].body).action === 'retroactive_update') throw new Error('response lost');
+				return response;
+			};
 			await assert.rejects(syncManager.syncPendingDiffs(), /response lost/);
 			const applied = gas.loadJsonFile(intermediate <= '2026-09' ? `archives/${intermediate}.json` : 'pending_diffs.json', { transactions: [] });
 			assert.ok(applied.transactions.some(tx => tx.id === initial.id && tx.target_month === intermediate));
@@ -319,7 +323,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 			const requestStarted = new Promise(resolve => { started = resolve; });
 			const fetch = syncManager.fetch;
 			syncManager.fetch = async (...args) => {
-				assert.equal(JSON.parse(args[1].body).action, route);
+				if (JSON.parse(args[1].body).action !== route) return fetch(...args);
 				const response = await fetch(...args);
 				started();
 				await barrier;

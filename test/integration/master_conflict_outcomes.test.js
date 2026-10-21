@@ -5,9 +5,11 @@ import { SyncManager } from '../../js/sync.js';
 import { generateEd25519KeyPair, generateDatabaseMasterKey, canonicalJsonStringify } from '../../js/crypto.js';
 import { transaction } from '../helpers/ui_fixture.js';
 
-const config = name => ({ schema_version: 2, accounts: [{ id: 'wallet', name, type: 'cash' }], categories: [], recurring_rules: [], holidays: [], annual_budgets: {} });
+const config = name => ({ schema_version: 2, accounts: [{ id: 'wallet', name, type: 'cash' }], categories: [{ id: 'cat_food', name: '食費', type: 'expense', subcategories: [] }], recurring_rules: [], holidays: [], annual_budgets: {} });
 async function fixture() {
-	const db = new YoseDB(); await db.init(); await db.saveMasterConfig(config('共有基点'));
+	const db = new YoseDB(); await db.init();
+	await db.saveSnapshot({ schema_version: 2, last_closed_month: null, account_balances: {}, monthly_summaries: {} });
+	await db.saveMasterConfig(config('共有基点'));
 	await db.commitMasterSync(await db.getMasterConfig(), config('共有基点'));
 	const { privateKey } = await generateEd25519KeyPair();
 	const state = { master: config('別端末'), records: [], fail: null, beforePush: null, beforeUpdate: null, actions: [] };
@@ -49,7 +51,7 @@ describe('master conflict outcomes and partial synchronization', () => {
 		assert.deepEqual(await db.getMasterConfig(), original); assert.deepEqual(await db.getMasterSyncBase(), base);
 		assert.equal(state.master.accounts[0].name, '別端末'); assert.ok(!state.actions.includes('update_master'));
 	});
-	it('retains a master conflict through transaction-only success and clears it after master approval', async () => {
+	it('retains a master conflict during pending-only synchronization and clears it after master approval', async () => {
 		const { db, sync, state } = await fixture();
 		await sync.syncBidirectional({ approveMasterConflict: async () => false });
 		await db.putTransaction(transaction('pending', { account_id: 'wallet' }));
@@ -95,7 +97,7 @@ describe('explicit per-field master conflict resolution', () => {
 		state.master.accounts[0].type='bank';state.master.holidays=['2027-01-01'];
 		await sync.syncBidirectional({approveMasterConflict:async(_paths,details,validate)=>{
 			const choices=Object.fromEntries(details.map(d=>[d.id,d.path.endsWith('.name')?'remote':'local']));
-			assert.doesNotThrow(()=>validate(choices));return choices;
+			await assert.doesNotReject(()=>validate(choices));return choices;
 		}});
 		const current=await db.getMasterConfig();assert.equal(current.accounts[0].name,'別端末');assert.equal(current.accounts[0].type,'credit_card');
 		assert.deepEqual(current.holidays,['2027-01-01']);assert.equal(state.master.accounts[0].type,'credit_card');
@@ -136,15 +138,15 @@ describe('explicit per-field master conflict resolution', () => {
 	});
 	it('validates references before applying and lets the user correct an inconsistent choice', async () => {
 		const {db,sync,state}=await fixture();
-		const base={...config('共有基点'),categories:[{id:'cat',name:'元費目',subcategories:[]}],recurring_rules:[{id:'rule',name:'定期料金',category_id:'cat',account_id:'wallet'}]};
+		const base={...config('共有基点'),categories:[{id:'cat',name:'元費目',type:'expense',subcategories:[]}],recurring_rules:[{id:'rule',name:'定期料金',type:'expense',amount:100,category_id:'cat',account_id:'wallet'}]};
 		await db.saveMasterConfig(base);await db.commitMasterSync(await db.getMasterConfig(),base);
 		await db.saveMasterConfig({...base,categories:[],recurring_rules:[]});
 		state.master=structuredClone(base);state.master.categories[0].name='別費目名';state.master.recurring_rules[0].name='別端末の定期料金';
 		await sync.syncBidirectional({approveMasterConflict:async(_paths,details,validate)=>{
 			const invalid=Object.fromEntries(details.map(d=>[d.id,d.path.startsWith('categories')?'local':'remote']));
-			assert.throws(()=>validate(invalid),/別端末の定期料金.*費目/);
+			await assert.rejects(()=>validate(invalid),/recurring_rules.*category_id.*参照/);
 			assert.deepEqual((await db.getMasterConfig()).categories,[]);assert.ok(!state.actions.includes('update_master'));
-			const corrected=Object.fromEntries(details.map(d=>[d.id,'remote']));assert.doesNotThrow(()=>validate(corrected));return corrected;
+			const corrected=Object.fromEntries(details.map(d=>[d.id,'remote']));await assert.doesNotReject(()=>validate(corrected));return corrected;
 		}});
 		assert.equal((await db.getMasterConfig()).recurring_rules[0].name,'別端末の定期料金');
 	});
