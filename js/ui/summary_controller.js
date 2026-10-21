@@ -18,6 +18,7 @@ import {
 	escapeHtml
 } from '../logic.js';
 import { buildAssetHistory, formatDate } from '../logic.js';
+import { buildCategoryTrend } from '../logic/category_trend.js';
 
 export class SummaryController {
 	constructor(coordinator) {
@@ -25,6 +26,7 @@ export class SummaryController {
 		this.tagSearchQuery = '';
 		this.lastTransactions = null;
 		this.assetPeriod = 'month';
+		this.renderVersion = 0;
 	}
 
 	get db() {
@@ -230,6 +232,7 @@ export class SummaryController {
 	}
 
 	async renderSummary() {
+		const renderId = ++this.renderVersion;
 		const target = this.coordinator.analyticsTarget || 'cashflow';
 		const granularity = this.coordinator.analyticsGranularity || 'monthly';
 
@@ -251,6 +254,7 @@ export class SummaryController {
 		const snapshot = await this.db.getSnapshot();
 		const config = await this.db.getMasterConfig();
 		const transactions = await this.db.getTransactions({ includeDeleted: false });
+		if (renderId !== this.renderVersion) return;
 
 		const summary = calculateBalancesAndSummaries(snapshot, transactions, this.coordinator.currentMonth);
 		const totalAssetSummary = calculateTotalAssetSummary(
@@ -285,6 +289,7 @@ export class SummaryController {
 		const historyCard = document.getElementById('asset-history-card');
 		if (historyCard) historyCard.style.display = target === 'assets' ? 'block' : 'none';
 		if (target === 'assets') await this.renderAssetHistory();
+		if (renderId !== this.renderVersion) return;
 		const cardPeriodControls = document.getElementById('card-period-controls');
 		const granularityRow = document.getElementById('granularity-control-row');
 		const catCard = document.getElementById('card-category-breakdown');
@@ -323,19 +328,24 @@ export class SummaryController {
 			if (budgetCatCard) budgetCatCard.style.display = 'none';
 			if (catCard) catCard.style.display = 'block';
 			if (accountBalancesTitle) accountBalancesTitle.textContent = '口座別支出（収支）';
+			const scope = document.getElementById('category-trend-scope');
+			if (scope) scope.textContent = granularity === 'daily' ? `${this.coordinator.currentMonth}の取得済み明細を取引日で集計する。未取得の日別明細は含まない。` : '計上月と保存済み月次集計に基づく取得済み範囲の支出推移である。';
+			const title = document.getElementById('category-trend-title');
+			if (title) title.textContent = `${granularity === 'daily' ? this.coordinator.currentMonth + ' 取引日別' : granularity === 'monthly' ? this.coordinator.selectedYear + '年 月別' : '年別'} 費目ごとの支出推移（${this.coordinator.useActualCategoryAxis ? '実態分類' : '計上分類'}）`;
+			this.chartController.renderCategoryTrend(buildCategoryTrend(transactions, snapshot, config, { granularity, month: this.coordinator.currentMonth, year: this.coordinator.selectedYear, actualAxis: this.coordinator.useActualCategoryAxis, includePlanned: this.coordinator.showPlanned }));
 
 			if (granularity === 'daily') {
 				if (chartTitle) chartTitle.textContent = `${this.coordinator.currentMonth} 日別収支推移・内訳`;
 				if (tableTitle) tableTitle.textContent = `${this.coordinator.currentMonth} 日別集計表`;
-				this.renderDailyAnalytics(transactions, summary);
+				this.renderDailyAnalytics(transactions, summary, config, renderId);
 			} else if (granularity === 'monthly') {
 				if (chartTitle) chartTitle.textContent = `${this.coordinator.selectedYear}年 月別収支推移 (当月: ${this.coordinator.currentMonth})`;
 				if (tableTitle) tableTitle.textContent = `${this.coordinator.selectedYear}年 月別集計表`;
-				this.renderMonthlyAnalytics(transactions, snapshot, summary);
+				this.renderMonthlyAnalytics(transactions, snapshot, summary, config, renderId);
 			} else {
 				if (chartTitle) chartTitle.textContent = `${this.coordinator.selectedYear}年 年別収支推移・貯蓄率推移`;
 				if (tableTitle) tableTitle.textContent = '年次推移集計表';
-				this.renderYearlyAnalytics(transactions, snapshot);
+				this.renderYearlyAnalytics(transactions, snapshot, config, renderId);
 			}
 		} else {
 			// Assets Target
@@ -349,6 +359,7 @@ export class SummaryController {
 
 		// Render Account Balances / Expenses / Budget Breakdown
 		await this.renderAccountBalances(summary, transactions, config);
+		if (renderId !== this.renderVersion) return;
 
 		// Render Tag Analytics & Breakdown (when in cashflow)
 		if (target === 'cashflow') {
@@ -550,7 +561,7 @@ export class SummaryController {
 		}).join('');
 	}
 
-	renderDailyAnalytics(transactions, summary) {
+	renderDailyAnalytics(transactions, summary, config = null, renderId = this.renderVersion) {
 		const dailyData = aggregateDailySummaries(transactions, this.coordinator.currentMonth);
 
 		// Update cashflow stat cards
@@ -626,13 +637,13 @@ export class SummaryController {
 		}
 
 		// Category breakdown list
-		this.renderCategoryBreakdownList(this.coordinator.useActualCategoryAxis ? summary.by_actual_category : summary.by_category);
+		this.renderCategoryBreakdownList(this.coordinator.useActualCategoryAxis ? summary.by_actual_category : summary.by_category, config, renderId);
 
 		// Chart
 		this.chartController.renderChartForDaily(dailyData);
 	}
 
-	renderMonthlyAnalytics(transactions, snapshot, summary) {
+	renderMonthlyAnalytics(transactions, snapshot, summary, config = null, renderId = this.renderVersion) {
 		const monthlyData = aggregateMonthlySummaries(transactions, this.coordinator.selectedYear, snapshot?.monthly_summaries || {});
 
 		// Update cashflow stat cards: display currentMonth stats with year reference
@@ -696,13 +707,13 @@ export class SummaryController {
 
 		// Category breakdown list: aggregate for currentMonth in monthly mode to match selected month
 		const catData = summary ? (this.coordinator.useActualCategoryAxis ? summary.by_actual_category : summary.by_category) : {};
-		this.renderCategoryBreakdownList(catData);
+		this.renderCategoryBreakdownList(catData, config, renderId);
 
 		// Chart
 		this.chartController.renderChartForMonthly(monthlyData);
 	}
 
-	renderYearlyAnalytics(transactions, snapshot) {
+	renderYearlyAnalytics(transactions, snapshot, config = null, renderId = this.renderVersion) {
 		const yearlyData = aggregateYearlySummaries(transactions, snapshot?.monthly_summaries || {});
 		const selectedYear = this.coordinator.selectedYear;
 		const targetYearData = yearlyData[selectedYear] || { income: 0, expense: 0, net: 0, savings_rate: 0 };
@@ -766,7 +777,7 @@ export class SummaryController {
 				catObj[k] = { total: val, total_confirmed: val, total_planned: 0 };
 			}
 		}
-		this.renderCategoryBreakdownList(catObj);
+		this.renderCategoryBreakdownList(catObj, config, renderId);
 
 		// Chart
 		this.chartController.renderChartForYearly(yearlyData);
@@ -1138,11 +1149,12 @@ export class SummaryController {
 		this.chartController.renderChartForAssets(totalAssetSummary);
 	}
 
-	async renderCategoryBreakdownList(categoriesData) {
+	async renderCategoryBreakdownList(categoriesData, config = null, renderId = this.renderVersion) {
 		const list = document.getElementById('category-breakdown-list');
 		if (!list) return;
 
-		const config = await this.db.getMasterConfig();
+		config = config || await this.db.getMasterConfig();
+		if (renderId !== this.renderVersion) return;
 		const catMap = new Map();
 		for (const c of config?.categories || []) {
 			catMap.set(c.id, c.name);

@@ -820,6 +820,14 @@ GAS通常更新も候補検証後の永続ジャーナルによる確定/復旧�
 
 未入力金額の明細は金額0・予定を維持し、編集時は空欄と明示0を区別する。カード自動精算は確定済みかつ金額確定済みの支出だけを集計し、アーカイブ済みの引落口座では新規生成しない。請求周期とカードの安定IDを用い、複数タブの同時起動でも全処理を正常終了させ一度だけ作成する。原本変更時は最新の明細・マスタで集計し直す。テーマ・折畳みの画面反映は即時に行い、端末内保存は操作順を維持する。
 
+### 3.47 アーカイブ明細のメンテナンス更新と費目推移
+
+メンテナンスの「一覧を更新」は取得済みローカル明細・マスタ・取得済みアーカイブ月を再読取する。読取中・更新完了・失敗を明示する。更新要求は世代で比較し、後から完了した古い要求で新しい一覧を戻さない。移行元は未削除明細が1件以上参照するアーカイブ設定だけとし、金額0・予定も件数へ含める。口座の振替先と分類の計上・実態両軸、親がアーカイブされた子も対象である。設定ごとの参照件数を表示し、一覧は選択した移行元の明細とする。選択が残存すれば維持し、消えた場合と0件の状態を明示する。確認・移行中は更新との競合を防ぎ、移行完了後は最新状態を再取得する。
+
+明細フィルターは有効設定に加え、フィルター適用前の対象期間の未削除明細が参照するアーカイブ済み費目・口座を含める。費目は計上・実態の両軸、口座は振替元・先を参照する。金額0や予定表示OFFでも参照自体があれば候補を残す。他の絞り込み条件によって候補を消さない。期間は年・月では計上月target_month、日では取引日dateとする。選択可能なら現在値を保持し、期間変更等で候補が消えた場合は「すべて」へ戻す。新規入力のアーカイブ設定選択禁止は維持する。
+
+費目カードへ日別・月別・年別の費目別支出推移を追加し、既存のドーナツ・内訳・明細への絞り込みは保持する。日別は選択月の取得済み明細を取引日で集計する。月別は選択年の12か月、年別は取得済み履歴の年を計上月で集計する。計上/実態分類の切替と予定の表示切替を反映する。月次snapshotがある月はsnapshotを採用し、取得済み同月明細を重ねて数えない。日分解情報を持たないsnapshotを日別へ推測配分しない。取得済み範囲である旨と日別/計上月の違いを画面へ明示する。アーカイブ済み・未分類・未知IDの系列名を安全に表示する。Chart.js利用不可でも時系列を表で確認でき、空データ・再描画・テーマ変更で古いグラフを残さない。推移と内訳は同じ描画要求のマスタを使い、古い要求の後着描画を拒否する。
+
 ## 4. 同期トリガー・通信・セキュリティ要件
 
 ### 4.1 ローカルからGoogle Driveへの同期トリガー
@@ -1856,6 +1864,7 @@ flowchart TD
 | **3.41** | 静的型チェック自動検証（check:types）および集計・設定全機能網羅UIテスト拡充（予定トグル・軸切替・年次予算・テーマ） | `package.json`, `jsconfig.json`, `types/ambient.d.ts`, `js/logic/aggregator.js`, `js/ui/tx_list_controller.js`, `js/ui/settings_controller.js`, `js/ui/summary_controller.js` | - | `master_config` (`annual_budgets`) | `npm run check:types`, `test/ui/headless_ui.test.js` |
 | **3.44.2** | 設定競合の比較・項目別解消と取消 | `js/logic/master_sync.js`, `js/ui/master_conflict_controller.js`, `js/ui/sync_status_controller.js`, `js/sync.js` | 既存 `update_master` の版検査を維持 | 暗号化共有マスタ・共有基点 | `test/unit/master_conflict_resolution.test.js`, `test/integration/master_conflict_outcomes.test.js`, `test/ui/master_conflict_resolution.test.js` |
 | **3.45** | タイトルバー開閉・編集分類共通化・種別別完全取込とサーバー反映 | `js/ui/coordinator.js`, `js/ui/tx_edit_controller.js`, `js/ui/backup_import_controller.js`, `js/db/backup_replacement.js`, `js/db/yose_db.js`, `js/sync.js`, `gas/Code.gs` | `replace_import` | 業務3ストア・暗号化outbox・サーバー復旧journal/receipt | `test/ui/section_and_edit_categories.test.js`, `test/ui/replacement_import.test.js`, `test/integration/replacement_import.test.js`, `test/integration/full_import_sync.test.js`, `test/system/full_import_recovery_scenario.test.js` |
+| **3.47** | メンテナンス最新一覧・参照あり候補・費目別推移・期間内アーカイブfilter | `js/logic/category_trend.js`, `js/logic/master_maintenance.js`, `js/ui/maintenance_controller.js`, `js/ui/tx_list_controller.js`, `js/ui/summary_controller.js`, `js/ui/chart_controller.js`, `index.html` | - | 取得済み明細・master・月次snapshot（読取） | `test/unit/category_trend.test.js`, `test/unit/master_maintenance.test.js`, `test/ui/category_trends.test.js`, `test/ui/archived_filters.test.js`, `test/ui/master_maintenance.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |

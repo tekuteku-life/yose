@@ -19,6 +19,115 @@ async function prepare(d, closed = false) {
 }
 
 describe('archived master maintenance UI', () => {
+	it('limits sources to loaded undeleted references and shows only rows for the selected source', async () => {
+		const d = fixture.driver; await prepare(d);
+		await d.evaluate(`(async () => {
+			const app=window.__yose_app, config=await app.db.getMasterConfig();
+			config.categories.find(c=>c.id==='cat_social').is_archived=true;
+			config.accounts.push({id:'unused_archived',name:'未使用',type:'cash',is_asset:true,is_archived:true});
+			await app.db.saveMasterConfig(config);
+		})()`);
+		await seedLegacy(d, [transaction('zero-planned', { category_id: 'cat_social', actual_category_id: 'cat_social', amount: 0, status: 'planned' }), transaction('second-social', { category_id: 'cat_social', actual_category_id: 'cat_social' }), transaction('deleted-child', { category_id: 'cat_food', subcategory_id: 'sub_groceries', is_deleted: true })]);
+		await d.click('#btn-refresh-maintenance');
+		await d.waitFor('document.querySelector("#maintenance-source option[value=" + JSON.stringify("category:cat_social") + "]")');
+		assert.deepEqual(await d.evaluate('Array.from(document.getElementById("maintenance-source").options,o=>o.value)'), ['category:cat_food', 'category:cat_social']);
+		assert.ok((await d.textContent('#maintenance-source')).includes('2件'));
+		assert.ok(!(await d.textContent('#maintenance-records')).includes('zero-planned'));
+		await d.select('#maintenance-source', 'category:cat_social');
+		assert.ok((await d.textContent('#maintenance-records')).includes('zero-planned'));
+		assert.ok(!(await d.textContent('#maintenance-records')).includes('archived'));
+		assert.ok((await d.textContent('#maintenance-count')).includes('2件'));
+	});
+	it('refreshes latest master and records, preserves valid selections, and clears vanished sources', async () => {
+		const d = fixture.driver; await prepare(d);
+		await d.evaluate(`(async () => {
+			const app=window.__yose_app, config=await app.db.getMasterConfig();
+			config.categories.find(c=>c.id==='cat_housing').subcategories.push({id:'refresh_child',name:'更新中項目'});
+			await app.db.saveMasterConfig(config);
+		})()`);
+		await d.click('#btn-refresh-maintenance');
+		await d.select('#maintenance-target', 'cat_housing'); await d.select('#maintenance-subcategory', 'refresh_child');
+		await d.evaluate(`(async () => {
+			const app=window.__yose_app, config=await app.db.getMasterConfig();
+			config.categories.find(c=>c.id==='cat_food').name='更新された費目'; await app.db.saveMasterConfig(config);
+			const record=await app.db.getTransaction('archived'); await app.db.putTransaction({...record,memo:'更新された明細'});
+		})()`);
+		await d.click('#btn-refresh-maintenance');
+		await d.waitFor('document.getElementById("maintenance-records").textContent.includes("更新された明細")');
+		assert.ok((await d.textContent('#maintenance-source')).includes('更新された費目'));
+		assert.equal(await d.textContent('#maintenance-refresh-status'), '一覧を更新した。');
+		assert.equal(await d.evaluate('document.getElementById("maintenance-source").value'), 'category:cat_food');
+		assert.equal(await d.evaluate('document.getElementById("maintenance-target").value'), 'cat_housing');
+		assert.equal(await d.evaluate('document.getElementById("maintenance-subcategory").value'), 'refresh_child');
+		await d.evaluate('window.__yose_app.db.deleteTransaction("archived")');
+		await d.click('#btn-refresh-maintenance');
+		await d.waitFor('document.getElementById("maintenance-source").options.length===0');
+		assert.ok((await d.textContent('#maintenance-records')).includes('ない'));
+		assert.equal(await d.evaluate('document.getElementById("btn-migrate-maintenance").disabled'), true);
+	});
+	it('keeps the newest refresh response and blocks migration while records are loading', async () => {
+		const d = fixture.driver; await prepare(d);
+		await d.evaluate(`(async () => {
+			const app=window.__yose_app, db=app.db, config=await db.getMasterConfig(), records=await db.getTransactions();
+			const originalConfig=db.getMasterConfig.bind(db), originalRecords=db.getTransactions.bind(db);
+			let configCalls=0, recordCalls=0;
+			db.getMasterConfig=()=>++configCalls===1?new Promise(resolve=>window.__resolveOldMaintenance=()=>resolve(config)):originalConfig();
+			db.getTransactions=()=>Promise.resolve(++recordCalls===1?records:records.map(t=>t.id==='archived'?{...t,memo:'最新応答'}:t));
+			window.__firstMaintenanceRefresh=app.maintenanceController.refresh();
+			window.__restoreMaintenanceReads=()=>{db.getMasterConfig=originalConfig;db.getTransactions=originalRecords;};
+		})()`);
+		assert.equal(await d.evaluate('document.getElementById("btn-migrate-maintenance").disabled'), true);
+		assert.equal(await d.evaluate('document.getElementById("maintenance-source").disabled'), true);
+		assert.ok((await d.textContent('#btn-refresh-maintenance')).includes('更新中'));
+		assert.ok((await d.textContent('#maintenance-refresh-status')).includes('更新中'));
+		await d.click('#btn-refresh-maintenance');
+		await d.waitFor('document.getElementById("maintenance-records").textContent.includes("最新応答")');
+		await d.evaluate('(async()=>{window.__resolveOldMaintenance();await window.__firstMaintenanceRefresh;window.__restoreMaintenanceReads();})()');
+		assert.ok((await d.textContent('#maintenance-records')).includes('最新応答'));
+		assert.equal(await d.evaluate('document.getElementById("maintenance-source").disabled'), false);
+	});
+	it('restores controls after a refresh failure and succeeds on retry', async () => {
+		const d = fixture.driver; await prepare(d);
+		await d.evaluate(`const db=window.__yose_app.db, read=db.getTransactions.bind(db);let fail=true;
+			db.getTransactions=(...args)=>{if(fail){fail=false;throw new Error('一覧再取得のテスト失敗');}return read(...args);};`);
+		await d.click('#btn-refresh-maintenance'); await waitForDialog(d, '一覧更新を完了できませんでした: 一覧再取得のテスト失敗');
+		assert.ok((await d.textContent('#maintenance-refresh-status')).includes('更新できなかった'));
+		assert.equal(await d.evaluate('document.getElementById("maintenance-source").disabled'), false);
+		assert.ok(!(await d.textContent('#btn-refresh-maintenance')).includes('更新中'));
+		await d.click('#btn-refresh-maintenance');
+		assert.ok((await d.textContent('#maintenance-records')).includes('archived'));
+	});
+	it('freezes source selections during migration and refreshes the final source list', async () => {
+		const d = fixture.driver; await prepare(d);
+		await d.evaluate(`window.__yose_app.approveClosedChanges=()=>new Promise(resolve=>window.__finishMaintenanceApproval=()=>resolve([]));`);
+		await d.click('#btn-migrate-maintenance');
+		assert.equal(await d.evaluate('document.getElementById("maintenance-source").disabled'), true);
+		assert.equal(await d.evaluate('document.getElementById("btn-refresh-maintenance").disabled'), true);
+		await d.evaluate('window.__yose_app.maintenanceController.refresh()');
+		await d.evaluate('window.__finishMaintenanceApproval()');
+		await waitForDialog(d, '1件の明細を移行');
+		await d.waitFor('document.getElementById("maintenance-source").options.length===0');
+		assert.equal(await d.evaluate('document.getElementById("btn-refresh-maintenance").disabled'), false);
+	});
+
+	it('reports a failed post-migration refresh without losing the committed change or controls', async () => {
+		const d = fixture.driver; await prepare(d);
+		await d.evaluate(`const app=window.__yose_app, migrate=app.db.migrateArchivedMaster.bind(app.db);
+			app.refreshAllViews=async()=>{};
+			app.db.migrateArchivedMaster=async(...args)=>{
+				const changed=await migrate(...args), read=app.db.getTransactions.bind(app.db);let fail=true;
+				app.db.getTransactions=(...readArgs)=>{if(fail){fail=false;throw new Error('移行後再取得のテスト失敗');}return read(...readArgs);};
+				return changed;
+			};`);
+		await d.click('#btn-migrate-maintenance');
+		await waitForDialog(d, '1件の明細を移行');
+		await waitForDialog(d, '一覧更新を完了できませんでした: 移行後再取得のテスト失敗');
+		assert.equal((await records(d)).find(t=>t.id==='archived').category_id, 'cat_housing');
+		assert.equal(await d.evaluate('document.getElementById("btn-refresh-maintenance").disabled'), false);
+		await d.click('#btn-refresh-maintenance');
+		await d.waitFor('document.getElementById("maintenance-source").options.length===0');
+	});
+
 	it('lists affected rows and loaded scope, cancels without changes, then migrates both axes', async () => {
 		const d = fixture.driver; await prepare(d);
 		assert.ok((await d.textContent('#maintenance-scope')).includes('取得済み'));

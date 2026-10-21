@@ -3,7 +3,7 @@
  * Dedicated Chart.js generator for daily, monthly, yearly, budget progress, category breakdown, tags, and assets.
  */
 
-import { formatDoughnutTooltipLabel } from '../logic.js';
+import { formatDoughnutTooltipLabel, escapeHtml } from '../logic.js';
 
 export class ChartController {
 	constructor(coordinator) {
@@ -13,9 +13,13 @@ export class ChartController {
 		this.categoryBreakdownChart = null;
 		this.isDark = false;
 		this.assetHistoryChart = null;
+		this.categoryTrendChart = null;
+		this.lastCategoryTrend = null;
 	}
 
 	destroy() {
+		this.categoryTrendChart?.destroy(); this.categoryTrendChart = null;
+		this.lastCategoryTrend = null;
 		this.assetHistoryChart?.destroy(); this.assetHistoryChart = null;
 		if (this.chart) {
 			this.chart.destroy();
@@ -63,6 +67,32 @@ export class ChartController {
 		if (typeof window !== 'undefined' && window.Chart?.defaults) {
 			window.Chart.defaults.color = isDark ? '#94a3b8' : '#64748b';
 			window.Chart.defaults.borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)';
+		}
+		if (this.lastCategoryTrend) this.renderCategoryTrend(this.lastCategoryTrend);
+	}
+
+	renderCategoryTrend(trend) {
+		this.lastCategoryTrend = trend;
+		this.categoryTrendChart?.destroy(); this.categoryTrendChart = null;
+		const canvas = document.getElementById('category-trend-chart');
+		const container = document.getElementById('category-trend-chart-container');
+		const fallback = document.getElementById('category-trend-fallback');
+		if (!canvas || !container || !fallback) return;
+		container.style.display = 'none'; fallback.style.display = 'block';
+		if (!trend.series.length) { fallback.textContent = '対象の費目支出はありません。'; return; }
+		if (window.Chart) {
+			const palette = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed', '#db2777', '#0891b2', '#65a30d'];
+			container.style.display = 'block'; fallback.style.display = 'none';
+			this.categoryTrendChart = new window.Chart(canvas, {
+				type: 'line',
+				data: { labels: trend.labels, datasets: trend.series.map(row => {
+					let hash = 0; for (const char of row.id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+					return { categoryId: row.id, label: row.name, data: row.values.slice(), borderColor: palette[hash % palette.length], fill: false, tension: 0.15 };
+				}) },
+				options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: 'bottom' } }, interaction: { mode: 'index', intersect: false } }
+			});
+		} else {
+			fallback.innerHTML = `<table class="summary-table"><caption>費目ごとの支出推移</caption><thead><tr><th>期間</th>${trend.series.map(row => `<th>${escapeHtml(row.name)}</th>`).join('')}</tr></thead><tbody>${trend.labels.map((label, index) => `<tr><th>${escapeHtml(label)}</th>${trend.series.map(row => `<td>¥${escapeHtml(row.values[index].toLocaleString())}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
 		}
 	}
 
