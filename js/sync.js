@@ -3,6 +3,18 @@
  */
 
 import { createSignedRequest, canonicalJsonStringify } from './crypto.js';
+import { DEFAULT_MASTER_CONFIG } from './db/defaults.js';
+import { sharedMasterConfig, mergeMasterConfigs, resolveMasterConflicts, assertMasterReferences } from './logic/master_sync.js';
+
+class MasterConflictError extends Error {
+	constructor(paths, cancelled, reason = null) {
+		super(`設定マスタの確認が必要です（${paths.join('、')}）。`);
+		this.name = 'MasterConflictError';
+		this.paths = paths;
+		this.cancelled = cancelled;
+		this.reason = reason;
+	}
+}
 
 export class SyncManager {
 	/**
@@ -17,12 +29,148 @@ export class SyncManager {
 		this.privateKey = privateKey;
 		this.gasUrl = gasUrl;
 		this.fetch = customFetch || (typeof fetch !== 'undefined' ? fetch.bind(globalThis) : null);
-		this.isSyncing = false;
+		this._stateListeners = new Set();
+		this._masterListeners = new Set();
+		this._isSyncing = false;
+		this._masterSyncRequested = false;
+		this.requestTimeoutMs = 30000;
 		this.lastSyncedAt = null;
 		this.lastError = null;
+		this.masterConflictPaths = [];
 		this._listenersAttached = false;
 		this._onOnlineBound = null;
 		this._onVisibilityBound = null;
+	}
+
+
+	get isSyncing() { return this._isSyncing; }
+
+	set isSyncing(value) {
+		if (this._isSyncing === value) return;
+		this._isSyncing = value;
+		for (const listener of this._stateListeners) Promise.resolve().then(() => listener()).catch(error => console.warn('Sync status refresh failed:', error.message));
+		if (!value && this._masterSyncRequested) void this.queueMasterSync();
+	}
+
+	onStateChange(listener) {
+		this._stateListeners.add(listener);
+		return () => this._stateListeners.delete(listener);
+	}
+
+	onMasterChange(listener) {
+		this._masterListeners.add(listener);
+		return () => this._masterListeners.delete(listener);
+	}
+
+	async queueMasterSync() {
+		this._masterSyncRequested = true;
+		if (this.isSyncing || !this.gasUrl || !this.privateKey || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+		this._masterSyncRequested = false;
+		try { await this.syncMaster(); }
+		catch (error) { console.warn('Master sync deferred:', error.message); }
+	}
+
+	async syncMaster() {
+		if (this.isSyncing) return { status: 'already_syncing' };
+		this.isSyncing = true; this.lastError = null;
+		let pendingCount = 0;
+		try {
+			await this.flushPendingImport();
+			pendingCount = (await this.db.getUnsyncedTransactions()).length;
+			const remote = await this.sendRequest('fetch_master', {});
+			await this.syncSharedMaster(remote.master_config);
+			return { status: 'synced' };
+		} catch (error) {
+			if (error instanceof MasterConflictError) return this.masterConflictOutcome(error, 0, 0, pendingCount);
+			this.lastError = error.message; throw error;
+		}
+		finally { this.isSyncing = false; }
+	}
+
+	async flushPendingImport() {
+		if (!this.db.getPendingImport) return;
+		const privateKey = this.privateKey, encryptionKey = this.db.encryptionKey;
+		const isSessionValid = () => Boolean(privateKey) && this.privateKey === privateKey && this.db.encryptionKey === encryptionKey;
+		const checkSession = () => {
+			if (!isSessionValid()) throw new Error('認証がロックまたは変更されました。解除後に完全インポートを同期し直してください。');
+		};
+		let pending = await this.db.getPendingImport();
+		if (!pending) return;
+		checkSession();
+		if (pending.base_version === undefined) {
+			const remote = await this.sendRequest('fetch_state', {});
+			checkSession();
+			if (typeof remote.state_version !== 'string') throw new Error('完全インポート同期には GAS の更新が必要です。手元のデータと送信待ちを保持しています。');
+			const bound = { ...pending, base_version: remote.state_version };
+			if (!await this.db.updatePendingImport(pending, bound, { isSessionValid })) throw new Error('完全インポートの送信待ちが変更されました。再度同期してください。');
+			pending = bound;
+		}
+		checkSession();
+		const response = await this.sendRequest('replace_import', { import_id: pending.id, data: pending.data, base_version: pending.base_version });
+		checkSession();
+		if (response.import_id !== pending.id) throw new Error('完全インポートの同期応答を確認できませんでした。送信待ちを保持しています。');
+		if (Array.isArray(pending.data.transactions) && (typeof response.imported_at !== 'string' || !Number.isFinite(Date.parse(response.imported_at)))) throw new Error('完全インポートの受理時刻を確認できませんでした。送信待ちを保持しています。');
+		if (!await this.db.acknowledgePendingImport(pending, response.master_config || null, { isSessionValid, importedAt: response.imported_at })) throw new Error('完全インポートの送信待ちが変更されました。再度同期してください。');
+		this.masterConflictPaths = [];
+	}
+
+	masterConflictOutcome(error, syncedCount = 0, downloadedCount = 0, pendingCount = 0) {
+		this.masterConflictPaths = [...error.paths];
+		this.lastError = null;
+		return {
+			status: error.cancelled ? 'master_conflict_cancelled' : 'master_conflict',
+			conflict_paths: [...error.paths],
+			reason: error.reason,
+			synced_count: syncedCount,
+			downloaded_count: downloadedCount,
+			pending_count: pendingCount
+		};
+	}
+
+	async syncSharedMaster(remoteConfig, approveMasterConflict = null) {
+		if (!remoteConfig) return;
+		const privateKey = this.privateKey, encryptionKey = this.db.encryptionKey;
+		const isSessionValid = () => this.privateKey !== null && this.privateKey === privateKey && this.db.encryptionKey === encryptionKey;
+		const remote = sharedMasterConfig(remoteConfig);
+		const local = await this.db.getMasterConfig();
+		const sharedLocal = sharedMasterConfig(local);
+		const base = await this.db.getMasterSyncBase() || (Object.keys(remote).some(key => key !== 'schema_version') ? sharedMasterConfig(DEFAULT_MASTER_CONFIG) : { schema_version: 2 });
+		const mergeResult = mergeMasterConfigs(base, sharedLocal, remote);
+		const { conflicts } = mergeResult;
+		let config = mergeResult.config;
+		if (conflicts.length) {
+			this.masterConflictPaths = [...conflicts];
+			if (!approveMasterConflict) throw new MasterConflictError(conflicts, false);
+			const validateChoices = choices => {
+				let selections;
+				if (choices === true) selections = new Map(mergeResult.conflictDetails.map(detail => [detail.id, 'local']));
+				else {
+					if (!choices || typeof choices !== 'object' || Array.isArray(choices) || ![Object.prototype, null].includes(Object.getPrototypeOf(choices))) throw new Error('競合項目ごとに採用する設定を選択してください。');
+					selections = new Map(Object.entries(choices));
+				}
+				const candidate = resolveMasterConflicts(mergeResult, selections);
+				assertMasterReferences(candidate);
+				return candidate;
+			};
+			const choices = await approveMasterConflict(conflicts, mergeResult.conflictDetails, validateChoices);
+			if (!choices) throw new MasterConflictError(conflicts, true);
+			if (!isSessionValid()) throw new Error('認証がロックまたは変更されました。解除後に設定を確認し直してください。');
+			if (canonicalJsonStringify(sharedMasterConfig(await this.db.getMasterConfig())) !== canonicalJsonStringify(sharedLocal)) throw new MasterConflictError(conflicts, false, 'local_changed');
+			config = validateChoices(choices);
+		}
+		assertMasterReferences(config);
+		if (!isSessionValid()) throw new Error('認証がロックまたは変更されました。解除後に設定を確認し直してください。');
+		let accepted = remote;
+		if (canonicalJsonStringify(config) !== canonicalJsonStringify(remote)) {
+			const response = await this.sendRequest('update_master', { master_config: config, base_version: canonicalJsonStringify(remote) });
+			if (response.master_conflict) throw new Error('設定マスタが別端末で更新されました。手元の変更を保持しています。手動差分同期で再取得してください。');
+			accepted = response.master_config || config;
+		}
+		const committed = await this.db.commitMasterSync(local, accepted, { isSessionValid });
+		this.masterConflictPaths = [];
+		if (canonicalJsonStringify(sharedMasterConfig(committed)) !== canonicalJsonStringify(sharedLocal)) {
+			for (const listener of this._masterListeners) Promise.resolve().then(() => listener()).catch(error => console.warn('Master view refresh failed:', error.message));
+		}
 	}
 
 	setPrivateKey(key) {
@@ -36,8 +184,8 @@ export class SyncManager {
 	attachEventListeners() {
 		if (this._listenersAttached || typeof window === 'undefined') return;
 
-		this._onOnlineBound = () => {
-			this.syncPendingDiffs().catch(err => {
+		this._onOnlineBound = async () => {
+			await this.syncBidirectional().catch(err => {
 				console.warn('Online auto-sync failed:', err);
 			});
 		};
@@ -78,32 +226,35 @@ export class SyncManager {
 
 		const envelope = await createSignedRequest(action, payload, this.privateKey);
 
-		const res = await this.fetch(this.gasUrl, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'text/plain;charset=utf-8'
-			},
-			body: JSON.stringify(envelope),
-			keepalive: keepalive
+		const abort = new AbortController();
+		let timer;
+		const timeout = new Promise((_, reject) => {
+			timer = setTimeout(() => {
+				abort.abort();
+				reject(new Error('同期通信がタイムアウトしました。サーバーで処理済みの可能性があります。接続を確認し、手動差分同期で最新状態を再取得してください。'));
+			}, this.requestTimeoutMs);
 		});
+		const request = async () => {
+			const res = await this.fetch(this.gasUrl, {
+				method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+				body: JSON.stringify(envelope), keepalive, signal: abort.signal,
+				credentials: 'omit', redirect: 'follow'
+			});
+			if (!res.ok) throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
+			const text = await res.text();
+			let data;
+			try { data = JSON.parse(text); }
+			catch (error) { throw new Error(`Invalid JSON response from server: ${text}`); }
+			if (!data?.success) throw new Error(data?.error || 'Server returned failure response');
+			return data;
+		};
+		try { return await Promise.race([request(), timeout]); }
+		catch (error) {
+			if (error.name === 'AbortError') throw new Error('同期通信がタイムアウトしました。サーバーで処理済みの可能性があります。接続を確認し、手動差分同期で最新状態を再取得してください。');
+			if (error instanceof TypeError || /Failed to fetch|fetch error|NetworkError/i.test(error.message)) throw new Error(`GASに接続できませんでした。ネット接続、GASの公開権限、保存URL（デプロイ済みの /exec）を確認してください。手元の変更は保持しています。詳細: ${error.message}`);
+			throw error;
+		} finally { clearTimeout(timer); }
 
-		if (!res.ok) {
-			throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
-		}
-
-		const text = await res.text();
-		let data;
-		try {
-			data = JSON.parse(text);
-		} catch (e) {
-			throw new Error(`Invalid JSON response from server: ${text}`);
-		}
-
-		if (!data.success) {
-			throw new Error(data.error || 'Server returned failure response');
-		}
-
-		return data;
 	}
 
 	async sendAction(action, payload, options) {
@@ -122,6 +273,7 @@ export class SyncManager {
 	}
 
 	async pushPending({ keepalive = false } = {}) {
+		await this.flushPendingImport();
 		const unsynced = await this.db.getUnsyncedTransactions();
 		if (!unsynced?.length) return { status: 'up_to_date', synced_count: 0 };
 		const snapshot = await this.db.getSnapshot();
@@ -146,6 +298,7 @@ export class SyncManager {
 	}
 
 	async downloadTransactions() {
+		await this.flushPendingImport();
 		const response = await this.sendRequest('fetch_state', {});
 		const count = await this.db.mergeRemoteTransactions([...(response.archived_transactions || []), ...(response.pending_diffs || [])]);
 		if (response.snapshot) await this.db.saveSnapshot(response.snapshot);
@@ -153,12 +306,17 @@ export class SyncManager {
 		return { response, count };
 	}
 
-	async syncBidirectional({ approveReclose = null } = {}) {
+	async syncBidirectional({ approveReclose = null, approveMasterConflict = null } = {}) {
 		if (this.isSyncing) return { status: 'already_syncing', synced_count: 0, downloaded_count: 0 };
 		this.isSyncing = true; this.lastError = null;
 		let stage = '受信';
+		let syncedCount = 0, downloadedCount = 0;
+		let pendingCount = 0;
 		try {
 			const first = await this.downloadTransactions();
+			downloadedCount += first.count;
+			pendingCount = (await this.db.getUnsyncedTransactions()).length;
+			await this.syncSharedMaster(first.response.master_config, approveMasterConflict);
 			const closed = (await this.db.getSnapshot())?.last_closed_month;
 			const pending = await this.db.getUnsyncedTransactions();
 			const affectedMonths = tx => [tx.target_month, tx.previous_target_month, ...(first.response.archived_transactions || []).filter(remote => remote.id === tx.id).map(remote => remote.target_month)].filter(month => month && closed && month <= closed);
@@ -172,10 +330,18 @@ export class SyncManager {
 			}
 			stage = '送信';
 			const uploaded = await this.pushPending();
+			syncedCount = uploaded.synced_count;
 			stage = '再受信';
 			const last = await this.downloadTransactions();
+			downloadedCount += last.count;
+			pendingCount = (await this.db.getUnsyncedTransactions()).length;
+			await this.syncSharedMaster(last.response.master_config, approveMasterConflict);
+			this.lastSyncedAt = new Date().toISOString();
 			return { status: 'synced', synced_count: uploaded.synced_count, downloaded_count: first.count + last.count, pending_count: (await this.db.getUnsyncedTransactions()).length };
-		} catch (error) { this.lastError = `${stage}: ${error.message}`; throw new Error(this.lastError); }
+		} catch (error) {
+			if (error instanceof MasterConflictError) return this.masterConflictOutcome(error, syncedCount, downloadedCount, pendingCount);
+			this.lastError = `${stage}: ${error.message}`; throw new Error(this.lastError);
+		}
 		finally { this.isSyncing = false; }
 	}
 
@@ -209,6 +375,7 @@ export class SyncManager {
 		this.lastError = null;
 
 		try {
+			await this.flushPendingImport();
 			// First save locally
 			const submitted = await this.db.putTransaction(transaction);
 
@@ -244,16 +411,22 @@ export class SyncManager {
 			throw new Error('Another sync operation is in progress');
 		}
 		this.isSyncing = true;
+		let pendingCount = 0;
 		try {
+			await this.flushPendingImport();
+			pendingCount = (await this.db.getUnsyncedTransactions()).length;
 			const response = await this.sendRequest('fetch_state', {});
 			if (response.master_config) {
-				await this.db.saveMasterConfig(response.master_config);
+				await this.syncSharedMaster(response.master_config);
 			}
 			if (response.snapshot) {
 				await this.db.saveSnapshot(response.snapshot);
 			}
 			await this.db.mergeRemoteTransactions([...(response.archived_transactions || []), ...(response.pending_diffs || [])]);
 			return response;
+		} catch (error) {
+			if (error instanceof MasterConflictError) return this.masterConflictOutcome(error, 0, 0, pendingCount);
+			this.lastError = error.message; throw error;
 		} finally {
 			this.isSyncing = false;
 		}

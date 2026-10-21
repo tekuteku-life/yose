@@ -18,6 +18,8 @@ import { TransactionInputController } from './tx_input_controller.js';
 import { SummaryController } from './summary_controller.js';
 import { MasterController } from './master_controller.js';
 import { SettingsController } from './settings_controller.js';
+import { MaintenanceController } from './maintenance_controller.js';
+import { MasterConflictController } from './master_conflict_controller.js';
 
 export class AppCoordinator {
 	constructor() {
@@ -48,6 +50,8 @@ export class AppCoordinator {
 		this.summaryController = new SummaryController(this);
 		this.masterController = new MasterController(this);
 		this.settingsController = new SettingsController(this);
+		this.maintenanceController = new MaintenanceController(this);
+		this.masterConflictController = new MasterConflictController(this);
 	}
 
 	// Backward-compatible accessors for key states and components
@@ -82,6 +86,7 @@ export class AppCoordinator {
 			gasUrl: gasUrl
 		});
 		this.syncManager.attachEventListeners();
+		this.syncStatusController.bindSyncManager();
 
 		// 4. Register Service Worker if in browser
 		if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
@@ -103,10 +108,13 @@ export class AppCoordinator {
 			this.txEditController.setupEditTransactionModal();
 			this.summaryController.setupSummaryView();
 			this.settingsController.setupSettingsView();
+			this.maintenanceController.setup();
+			this.masterConflictController.setup();
 			this.masterController.setupMasterTabs();
 			this.syncStatusController.updateNetworkBadge();
 
 			this.setupDepartureGuard();
+			this.setupModalInteractionGuard();
 			this.setupSwipeNavigation();
 		}
 
@@ -128,6 +136,7 @@ export class AppCoordinator {
 		tabBtns.forEach(btn => {
 			btn.addEventListener('click', () => {
 				const targetId = btn.dataset.tab;
+				btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 				const analyticsTarget = btn.dataset.analyticsTarget;
 				tabBtns.forEach(b => b.classList.remove('active'));
 				panels.forEach(p => p.classList.remove('active'));
@@ -164,6 +173,11 @@ export class AppCoordinator {
 		window.addEventListener('popstate', () => {
 			if (this.allowNavigation) return;
 			if (restoring) { restoring = false; return; }
+			if (['modal-edit-tx', 'modal-master-conflict', 'modal-replacement-import'].some(id => document.getElementById(id)?.classList.contains('active'))) {
+				this.closeTopModal();
+				restoring = true; history.forward();
+				return;
+			}
 			if (history.state?.yoseGuard) return;
 			if (confirm('画面を閉じて前のページへ戻りますか？入力中の内容は失われます。')) {
 				this.allowNavigation = true;
@@ -178,6 +192,66 @@ export class AppCoordinator {
 		window.addEventListener('pageshow', event => {
 			if (event.persisted) { this.allowNavigation = false; this.authController.showLockScreen(); }
 		});
+	}
+
+	getTopModal() {
+		return Array.from(document.querySelectorAll('.modal-overlay.active')).at(-1) || null;
+	}
+
+	closeTopModal() {
+		const top = this.getTopModal();
+		if (top?.id === 'modal-edit-tx') return this.txEditController.requestClose();
+		if (top?.id === 'modal-master-conflict') { this.masterConflictController.cancel(); return true; }
+		/** @type {HTMLElement} */ (top?.querySelector('.close-btn'))?.click();
+		return true;
+	}
+
+	setupModalInteractionGuard() {
+		const overlays = Array.from(document.querySelectorAll('.modal-overlay'));
+		let locked = null;
+		let current = null;
+		const inertStates = new Map();
+		const focusBefore = new Map();
+		const update = () => {
+			const authVisible = !document.getElementById('auth-screen').classList.contains('hidden');
+			if (authVisible) for (const overlay of overlays) {
+				if (overlay.classList.contains('active')) overlay.classList.remove('active');
+			}
+			const top = this.getTopModal();
+			if (top === current) return;
+			const previous = current;
+			if (top && !locked) {
+				locked = { x: scrollX, y: scrollY, style: document.body.getAttribute('style'), focus: document.activeElement };
+				Object.assign(document.body.style, { position: 'fixed', top: `-${locked.y}px`, left: `-${locked.x}px`, width: '100%', overflow: 'hidden' });
+			}
+			if (top && !focusBefore.has(top)) focusBefore.set(top, document.activeElement);
+			for (const child of Array.from(document.body.children)) {
+				if (!(child instanceof HTMLElement)) continue;
+				if (!inertStates.has(child)) inertStates.set(child, child.inert);
+				child.inert = top ? child !== top : inertStates.get(child);
+			}
+			current = top;
+			if (!top && locked) {
+				if (locked.style === null) document.body.removeAttribute('style'); else document.body.setAttribute('style', locked.style);
+				window.scrollTo(locked.x, locked.y);
+				const target = authVisible ? document.getElementById('auth-pin-input') : locked.focus;
+				if (target instanceof HTMLElement && target.isConnected) target.focus({ preventScroll: true });
+				locked = null; inertStates.clear(); focusBefore.clear();
+			} else if (top) {
+				const restore = previous && !previous.classList.contains('active') ? focusBefore.get(previous) : null;
+				if (restore instanceof HTMLElement && top.contains(restore)) restore.focus({ preventScroll: true });
+				else /** @type {HTMLElement} */ (top.querySelector('button, input, select, textarea'))?.focus({ preventScroll: true });
+				if (previous && !previous.classList.contains('active')) focusBefore.delete(previous);
+			}
+		};
+		const observer = new MutationObserver(update);
+		for (const overlay of [...overlays, document.getElementById('auth-screen')]) observer.observe(overlay, { attributes: true, attributeFilter: ['class'] });
+		document.addEventListener('keydown', event => {
+			if (event.key !== 'Escape' || event.isComposing || !this.getTopModal()) return;
+			event.preventDefault();
+			this.closeTopModal();
+		});
+		update();
 	}
 
 	setupSwipeNavigation() {
@@ -232,12 +306,27 @@ export class AppCoordinator {
 
 	setupCollapsiblePanes() {
 		if (typeof document === 'undefined') return;
+		const interactive = 'button, a, input, select, textarea, label, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [tabindex]';
 		const cards = document.querySelectorAll('#tab-summary .card[id], #tab-settings .card[id]');
 		cards.forEach(card => {
 			const paneId = card.id;
 			const titleEl = card.querySelector('.card-title');
-			if (!paneId || !titleEl) return;
-			if (titleEl.querySelector('.card-collapse-btn')) return;
+			if (!paneId || !titleEl || titleEl.querySelector('.card-collapse-btn')) return;
+
+			const toggle = () => this.setPaneCollapsed(paneId, !card.classList.contains('collapsed'));
+			const titleButton = document.createElement('button');
+			titleButton.type = 'button';
+			titleButton.className = 'card-collapse-title';
+			titleButton.setAttribute('aria-expanded', 'true');
+			for (const node of Array.from(titleEl.childNodes)) {
+				if (node.nodeType === Node.TEXT_NODE || (node instanceof Element && !node.matches(interactive) && !node.querySelector(interactive))) titleButton.appendChild(node);
+			}
+			titleEl.prepend(titleButton);
+			titleEl.classList.add('collapsible-card-title');
+			titleButton.addEventListener('click', event => {
+				event.stopPropagation();
+				toggle();
+			});
 
 			const btn = document.createElement('button');
 			btn.type = 'button';
@@ -246,14 +335,15 @@ export class AppCoordinator {
 			btn.setAttribute('aria-expanded', 'true');
 			btn.title = 'ペインの表示・非表示を切り替え';
 			btn.textContent = '▼ 非表示';
-
-			btn.addEventListener('click', async (e) => {
-				e.stopPropagation();
-				const nextCollapsed = !card.classList.contains('collapsed');
-				await this.setPaneCollapsed(paneId, nextCollapsed);
+			btn.addEventListener('click', event => {
+				event.stopPropagation();
+				toggle();
 			});
-
 			titleEl.appendChild(btn);
+			titleEl.addEventListener('click', event => {
+				if (event.target instanceof Element && event.target.closest(interactive)) return;
+				toggle();
+			});
 		});
 	}
 
@@ -271,10 +361,9 @@ export class AppCoordinator {
 			const card = document.getElementById(paneId);
 			if (card) {
 				card.classList.toggle('collapsed', Boolean(isCollapsed));
-				const btn = card.querySelector('.card-collapse-btn');
-				if (btn) {
+				for (const btn of card.querySelectorAll('.card-collapse-btn, .card-collapse-title')) {
 					btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-					btn.textContent = isCollapsed ? '▶ 表示' : '▼ 非表示';
+					if (btn.classList.contains('card-collapse-btn')) btn.textContent = isCollapsed ? '▶ 表示' : '▼ 非表示';
 				}
 			}
 		}
@@ -286,10 +375,9 @@ export class AppCoordinator {
 			const card = document.getElementById(paneId);
 			if (card) {
 				card.classList.toggle('collapsed', Boolean(isCollapsed));
-				const btn = card.querySelector('.card-collapse-btn');
-				if (btn) {
+				for (const btn of card.querySelectorAll('.card-collapse-btn, .card-collapse-title')) {
 					btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-					btn.textContent = isCollapsed ? '▶ 表示' : '▼ 非表示';
+					if (btn.classList.contains('card-collapse-btn')) btn.textContent = isCollapsed ? '▶ 表示' : '▼ 非表示';
 				}
 			}
 		}
@@ -373,6 +461,7 @@ export class AppCoordinator {
 		await this.summaryController.renderSummary();
 		await this.settingsController.renderSettings();
 		await this.syncStatusController.updateSyncBadge();
+		await this.maintenanceController.refresh();
 	}
 
 	async initTheme() {

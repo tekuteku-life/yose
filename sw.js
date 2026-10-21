@@ -2,7 +2,7 @@
  * Yoseatsume Kakeibo - Service Worker (Offline Cache Control & Forced Update)
  */
 
-const CACHE_NAME = 'yose-cache-v1.8.0';
+const CACHE_NAME = 'yose-cache-v1.11.0';
 const ASSETS_TO_CACHE = [
 	'./',
 	'./index.html',
@@ -12,12 +12,15 @@ const ASSETS_TO_CACHE = [
 	'./js/db/defaults.js',
 	'./js/db/storage_engine.js',
 	'./js/db/backup_merger.js',
+	'./js/db/backup_replacement.js',
 	'./js/db/yose_db.js',
 	'./js/logic.js',
 	'./js/logic/date_utils.js',
 	'./js/logic/transaction_factory.js',
 	'./js/logic/aggregator.js',
 	'./js/logic/budget_engine.js',
+	'./js/logic/master_sync.js',
+	'./js/logic/master_maintenance.js',
 	'./js/crypto.js',
 	'./js/webauthn.js',
 	'./js/sync.js',
@@ -29,9 +32,13 @@ const ASSETS_TO_CACHE = [
 	'./js/ui/tx_list_controller.js',
 	'./js/ui/tx_edit_controller.js',
 	'./js/ui/tx_input_controller.js',
+	'./js/ui/tag_memo_input.js',
 	'./js/ui/summary_controller.js',
 	'./js/ui/master_controller.js',
 	'./js/ui/settings_controller.js',
+	'./js/ui/backup_import_controller.js',
+	'./js/ui/maintenance_controller.js',
+	'./js/ui/master_conflict_controller.js',
 	'./manifest.json'
 ];
 

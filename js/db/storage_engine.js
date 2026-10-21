@@ -206,6 +206,110 @@ export class StorageEngine {
 		});
 	}
 
+	async compareAndPutMaintenanceBatch(expectedMaster, expectedRecords, replacements) {
+		const equalRecords = records => canonicalJsonStringify([...records].sort((a, b) => a.id.localeCompare(b.id))) === canonicalJsonStringify([...expectedRecords].sort((a, b) => a.id.localeCompare(b.id)));
+		if (this.memoryDb) {
+			if (canonicalJsonStringify(this.memoryDb.stores.master_config.get('current')) !== canonicalJsonStringify(expectedMaster) || !equalRecords(this.memoryDb.stores.transactions.values())) return false;
+			for (const replacement of replacements) this.memoryDb.stores.transactions.set(replacement.id, JSON.parse(JSON.stringify(replacement)));
+			return true;
+		}
+		return new Promise((resolve, reject) => {
+			const transaction = this.db.transaction(['master_config', 'transactions'], 'readwrite');
+			let applied = false;
+			transaction.oncomplete = () => resolve(applied);
+			transaction.onerror = () => reject(transaction.error || new Error('Maintenance batch failed'));
+			transaction.onabort = () => reject(transaction.error || new Error('Maintenance batch aborted'));
+			const master = transaction.objectStore('master_config').get('current');
+			const records = transaction.objectStore('transactions').getAll();
+			let remaining = 2;
+			const commit = () => {
+				if (--remaining) return;
+				if (canonicalJsonStringify(master.result) !== canonicalJsonStringify(expectedMaster) || !equalRecords(records.result)) return;
+				const store = transaction.objectStore('transactions');
+				for (const replacement of replacements) store.put(replacement);
+				applied = true;
+			};
+			master.onsuccess = commit;
+			records.onsuccess = commit;
+		});
+	}
+
+
+	async compareAndPutRawBatch(storeName, entries) {
+		if (this.memoryDb) {
+			const store = this.memoryDb.stores[storeName];
+			if (entries.some(entry => canonicalJsonStringify(store.get(entry.key) ?? null) !== canonicalJsonStringify(entry.expected ?? null))) return false;
+			const replacements = entries.map(entry => ({ key: entry.key, value: structuredClone(entry.replacement) }));
+			for (const entry of replacements) store.set(entry.key, entry.value);
+			return true;
+		}
+		return new Promise((resolve, reject) => {
+			const transaction = this.db.transaction([storeName], 'readwrite');
+			const store = transaction.objectStore(storeName);
+			let remaining = entries.length, matches = true, changed = false;
+			transaction.oncomplete = () => resolve(changed);
+			transaction.onerror = () => reject(transaction.error || new Error('IndexedDB batch comparison failed'));
+			transaction.onabort = () => reject(transaction.error || new Error('IndexedDB batch comparison aborted'));
+			for (const entry of entries) {
+				const request = store.get(entry.key);
+				request.onsuccess = () => {
+					if (canonicalJsonStringify(request.result ?? null) !== canonicalJsonStringify(entry.expected ?? null)) matches = false;
+					if (--remaining || !matches) return;
+					for (const replacement of entries) {
+						if (store.keyPath) store.put(replacement.replacement);
+						else store.put(replacement.replacement, replacement.key);
+					}
+					changed = true;
+				};
+			}
+		});
+	}
+
+	async replaceImportBatch(expected, replacements, isSessionValid) {
+		const same = (a, b) => canonicalJsonStringify(a ?? null) === canonicalJsonStringify(b ?? null);
+		const sameTransactions = records => same([...records].sort((a, b) => a.id.localeCompare(b.id)), [...expected.transactions].sort((a, b) => a.id.localeCompare(b.id)));
+		const matches = (transactions, master, snapshot, pending, base) => sameTransactions(transactions) && same(master, expected.master) && same(snapshot, expected.snapshot) && same(pending, expected.pending) && same(base, expected.base);
+		const prepared = structuredClone(replacements);
+		if (this.memoryDb) {
+			const stores = this.memoryDb.stores;
+			if (!isSessionValid()) throw new Error('認証または同期状態が変更されました');
+			if (!matches(stores.transactions.values(), stores.master_config.get('current'), stores.summary_snapshot.get('current'), stores.master_config.get('pending_import'), stores.master_config.get('sync_base'))) return false;
+			if (prepared.transactions) stores.transactions = new Map(prepared.transactions.map(value => [value.id, value]));
+			if (Object.hasOwn(prepared, 'master')) stores.master_config.set('current', prepared.master);
+			if (Object.hasOwn(prepared, 'snapshot')) stores.summary_snapshot.set('current', prepared.snapshot);
+			if (Object.hasOwn(prepared, 'base')) stores.master_config.set('sync_base', prepared.base);
+			stores.master_config.set('pending_import', prepared.pending);
+			return true;
+		}
+		return new Promise((resolve, reject) => {
+			const transaction = this.db.transaction(['transactions', 'master_config', 'summary_snapshot'], 'readwrite');
+			let applied = false;
+			transaction.oncomplete = () => resolve(applied);
+			transaction.onerror = () => reject(transaction.error || new Error('完全インポートの保存に失敗しました'));
+			transaction.onabort = () => reject(transaction.error || new Error('完全インポートの保存を中止しました'));
+			const masterStore = transaction.objectStore('master_config');
+			const requests = [transaction.objectStore('transactions').getAll(), masterStore.get('current'), transaction.objectStore('summary_snapshot').get('current'), masterStore.get('pending_import'), masterStore.get('sync_base')];
+			let remaining = requests.length;
+			for (const request of requests) request.onsuccess = () => {
+				if (--remaining) return;
+				try {
+					if (!isSessionValid()) throw new Error('認証または同期状態が変更されました');
+					if (!matches(...requests.map(item => item.result))) return;
+					if (prepared.transactions) {
+						const store = transaction.objectStore('transactions');
+						store.clear();
+						for (const record of prepared.transactions) store.put(record);
+					}
+					if (Object.hasOwn(prepared, 'master')) masterStore.put(prepared.master, 'current');
+					if (Object.hasOwn(prepared, 'snapshot')) transaction.objectStore('summary_snapshot').put(prepared.snapshot, 'current');
+					if (Object.hasOwn(prepared, 'base')) masterStore.put(prepared.base, 'sync_base');
+					masterStore.put(prepared.pending, 'pending_import');
+					applied = true;
+				} catch (error) { transaction.abort(); reject(error); }
+			};
+		});
+	}
+
 	async deleteRaw(storeName, key) {
 		if (this.memoryDb) {
 			return await this.memoryDb.delete(storeName, key);

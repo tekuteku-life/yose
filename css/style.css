@@ -107,6 +107,9 @@ header {
 /* Navigation Tabs */
 .nav-tabs {
 	display: flex;
+	flex-wrap: nowrap;
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
 	background: var(--bg-card);
 	border-bottom: 1px solid var(--border);
 	position: sticky;
@@ -115,7 +118,8 @@ header {
 }
 
 .tab-btn {
-	flex: 1;
+	flex: 1 0 auto;
+	white-space: nowrap;
 	padding: 12px 8px;
 	background: none;
 	border: none;
@@ -357,6 +361,9 @@ header {
 /* Mode selector */
 .mode-tabs {
 	display: flex;
+	flex-wrap: nowrap;
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
 	background: var(--bg-hover);
 	padding: 4px;
 	border-radius: 8px;
@@ -365,7 +372,8 @@ header {
 }
 
 .mode-tab-btn {
-	flex: 1;
+	flex: 1 0 auto;
+	white-space: nowrap;
 	padding: 6px 8px;
 	border: none;
 	background: none;
@@ -407,7 +415,9 @@ header {
 	max-width: 500px;
 	width: 100%;
 	max-height: 90vh;
+	max-height: 90dvh;
 	overflow-y: auto;
+	overscroll-behavior-y: contain;
 	box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1);
 	padding: 20px;
 }
@@ -1065,6 +1075,29 @@ header {
 }
 
 /* Collapsible Card Panes (Requirement 3.37) */
+.collapsible-card-title {
+	cursor: pointer;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.card-collapse-title {
+	flex: 1 1 12em;
+	min-width: min(100%, 12em);
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.card-collapse-title:focus-visible {
+	outline: 2px solid var(--primary);
+	outline-offset: 4px;
+}
+
 .card-collapse-btn {
 	background: var(--bg-hover);
 	border: 1px solid var(--border);
@@ -1093,3 +1126,87 @@ header {
 
 
 
+
+.edit-save-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
+}
+
+.edit-delete-actions {
+	margin-top: 16px;
+	padding-top: 16px;
+	border-top: 1px solid var(--border);
+}
+
+.suggest-dropdown button.suggest-item {
+	width: 100%;
+	text-align: left;
+	background: var(--bg-card);
+	color: var(--text-main);
+	border: 0;
+	font: inherit;
+	cursor: pointer;
+}
+
+.badge-syncing::before {
+	content: '';
+	display: inline-block;
+	width: 0.8em;
+	height: 0.8em;
+	margin-right: 5px;
+	border: 2px solid currentColor;
+	border-right-color: transparent;
+	border-radius: 50%;
+	animation: sync-spin 0.8s linear infinite;
+}
+
+@keyframes sync-spin {
+	to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.badge-syncing::before { animation: none; }
+}
+
+.master-conflict-modal { max-width: 760px; }
+
+.master-conflict-bulk-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 16px 0;
+}
+
+.master-conflict-row {
+	padding: 16px 0;
+	border-top: 1px solid var(--border);
+	overflow-wrap: anywhere;
+}
+
+.master-conflict-comparison {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+	margin: 12px 0;
+}
+
+.master-conflict-value {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 0.9rem;
+	padding-top: 6px;
+}
+
+.master-conflict-value pre {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 0.8rem;
+}
+
+.master-conflict-error { color: var(--danger); }
+
+@media (max-width: 420px) {
+	.master-conflict-modal .edit-save-actions { flex-wrap: wrap; }
+}

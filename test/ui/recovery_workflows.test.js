@@ -126,10 +126,18 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 			await d.fill('#input-period-picker', source);
 			await d.waitFor('document.querySelector("#month-tx-list [data-id=double_move]") !== null');
 			await d.click('#month-tx-list .tx-item[data-id="double_move"]');
+			await d.waitFor('document.getElementById("modal-edit-tx").classList.contains("active") && document.getElementById("edit-tx-id").value === "double_move"');
 			await d.fill('#edit-tx-date', destination);
 			const before = d.requests.length;
 			await submit(d, '#edit-tx-form');
-			await d.waitFor(async () => !await d.evaluate('window.__yose_app.syncManager.isSyncing') && d.requests.length > before);
+			await d.waitFor(async () => {
+				const submitted = d.requests.slice(before).some(request => {
+					if (request.url !== gasUrl || !request.body) return false;
+					const envelope = JSON.parse(request.body);
+					return envelope.action === 'retroactive_update' && envelope.payload.transaction.id === 'double_move' && envelope.payload.transaction.date === destination;
+				});
+				return submitted && !await d.evaluate('window.__yose_app.syncManager.isSyncing');
+			});
 			assert.equal((await records(d))[0].previous_target_month, '2026-09');
 		}
 		d.responses.set('/recovery-gas', { json: { success: true } });

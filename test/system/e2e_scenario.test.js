@@ -59,7 +59,7 @@ describe('System Test - Yoseatsume Kakeibo End-to-End Complete Scenario', () => 
 
 		// Initial Master Config sync to GAS
 		const masterConfig = await db.getMasterConfig();
-		gas.handleAction('update_master', { master_config: masterConfig });
+		assert.equal(gas.handleAction('update_master', { master_config: masterConfig, base_version: JSON.stringify({ schema_version: 2 }) }).success, true);
 
 		// 4. Setup Client Sync Manager
 		const directGasFetch = async (url, options) => {
@@ -283,8 +283,8 @@ describe('System Test - Yoseatsume Kakeibo End-to-End Complete Scenario', () => 
 		curSnapshot.external_assets = extAssets;
 		await db.saveSnapshot(curSnapshot);
 
-		const masterSyncRes = await syncManager.sendAction('update_master', { master_config: updatedMaster });
-		assert.equal(masterSyncRes.success, true);
+		const masterSyncRes = await syncManager.syncMaster();
+		assert.equal(masterSyncRes.status, 'synced');
 
 		const assetSyncRes = await syncManager.sendAction('update_external_assets', { external_assets: extAssets });
 		assert.equal(assetSyncRes.success, true);
@@ -354,9 +354,8 @@ describe('System Test - Yoseatsume Kakeibo End-to-End Complete Scenario', () => 
 		assert.equal(savedBudget.category_budgets.cat_housing, 1000000);
 
 		// Sync updated master config containing annual_budgets to GAS
-		const masterWithBudget = await db.getMasterConfig();
-		const gasBudgetSyncRes = await syncManager.sendAction('update_master', { master_config: masterWithBudget });
-		assert.equal(gasBudgetSyncRes.success, true);
+		const gasBudgetSyncRes = await syncManager.syncMaster();
+		assert.equal(gasBudgetSyncRes.status, 'synced');
 
 		// Fetch remote state from GAS and verify annual_budgets and category_budgets integrity
 		const remoteState = await syncManager.fetchRemoteState();

@@ -68,7 +68,7 @@ Google ドライブ全体のフルアクセス権限（`auth/drive` や `auth/sp
 
 GASプロジェクトの迅速な立ち上げと構成自動化のため、以下の構成を採用する。
 
-* **プロジェクト設定ファイル (`gas/appsscript.json`)**: V8ランタイム、JSTタイムゾーン（`Asia/Tokyo`）、Web Appとしての実行権限（`access: ANYONE`, `executeAs: USER_DEPLOYING`）、および機密ブロックが発生しない限定スコープ（`oauthScopes: ["https://www.googleapis.com/auth/spreadsheets.currentonly"]`）を宣言。
+* **プロジェクト設定ファイル (`gas/appsscript.json`)**: V8ランタイム、JSTタイムゾーン（`Asia/Tokyo`）、Web Appとしての実行権限（`access: ANYONE_ANONYMOUS`, `executeAs: USER_DEPLOYING`）、および機密ブロックが発生しない限定スコープ（`oauthScopes: ["https://www.googleapis.com/auth/spreadsheets.currentonly"]`）を宣言。
 * **初期化ヘルパー (`initialSetup`)**: GASエディタ上で初回権限承認とデータストレージ初期化を安全かつワンクリックで行う関数を提供。
 * **一発立ち上げスクリプト (`scripts/setup_gas.sh` / `scripts/setup_gas.js`)**: Google Clasp (`@google/clasp`) によるプロジェクト自動作成・プッシュ・Web Appデプロイ・バージョン発行・スクリプトプロパティ設定ガイドを一括実行。
 * **セットアップガイド (`README.md`)**: スプレッドシート連携によるブロック警告ゼロの立ち上げ手順、およびトラブルシューティングを明記。
@@ -236,10 +236,9 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * **月別 (`monthly`)**: 選択年の12ヶ月の推移表、年間収支・貯蓄率、月次バーチャート。
    * **年別 (`yearly`)**: 過去アーカイブから当期までの年次推移表、累計純貯蓄、長期貯蓄率グラフ。
 
-### 3.11 設定マスタのGAS手動同期要件
+### 3.11 設定マスタのGAS統合同期要件
 
-1. **手動プッシュ機能**
-   * 設定画面の「設定マスタをGASへ送信 (`update_master`)」ボタンにより、現在のローカルマスタ（口座・費目・定期ルール・祝日）および外部資産評価額をGAS側へ即座に手動反映できる。
+共有マスタは通常の差分同期で双方向に統合する。ローカル保存後に即座に画面へ反映し、背後で同期する。独立した強制送信・全取得のUIは設けない。競合・暗号化基点・端末固有設定の扱いは3.44に従う。
 
 ### 3.12 取引種別の統合と入力モードの調和
 
@@ -302,6 +301,8 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 ### 3.15 バックアップJSONインポート時の非破壊・差分マージ（ORマージ）要件
 
+本節は既定の差分マージ方式を定義する。明示選択による完全インポートは3.45に従う。
+
 1. **課題と設計方針**
    * 従来のバックアップJSON復元は、既存のローカルマスタ設定やスナップショットを一括上書き（Overwrite）していたため、インポートファイルに含まれないローカル側の独自費目・追加口座・祝日設定が消失する問題があった。
    * これを全面的に改善し、**ローカルデータを消去せず、インポートJSONとの差分のみを取り込んで重複なく統合する非破壊ORマージ方式（Deduplicated Union Merge）** を採用する。
@@ -346,8 +347,8 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 ### 3.18 タグのチップUIおよび集計・検索・グラフ表示要件
 
-1. **入力時のチップUI & 候補サジェスト**
-   * 過去の入力履歴（DB内の全アクティブ取引）からユニークなタグ文字列を抽出して `<datalist id="tags-history-list">` に供給。
+1. **新規・編集時のチップUI & 候補サジェスト**
+   * 過去の入力履歴（DB内の全アクティブ取引）からユニークなタグ文字列を抽出し、共通部品 `TagMemoInput` の候補リストへ供給する。
    * 入力ボックス（`#input-tags`）で文字入力中にサジェスト表示。Enterキー、カンマ（`,`）、またはサジェスト選択によりタグを確定し、確定したタグは入力中のテキストとは視覚的に分離された独立のチップ（タグバッジ、削除ボタン `×` 付き）として描画。
    * 各チップの `×` ボタン押下、または入力欄が空の状態でBackspaceキーを押下することで末尾のチップを安全に削除可能。
 2. **集計・グラフ画面（`#tab-summary`）でのタグ分析**
@@ -359,7 +360,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 1. **過去入力履歴からのインクリメンタルサジェスチョン**
    * 過去の取引履歴からユニークなメモ文字列、およびそのメモが最後に使用された際の「計上大項目（`category_id`）」「計中項目（`subcategory_id`）」のマッピングを抽出・保持。
-   * メモ入力欄（`#input-memo`）に `<datalist id="memo-history-list">` をバインドし、入力時に過去のメモ候補をドロップダウン表示。
+   * 新規・編集のメモ入力欄に共通部品の候補リストを結び付け、入力時に過去のメモ候補を表示する。候補選択では入力途中の全文を置換する。
 2. **候補選択時の費目・中項目の自動補完**
    * ユーザーがサジェスト候補を選択（または入力値が既存履歴メモと完全一致）した際、自動的に紐づく計上大項目（`#select-category`）および中項目（`#select-subcategory`）を選択状態へと連動更新。入力の手間を大幅に削減。
 
@@ -470,7 +471,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * 設定タブのバックアップ領域を「📦 データエクスポート・バックアップ & インポート」カードへと拡張。
    * 「💾 各種データJSONダウンロード」ボタン（`#btn-open-export-modal`）を配置し、押下時にモーダル（`#modal-export-json`）を表示。
    * モーダル内には、全データ一括、取引明細、マスタ設定、年間予算、残高スナップショットの各説明文と、ワンクリックダウンロードボタン（`#btn-export-full`, `#btn-export-transactions`, `#btn-export-master`, `#btn-export-budgets`, `#btn-export-snapshot`）を整然と配置。
-   * 「📂 JSONインポート (自動判別・差分ORマージ)」ボタンから、上記のどのJSONファイルを指定してもシームレスに判別・マージが行われる統一的UXを実現。
+   * 取込方式の既定を差分マージとし、「JSONファイルを選択してインポート」から上記の各JSON種別を自動判別する。完全インポートを明示選択した場合は3.45の確認と置換を行う。
 
 ### 3.27 費目別推移・内訳のドーナツグラフ可視化要件
 
@@ -745,7 +746,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * 手動同期は単一の排他区間で取得・マージ・アップロード・再取得を実行する。GASのfetch_stateへ全月のアーカイブ明細と取得済み月一覧を追加し、締め済み明細・削除も別端末へ反映する。0件のローカル差分でもダウンロードする。
    * 同一IDはupdated_atが新しい版を採用し、同時刻ではローカル未同期版を優先する。取得待機中や暗号化待機中の再編集はDB内比較・置換で保護する。サーバーも古い送信で新しい版を上書きしない。別IDの変更と削除は双方を保持する。同期結果は送信件数・受信件数・残る未同期件数を区別する。
    * 再締め承認の付与も、確認対象の全内容と一致する版だけへDB内比較・置換で行う。確認待機中・承認保存用暗号化中に変わった明細へ承認を流用せず、最新版を未同期として保持して再確認を求める。直接の遡及送信もサーバーの競合版を同じマージ処理へ渡し、拒否された版を同期済みにしない。
-   * マスタの明示送受信は既存の設定操作を維持する。明細の手動同期では端末固有の表示設定・認証情報をリモートマスタで上書きしない。スナップショットは取得後に更新する。通信失敗時は保存済みのローカル変更と未同期状態を保持し、処理段階を通知する。
+   * 共有マスタの送受信も通常同期へ統合する（詳細は3.44）。端末固有の表示設定・認証情報をリモートマスタで上書きしない。スナップショットは取得後に更新する。通信失敗時は保存済みのローカル変更と未同期状態を保持し、処理段階を通知する。
 7. **未確定のある月締め**
    * 対象月の予定件数を表示して確定・締めの承認を求め、取消時はDB・GASを変更しない。金額未入力は先に補完するよう通知する。通常の予定はサーバーで確認付きの確定・アーカイブ保存を行い、成功後にローカルへ反映する。通信失敗でローカルだけ確定しない。
    * 承認した予定のIDと、ローカル同期状態等を除いた全内容の正規化文字列を `approved_planned` に渡す。GASの排他区間で現在の予定集合・各版と完全一致するか検証し、追加・変更・削除があれば書き込み前に拒否して再取得・再確認を要求する。GASも金額未入力を拒否する。既存月の再締めは当月以降の残高を連鎖再計算し、last_closed_monthを古い月へ戻さない。
@@ -757,6 +758,52 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 ---
 
+### 3.44 モバイル編集・アーカイブ保守・マスタ統合同期
+
+本節は3.11および3.43のマスタ専用送受信の記述を置換する。
+
+- タブ欄は1行固定で横スクロール可能とし、文書全体の横溢れを発生させない。タブ欄のスクロールと画面スワイプを区別する。
+- 新規・編集のタグ入力は共通のチップUIとする。候補選択では入力途中の語を破棄し、候補だけを確定する。メモ候補も全文置換する。IME変換確定をチップ確定と混同しない。
+- 編集の削除操作は別段へ分離し、キャンセル左・保存右とする。編集の戻る・閉じる・Escapeは共通の変更破棄確認を使用し、変更なしなら確認なしで閉じる。離脱確認との二重表示と履歴の累積を防止する。
+- モーダル表示中は背景をinertとしスクロール位置を固定する。最前面だけを操作可能とし、内部スクロールの端で背景へ連鎖させない。ネストした電卓を閉じても編集と背景の保護を維持する。
+- 設定内の保守機能で、アーカイブされた口座・費目・中項目を参照する取得済み明細を一覧表示し、有効な設定へ一括移行する。削除明細は除外し、計上・実態分類、支払・振替先口座を検出する。親費目がアーカイブならその子も対象とする。取得範囲を表示し、未取得過去の網羅を保証しない。通常の差分同期で全アーカイブを取得してから保守する。
+- 費目移行は同じ収支種別の有効費目と、その配下の有効中項目（未指定可）を選択する。口座移行は同種別・同じ資産区分の有効口座へ限定し、振替元先の同一化を拒否する。中項目は同じ収支種別の有効費目配下へ移す。移行する参照だけを変更し、明細ID・金額・タグ・メモ・日付・関連グループを保持する。口座の初期残高や定期ルールは変更対象外である。
+- 件数と移行先を確認後、影響する締め月の再締め承認を行う。確認前の全対象内容とマスタをDB書込時に比較し、変化があれば全件無変更で再確認する。暗号化準備後の比較と書込は単一IndexedDBトランザクションとする。保存は一括で未同期とし、既存の遡及更新により後続残高を再計算する。通信失敗でもローカル変更を保持する。
+- マスタ変更はローカル保存と描画を先に完了し、通信は背後で行う。手動差分同期に共有マスタの送受信を統合し、専用の送信・取得ボタンを削除する。前回共有版を基点に3者比較し、別項目の変更を統合する。同項目衝突は利用者が確認して解決し、未確認の上書きを禁止する。端末固有の表示設定・認証情報は共有しない。前回共有版は暗号化して保存する。サーバーで基点版を比較し、待機中の再編集を送信済み扱いしない。
+- 同期状態は同期中・未同期・同期済み・失敗を区別し、全通信経路で処理開始と終了を通知する。到達失敗・HTTPエラー・非JSON応答・タイムアウトを区別する。到達失敗では接続・URL・公開権限の確認を案内し、元のエラー詳細も表示する。応答を読めないno-corsを使用せず、本番未確認の通信失敗原因を断定しない。
+
+
+### 3.44.1 共有マスタの背景同期補足
+
+共有マスタの背景保存には署名済み `fetch_master` を使用し、明細アーカイブを取得せず共有マスタのみ受信する。手動差分同期とonline復帰では `fetch_state` から始まる統合双方向同期を使用する。本文受信完了まで30秒のtimeoutを適用し、サーバー側の処理成否が不明な場合は自動再送せず次回の再取得で調停する。ロック解除によるSyncManager再生成時は同期状態の旧購読を解除して再購読する。
+
+
+### 3.44.2 設定競合の確認取消と確認待ち
+
+手動同期で競合した場合は比較モーダルを表示し、各項目の手元・サーバー値から採用側を選ぶ。全項目選択後に明示適用する。全件手元・全件サーバーの補助操作は選択だけを設定する。非競合合成は維持し、削除・未設定・null・空値は区別する。参照整合性に問題がある場合は設定名と項目を画面内に表示し、選択を修正できるようにする。配列IDを含む構造化経路で適用し、任意IDのドットやHTMLを実行・誤解釈しない。
+
+確認中の共有ローカル値変更、認証ロック、サーバーの版変更を検査し、古い選択を流用しない。×・取消・Escape・戻る・認証ロックは確認待機を終了し、両設定を保持する。UIは競合IDの選択辞書を返し、同期層が内部Mapへ変換して採用側と選択集合を検証する。基点推定や自動マージ規則は変更しない。
+
+設定競合の確認を取り消した場合は `master_conflict_cancelled`、自動同期で確認できない場合は `master_conflict` として返す。通信失敗とは区別し、`lastError` を設定しない。競合項目は専用状態へ保持し、ヘッダーに「設定の確認待ち」と表示する。明細だけの同期成功では解除せず、共有マスタの調停・共有基点保存が成功したときに解除する。
+
+取消時は今回の設定競合の上書きを行わず、手元とサーバーの設定を保持する。確認前の明細受信や、再受信前の設定・明細送信が完了している場合は巻き戻さない。同期結果はその時点までの送受信件数と残未同期件数を保持し、画面も同期全体を取り消したとは表示しない。実通信・署名・サーバー版比較の失敗は従来どおり失敗として通知する。初回共有基点の推定とマージ規則は変更しない。
+
+### 3.45 セクション操作・編集分類・完全インポート
+
+カードはタイトル文字とタイトルバーの余白から開閉できるものとする。内包するボタン・リンク・入力・選択・ラベル等の操作は開閉と分離し、1回の操作で二重反転しない。キーボードと開閉状態の読み上げ、既存の状態保存を維持する。狭い画面ではタイトルバーを折り返し、見出しに約12文字分（コンテナ幅が上限）の幅を確保して1文字ずつの縦積みを防ぐ。
+
+明細編集では計上・実態の大項目と中項目がともに一致する場合、入力画面と同じ「実態分類を計上分類と同じにする」を初期ONとし、実態欄を畳む。ON中の計上変更は保存時も実態に反映する。一致しない明細はOFFとし、独立した値を維持する。未指定値・振替・一括編集・変更破棄確認の扱いを既存編集と整合させる。
+
+インポートの既定は従来の非破壊差分マージである。追加の完全インポートではファイルの種別（全データ、明細、マスタ、年間予算、スナップショット）に対応する範囲を丸ごと置き換え、同一更新日時の手編集も採用し、対象範囲内のファイルにない値を削除する。全体ファイルと型・ID・参照の整合性を検査してから、対象・件数・削除範囲・次回同期でサーバーの同種データも置き換える旨を表示し、マジックワード「完全インポート」の完全一致入力を最終確認とする。取消・誤入力・戻る・ロックでは書き込まない。
+
+ローカルの3業務ストアと暗号化した送信待ち完全取込outboxを単一トランザクションで更新する。確認開始時からの原本変更、暗号鍵変更、同期中、既存outbox保留中の通常取込は中止し、部分取込を行わない。認証鍵・接続先・同期共有基点は保持する。取込payloadは同一取込IDの中で不変とし、ACKで後続の手元編集を上書きしない。ACK成功時にのみ、取込対象の共有マスタ基点をサーバーの受理版へ進める。
+
+次回の各同期入口では通常受信・送信に先行して完全取込outboxを送信する。初回取得したサーバー版をoutboxへ永続化し、署名付き `replace_import` で版比較して対象種別だけを置き換える。全データ・明細の対象にはサーバー上の全アーカイブも含む。サーバーの多ファイル更新は永続ジャーナル等により中断後も旧版と新版が混在して参照されない方式とする。同じ取込IDの再送は再適用せず結果を回収し、同ID異payloadは拒否する。版競合時に基点を自動更新せず、設定で再びマジックワードを入力して再承認したときだけ最新状態に対して試行する。保留状態は設定画面と同期表示で確認できる。送信不能な保留を修正ファイルでやり直す場合は、専用チェックとmagic確認により、同種または全データのファイルだけを新IDで置き換える。旧保留を含む原本比較を行い、旧要求が適用済でもロールバックとは扱わない。
+
+サーバーで省略された既存明細は削除通知として保持して他端末にも伝播する。通常の一覧には表示しない。明示取込時だけ、サーバー・ファイル・現在時刻の最大値を超える確定日時を取込明細と削除通知へ付与する。ACKは一致する現行明細をその版で同期済みにし、同IDの後続編集は内容を保持してさらに新しい未同期版へ進める。通常の差分マージ規則は変更しない。
+
+取込スナップショットも完全置換の対象である。以後の通常の月締め・締め済み明細修正では、通常仕様どおりサーバーが残高を再計算する。完全取込の最終確認はデータ置換の承認であり、既存の再月締め確認を恒久的に無効化しない。
+
 ## 4. 同期トリガー・通信・セキュリティ要件
 
 ### 4.1 ローカルからGoogle Driveへの同期トリガー
@@ -764,13 +811,17 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 各レコードに `sync_status`（`"unsynced"` / `"synced"`）を持たせ、以下のタイミングで差分同期（`push_diff`）を実行する。
 
 1. **アプリ非表示・バックグラウンド移行時 (`visibilitychange`)**: 未同期データがある場合、`fetch(..., { keepalive: true })` で非同期送信する。
-2. **オンライン復帰時 (`online`)**: オフライン環境で入力された未同期データを自動送信する。
+2. **オンライン復帰時 (`online`)**: 明細と共有マスタを単一の双方向同期として送受信する。
 3. **手動同期ボタン押下時**: 取得・マージ・アップロード・再取得の双方向同期を実行する。
 4. **月締め実行時**: 未同期明細を先行送信し、予定の集合・版承認を検証して月締めを実行する。
 
 ### 4.2 CORS回避プロトコル
 
-* GitHub PagesからGAS Web App（アクセス権限：「全員」）へのPOSTリクエストにおいて、ブラウザのプリフライトリクエスト（OPTIONS）によるCORSエラーを回避するため、HTTPヘッダには `Content-Type: text/plain;charset=utf-8` を指定してJSON文字列を送信する。
+* GitHub PagesからGAS Web App（アクセス権限はGoogleログイン不要の「全員」、マニフェストは `ANYONE_ANONYMOUS`）へのPOSTリクエストにおいて、ブラウザのプリフライトリクエスト（OPTIONS）によるCORSエラーを回避するため、HTTPヘッダには `Content-Type: text/plain;charset=utf-8` を指定してJSON文字列を送信する。
+
+* 通信は `credentials: 'omit'` と `redirect: 'follow'` を使用する。GoogleログインCookieを必要とする `ANYONE` 公開は、この通信契約と整合しない。実行主体は `USER_DEPLOYING`、データ操作の認証は既存のEd25519署名・時刻検証・初回公開鍵write-onceとし、Googleログインへ依存しない。`doGet` は接続確認用の固定ステータスだけを返し、明細・マスタ・鍵を返さない。
+* ソースのマニフェスト変更だけでは公開済みデプロイの権限変更を保証しない。リリース時に実行ユーザー・Googleログイン不要のアクセス設定を確認して再デプロイし、シークレットタブで `/exec` の固定ステータス応答を確認する。このGET確認だけで署名付きPOST・CORSの正常性まで保証しない。
+* 設定値の意味は[Google公式のWebappマニフェスト仕様](https://developers.google.com/apps-script/manifest/web-app-api-executable)に従う。Androidの受信段階のfetch失敗は観測事象であり、本番権限・通信ログなしに根本原因を断定しない。
 
 ### 4.3 WebAuthn生体認証・全データAES-GCM暗号化・Ed25519署名認証
 
@@ -807,9 +858,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 5. **設定画面におけるGAS連携UIの整理・分離**
 * **初回設定領域のトグル化**: 初回セットアップ完了後（URL登録・公開鍵設定済み）、URL入力欄等の初回用UIは非表示とし、「接続設定を変更」ボタンによるトグル展開とする。
-* **通常同期と手動メンテナンスの視覚的境界分離**:
-  * **通常同期**: 日常利用する「未同期差分の同期 (`push_diff`)」をプライマリボタンとして配置。
-  * **手動メンテナンス操作**: 「設定マスタのGAS強制上書き送信 (`update_master`)」および「スプレッドシートからの全データ強制再取得 (`fetch_remote`)」は、境界線（Visual Divider）および注意書きで明確に区画を分け、誤操作を防止する。
+* **通常同期への統合**: 明細と共有マスタを通常の差分同期で送受信する。強制上書き送信・全取得の専用操作は廃止し、同期中の状態を共通表示する。競合確認・通信失敗時の保持は3.44に従う。
 
 6. **署名検証と排他制御**
 * **署名検証**: `{ action, timestamp, payload }` をEd25519署名し、GAS側でタイムスタンプ乖離（±5分以内）と署名の有効性を検証。
@@ -1758,7 +1807,7 @@ flowchart TD
 | **3.8** | 日本の祝日一括インポート（内閣府2014〜2028・CSV・API） | `js/logic.js`, `js/app.js`, `index.html` | - | `master_config` (`holidays`) | `test/unit/logic.test.js` |
 | **3.9** | ポイント払い連動（専用口座/相殺インカム） | `js/logic.js`, `js/app.js`, `index.html` | `gas/Code.gs` | `pending_diffs` | `test/unit/logic.test.js`, `test/integration/recurrent_and_amortization.test.js` |
 | **3.10** | 多粒度集計（日・月・年）＆純資産・投資資産推移・KPI | `js/logic.js`, `js/app.js`, `index.html` | `gas/Code.gs` | `summary_snapshot` | `test/unit/logic.test.js` |
-| **3.11** | 設定マスタのGAS手動同期 | `js/sync.js`, `js/app.js`, `index.html` | `gas/Code.gs` (`update_master`) | `master_config` | `test/unit/sync.test.js`, `test/unit/gas.test.js` |
+| **3.11 / 3.44** | 設定マスタの双方向統合同期・保守 | `js/sync.js`, `js/logic/master_sync.js`, `js/ui/maintenance_controller.js` | `gas/Code.gs` (`fetch_state`, `update_master`) | `master_config`, 暗号化同期基点 | `test/unit/master_sync.test.js`, `test/unit/master_sync_gas.test.js`, `test/unit/master_maintenance.test.js`, `test/ui/master_maintenance.test.js` |
 | **3.12** | 取引種別の統合と入力モード双方向連動 | `js/app.js`, `index.html` | - | - | `test/system/e2e_scenario.test.js` |
 | **3.13** | PWA強制バージョンチェック＆自動・手動更新（キャッシュパージ） | `sw.js`, `version.json`, `js/app.js`, `index.html` | - | - | `test/unit/version.test.js` |
 | **3.14** | 年間予算・目標貯蓄率・貯蓄額・費目別予算設定＆消化進捗可視化（前年丸め試算・プログレス＆グラフ） | `js/logic.js`, `js/app.js`, `js/db.js`, `index.html` | `gas/Code.gs` (`update_master`) | `master_config` (`annual_budgets`) | `test/unit/logic.test.js`, `test/unit/master_management.test.js`, `test/unit/db.test.js` |
@@ -1789,12 +1838,14 @@ flowchart TD
 | **3.39** | ヘッドレスChrome UIテストによる品質保証とUI/UX・安全性不具合の恒久的修正（Chartガード、中項目参照、XSS防御、アーカイブ非表示、年別集計分離、口座ドリルダウン、PIN表示） | `js/ui/chart_controller.js`, `js/ui/master_controller.js`, `js/ui/summary_controller.js`, `js/ui/settings_controller.js`, `js/ui/auth_controller.js` | - | `master_config` | `test/ui/headless_ui.test.js`, `test/unit/master_management.test.js` |
 | **3.40** | 入力サジェストUI制御（ネイティブdatalist撤廃とインラインドロップダウン）・クレカ引落口座連携表示・集計粒度別明細表示およびページネーション | `js/ui/tx_input_controller.js`, `js/ui/master_controller.js`, `js/ui/tx_list_controller.js`, `index.html`, `css/style.css`, `js/db/defaults.js` | - | `master_config` (`debit_account_id`), `pending_diffs` | `test/ui/headless_ui.test.js`, `test/unit/master_management.test.js` |
 | **3.41** | 静的型チェック自動検証（check:types）および集計・設定全機能網羅UIテスト拡充（予定トグル・軸切替・年次予算・テーマ） | `package.json`, `jsconfig.json`, `types/ambient.d.ts`, `js/logic/aggregator.js`, `js/ui/tx_list_controller.js`, `js/ui/settings_controller.js`, `js/ui/summary_controller.js` | - | `master_config` (`annual_budgets`) | `npm run check:types`, `test/ui/headless_ui.test.js` |
+| **3.44.2** | 設定競合の比較・項目別解消と取消 | `js/logic/master_sync.js`, `js/ui/master_conflict_controller.js`, `js/ui/sync_status_controller.js`, `js/sync.js` | 既存 `update_master` の版検査を維持 | 暗号化共有マスタ・共有基点 | `test/unit/master_conflict_resolution.test.js`, `test/integration/master_conflict_outcomes.test.js`, `test/ui/master_conflict_resolution.test.js` |
+| **3.45** | タイトルバー開閉・編集分類共通化・種別別完全取込とサーバー反映 | `js/ui/coordinator.js`, `js/ui/tx_edit_controller.js`, `js/ui/backup_import_controller.js`, `js/db/backup_replacement.js`, `js/db/yose_db.js`, `js/sync.js`, `gas/Code.gs` | `replace_import` | 業務3ストア・暗号化outbox・サーバー復旧journal/receipt | `test/ui/section_and_edit_categories.test.js`, `test/ui/replacement_import.test.js`, `test/integration/replacement_import.test.js`, `test/integration/full_import_sync.test.js`, `test/system/full_import_recovery_scenario.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |
 | **4.4** | 永続user handleによる通常Passkey登録とPIN保護 | `js/webauthn.js`, `js/ui/auth_controller.js`, `js/ui/settings_controller.js`, `index.html` | - | `security_keys` (`webauthn_credential`, `webauthn_user_id`, `master_keys_package`) | `test/unit/passkey_standard.test.js`, `test/ui/daily_usability.test.js` |
 | **4.5** | 設定画面におけるセキュリティ・鍵管理操作の明確なグルーピングと視覚的分離 | `js/app.js`, `index.html` | - | `security_keys` | `test/unit/crypto.test.js` |
-| **4.6** | モジュラーUIアーキテクチャ（AppCoordinator調停者 & 9コンポーネントコントローラー分割） | `js/app.js`, `js/ui/*.js`, `sw.js` | - | - | `test/system/e2e_scenario.test.js`, `npm test` |
+| **4.6** | モジュラーUIアーキテクチャ（AppCoordinator調停者 & 10コンポーネントコントローラー分割） | `js/app.js`, `js/ui/*.js`, `sw.js` | - | - | `test/system/e2e_scenario.test.js`, `npm test` |
 | **4.7** | コアエンジン・モジュラーアーキテクチャ（`js/db/` ストレージ層 & `js/logic/` 計算エンジン分割） | `js/db.js`, `js/db/*.js`, `js/logic.js`, `js/logic/*.js`, `sw.js` | - | - | `test/unit/db.test.js`, `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
 | **4.8** | 旧PRF共有バンドルからPIN併用方式への移行 | `js/ui/auth_controller.js`, `js/db/backup_merger.js` | - | 旧vault・bundleを復号確認後に削除する | `test/ui/daily_usability_edges.test.js`, `test/unit/db.test.js` |
 

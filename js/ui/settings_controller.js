@@ -3,6 +3,8 @@
  * Manages Settings tab, Key Management (3 Subcards), Annual Budgets, Backup Import/Export, and PWA Update.
  */
 
+import { BackupImportController } from './backup_import_controller.js';
+
 import {
 	formatDate,
 	aggregateMonthlySummaries,
@@ -26,6 +28,7 @@ import {
 export class SettingsController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
+		this.backupImportController = new BackupImportController(coordinator);
 	}
 
 	get db() {
@@ -41,6 +44,7 @@ export class SettingsController {
 	}
 
 	setupSettingsView() {
+		this.backupImportController.setup();
 		// Generate new key
 		document.getElementById('btn-generate-key')?.addEventListener('click', async () => {
 			if (confirm('新しいEd25519鍵ペアを生成しますか？\n（GAS側の USER_PUBLIC_KEYS の更新が必要になります）')) {
@@ -105,33 +109,6 @@ export class SettingsController {
 		// Manual sync button
 		document.getElementById('btn-manual-sync')?.addEventListener('click', async () => {
 			await this.coordinator.syncStatusController.handleManualSync();
-		});
-
-		// Sync Master button
-		document.getElementById('btn-sync-master')?.addEventListener('click', async () => {
-			try {
-				await this.authController.ensureKeyUnlocked();
-				if (!this.syncManager?.gasUrl) {
-					alert('GAS Web App URL が設定されていません');
-					return;
-				}
-				const config = await this.db.getMasterConfig();
-				await this.syncManager.sendAction('update_master', { master_config: config });
-				alert('設定マスタをGASへ送信しました！');
-			} catch (err) {
-				alert(`マスタ同期エラー: ${err.message}`);
-			}
-		});
-
-		// Fetch remote state
-		document.getElementById('btn-fetch-remote')?.addEventListener('click', async () => {
-			try {
-				await this.syncManager.fetchRemoteState();
-				alert('リモート最新状態の取得が完了しました');
-				await this.coordinator.refreshAllViews();
-			} catch (err) {
-				alert(`リモート状態取得エラー: ${err.message}`);
-			}
 		});
 
 		// Helper function to trigger download of JSON
@@ -207,6 +184,10 @@ export class SettingsController {
 					data = JSON.parse(text);
 				} catch (parseErr) {
 					throw new Error('不正なJSONファイル形式です: ' + parseErr.message);
+				}
+				if (document.getElementById('select-import-mode').value === 'replace') {
+					await this.backupImportController.preview(data);
+					return;
 				}
 				const res = await this.db.importFullData(data);
 				const s = res?.stats || {};
@@ -422,6 +403,7 @@ export class SettingsController {
 			});
 			alert(`${year}年の年間予算・費目別目標を保存しました！`);
 			await this.coordinator.refreshAllViews();
+			void this.syncManager.queueMasterSync();
 		});
 
 		// View / Edit Master JSON
@@ -443,9 +425,8 @@ export class SettingsController {
 		btnSaveMaster?.addEventListener('click', async () => {
 			try {
 				const config = JSON.parse(txtMaster.value);
-				await this.db.saveMasterConfig(config);
+				await this.coordinator.masterController.saveMasterConfigAndSync(config);
 				alert('マスタ設定を保存しました');
-				await this.coordinator.refreshAllViews();
 			} catch (err) {
 				alert(`JSONフォーマットエラー: ${err.message}`);
 			}
@@ -565,7 +546,12 @@ export class SettingsController {
 		});
 	}
 
+	async renderPendingImport() {
+		await this.backupImportController.renderPending();
+	}
+
 	async renderSettings() {
+		await this.renderPendingImport();
 		this.authController.updateKeyDisplay();
 		const badgeVer = document.getElementById('badge-current-version');
 		if (badgeVer) badgeVer.textContent = `v${CURRENT_APP_VERSION}`;

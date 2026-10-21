@@ -4,11 +4,14 @@
  */
 
 import { escapeHtml } from '../logic.js';
+import { TagMemoInput } from './tag_memo_input.js';
 
 export class TransactionEditController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
 		this.currentTaxMeta = null;
+		this.confirmedTags = [];
+		this.initialValues = null;
 	}
 
 	get db() {
@@ -33,7 +36,13 @@ export class TransactionEditController {
 
 		document.getElementById('edit-tx-amount')?.addEventListener('input', () => { this.currentTaxMeta = null; });
 
-		btnClose?.addEventListener('click', () => modal.classList.remove('active'));
+		btnClose?.addEventListener('click', () => this.requestClose());
+		document.getElementById('btn-cancel-edit-tx')?.addEventListener('click', () => this.requestClose());
+		this.tagMemoInput = new TagMemoInput({
+			host: this, source: this.coordinator.txInputController,
+			ids: { text: 'edit-tag-text', chips: 'edit-tags-chips-list', hidden: 'edit-tx-tags', tags: 'edit-tags-suggest-dropdown', box: 'edit-tags-chip-container', memo: 'edit-tx-memo', memos: 'edit-memo-suggest-dropdown' }
+		});
+		this.tagMemoInput.setup();
 
 		typeSelect?.addEventListener('change', () => {
 			const isTransfer = typeSelect.value === 'transfer';
@@ -43,9 +52,12 @@ export class TransactionEditController {
 			if (catGroup) catGroup.style.display = isTransfer ? 'none' : 'block';
 		});
 
-		catSelect?.addEventListener('change', () => {
-			this.coordinator.txInputController.updateSubcategories(catSelect.value, 'edit-tx-subcategory');
+		catSelect?.addEventListener('change', async () => {
+			await this.coordinator.txInputController.updateSubcategories(catSelect.value, 'edit-tx-subcategory');
+			this.syncActualClassification();
 		});
+		document.getElementById('edit-tx-subcategory')?.addEventListener('change', () => this.syncActualClassification());
+		document.getElementById('edit-chk-sync-actual-category')?.addEventListener('change', () => this.syncActualClassification());
 
 		actCatSelect?.addEventListener('change', () => {
 			this.coordinator.txInputController.updateSubcategories(actCatSelect.value, 'edit-tx-actual-subcategory');
@@ -81,22 +93,25 @@ export class TransactionEditController {
 		this.currentTaxMeta = tx.tax_meta || null;
 
 		const config = await this.db.getMasterConfig();
-		const activeAccounts = (config?.accounts || []).filter(a => !a.is_archived);
-		const activeCats = (config?.categories || []).filter(c => !c.is_archived);
+		const accounts = config?.accounts || [];
+		const categories = config?.categories || [];
+		const options = (items, current) => {
+			const visible = items.filter(item => !item.is_archived || item.id === current);
+			if (current && !items.some(item => item.id === current)) visible.push({ id: current, name: `不明な項目 (${current})`, is_archived: true });
+			return visible.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}${item.is_archived ? '（アーカイブ済み）' : ''}</option>`).join('');
+		};
 
 		// Populate accounts
 		const accSelect = document.getElementById('edit-tx-account');
 		const toAccSelect = document.getElementById('edit-tx-to-account');
-		const accOptions = activeAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`).join('');
-		if (accSelect) accSelect.innerHTML = accOptions;
-		if (toAccSelect) toAccSelect.innerHTML = accOptions;
+		if (accSelect) accSelect.innerHTML = options(accounts, tx.account_id);
+		if (toAccSelect) toAccSelect.innerHTML = options(accounts, tx.to_account_id);
 
 		// Populate categories
 		const catSelect = document.getElementById('edit-tx-category');
 		const actCatSelect = document.getElementById('edit-tx-actual-category');
-		const catOptions = activeCats.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
-		if (catSelect) catSelect.innerHTML = catOptions;
-		if (actCatSelect) actCatSelect.innerHTML = catOptions;
+		if (catSelect) catSelect.innerHTML = options(categories, tx.category_id);
+		if (actCatSelect) actCatSelect.innerHTML = options(categories, tx.actual_category_id || tx.category_id);
 
 		// Set values
 		const idInput = document.getElementById('edit-tx-id');
@@ -120,20 +135,29 @@ export class TransactionEditController {
 			toAccSelect.disabled = Boolean(tx.amortization_meta?.is_payment_record);
 		}
 
-		const catId = tx.category_id || (activeCats[0]?.id || '');
+		const catId = tx.category_id || (categories.find(c => !c.is_archived)?.id || '');
 		if (catSelect) catSelect.value = catId;
-		await this.coordinator.txInputController.updateSubcategories(catId, 'edit-tx-subcategory');
+		await this.coordinator.txInputController.updateSubcategories(catId, 'edit-tx-subcategory', tx.subcategory_id);
 		const subSelect = document.getElementById('edit-tx-subcategory');
 		if (subSelect) subSelect.value = tx.subcategory_id || '';
 
 		const actCatId = tx.actual_category_id || catId;
 		if (actCatSelect) actCatSelect.value = actCatId;
-		await this.coordinator.txInputController.updateSubcategories(actCatId, 'edit-tx-actual-subcategory');
+		await this.coordinator.txInputController.updateSubcategories(actCatId, 'edit-tx-actual-subcategory', tx.actual_subcategory_id);
 		const actSubSelect = document.getElementById('edit-tx-actual-subcategory');
-		if (actSubSelect) actSubSelect.value = tx.actual_subcategory_id !== undefined && tx.actual_subcategory_id !== null ? tx.actual_subcategory_id : (tx.subcategory_id || '');
+		if (actSubSelect) actSubSelect.value = tx.actual_subcategory_id || '';
+		const sameClassification = document.getElementById('edit-chk-sync-actual-category');
+		if (sameClassification) sameClassification.checked = catId === actCatId && (tx.subcategory_id || '') === (tx.actual_subcategory_id || '');
+		this.syncActualClassification();
 
 		if (memoInput) memoInput.value = tx.memo || '';
 		if (tagsInput) tagsInput.value = (tx.tags || []).join(', ');
+		this.confirmedTags = [...(tx.tags || [])];
+		this.tagMemoInput.get('text').value = '';
+		this.tagMemoInput.renderTagChips();
+		this.tagMemoInput.hide('tags');
+		this.tagMemoInput.hide('memos');
+		await this.coordinator.txInputController.updateTagAndMemoSuggestions();
 		if (statusSelect) statusSelect.value = tx.status || 'confirmed';
 
 		// Show/hide transfer
@@ -143,10 +167,46 @@ export class TransactionEditController {
 		if (toGroup) toGroup.style.display = isTransfer ? 'block' : 'none';
 		if (catGroup) catGroup.style.display = isTransfer ? 'none' : 'block';
 
+		this.initialValues = this.captureValues();
 		modal.classList.add('active');
 	}
 
+	syncActualClassification() {
+		const same = document.getElementById('edit-chk-sync-actual-category')?.checked;
+		const container = document.getElementById('edit-actual-category-container');
+		if (container) container.style.display = same ? 'none' : 'block';
+		if (!same) return;
+		for (const [sourceId, targetId] of [['edit-tx-category', 'edit-tx-actual-category'], ['edit-tx-subcategory', 'edit-tx-actual-subcategory']]) {
+			const source = document.getElementById(sourceId);
+			const target = document.getElementById(targetId);
+			if (source && target) {
+				target.innerHTML = source.innerHTML;
+				target.value = source.value;
+			}
+		}
+	}
+
+	captureValues() {
+		return JSON.stringify({
+			fields: Array.from(document.querySelectorAll('#edit-tx-form input, #edit-tx-form select'), element => [element.id, element.value, element instanceof HTMLInputElement && element.type === 'checkbox' ? element.checked : null]),
+			tax: this.currentTaxMeta
+		});
+	}
+
+	requestClose() {
+		if (this.initialValues !== this.captureValues() && !confirm('編集中の変更を破棄して閉じますか？')) return false;
+		this.close();
+		return true;
+	}
+
+	close() {
+		document.getElementById('modal-edit-tx')?.classList.remove('active');
+		this.tagMemoInput.hide('tags');
+		this.tagMemoInput.hide('memos');
+	}
+
 	async handleEditFormSubmit() {
+		this.tagMemoInput.commitPending();
 		const id = document.getElementById('edit-tx-id')?.value;
 		const tx = await this.db.getTransaction(id);
 		if (!tx) return;
@@ -158,8 +218,9 @@ export class TransactionEditController {
 		const editToAccount = document.getElementById('edit-tx-to-account')?.value;
 		const editCat = document.getElementById('edit-tx-category')?.value;
 		const editSub = document.getElementById('edit-tx-subcategory')?.value || null;
-		const editActCat = document.getElementById('edit-tx-actual-category')?.value;
-		const editActSub = document.getElementById('edit-tx-actual-subcategory')?.value || null;
+		const sameClassification = document.getElementById('edit-chk-sync-actual-category')?.checked;
+		const editActCat = sameClassification ? editCat : document.getElementById('edit-tx-actual-category')?.value;
+		const editActSub = sameClassification ? editSub : document.getElementById('edit-tx-actual-subcategory')?.value || null;
 		const editMemo = document.getElementById('edit-tx-memo')?.value || '';
 		const editTags = (document.getElementById('edit-tx-tags')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
 		const editStatus = document.getElementById('edit-tx-status')?.value || 'confirmed';
@@ -237,7 +298,7 @@ export class TransactionEditController {
 			changedTxs = [tx];
 		}
 
-		document.getElementById('modal-edit-tx')?.classList.remove('active');
+		this.close();
 		this.coordinator.showToast(cascade ? '✅ 関連明細を一括修正しました' : '✅ 明細を修正しました');
 		const snapshot = await this.db.getSnapshot();
 		const closedTxs = changedTxs.filter(t => t.previous_target_month || (snapshot?.last_closed_month && t.target_month <= snapshot.last_closed_month));
@@ -269,7 +330,7 @@ export class TransactionEditController {
 		const snapshot = await this.db.getSnapshot();
 		const isPastClosed = snapshot?.last_closed_month && tx.target_month <= snapshot.last_closed_month;
 
-		document.getElementById('modal-edit-tx')?.classList.remove('active');
+		this.close();
 
 		if (isPastClosed && this.syncManager?.gasUrl && this.syncManager?.privateKey) {
 			try {

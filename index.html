@@ -620,22 +620,11 @@
 				<!-- Daily Normal Operations -->
 				<div style="margin-bottom: 12px;">
 					<button id="btn-manual-sync" class="btn btn-primary btn-block" style="padding: 12px; font-weight: 700;">
-						🔄 今すぐ差分同期 (push_diff)
+						🔄 明細・設定を差分同期
 					</button>
 				</div>
 
-				<hr class="divider">
-
-				<!-- Maintenance Operations -->
-				<div>
-					<div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;">
-						⚠️ 手動メンテナンス操作（通常は上記の差分同期をご利用ください）
-					</div>
-					<div style="display: flex; gap: 8px; flex-wrap: wrap;">
-						<button id="btn-sync-master" class="btn btn-secondary btn-sm">📤 設定マスタをGASへ送信 (update_master)</button>
-						<button id="btn-fetch-remote" class="btn btn-secondary btn-sm">📥 リモート最新状態を取得 (fetch_state)</button>
-					</div>
-				</div>
+				<p class="form-hint">明細と設定マスタを送受信し、別端末の変更を取り込む。</p>
 			</div>
 
 			<!-- Annual Budget & Savings Target Setting (Requirement 3.14) -->
@@ -697,16 +686,28 @@
 			<!-- Backup & Restore (Requirement 3.15 & 3.26) -->
 			<div class="card" id="card-backup-restore">
 				<div class="card-title">
-					<span>📦 データエクスポート・バックアップ & インポート (非破壊・差分ORマージ)</span>
+					<span>📦 データエクスポート・バックアップ & インポート</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-					各種データ（取引明細、マスタ設定、年間予算、残高スナップショット、または全データ一括）を個別にJSON形式でダウンロードできます。また、出力した各種JSONファイルをインポートすることで、差分のみを自動判別して安全にマージ・復元できます。
+					各種データ（取引明細、マスタ設定、年間予算、残高スナップショット、または全データ一括）を個別にJSON形式でダウンロードできます。取込方式は差分マージと完全インポートから選べます。完全インポートは選んだデータ種別を置き換え、削除も次回同期でサーバーに反映します。
 				</p>
+				<div class="form-group">
+					<label class="form-label" for="select-import-mode">JSONの取込方式</label>
+					<select id="select-import-mode" class="form-control">
+						<option value="merge">差分マージ（既存データを保持する方式である）</option>
+						<option value="replace">完全インポート（対象種別を置き換える方式である）</option>
+					</select>
+				</div>
 				<div style="display: flex; gap: 12px; flex-wrap: wrap;">
 					<button type="button" id="btn-open-export-modal" class="btn btn-primary">💾 各種データJSONダウンロード</button>
 					<button type="button" id="btn-export-backup" class="btn btn-secondary">📦 全データ一括バックアップ</button>
-					<button type="button" id="btn-import-trigger" class="btn btn-secondary">📂 JSONインポート (自動判別・差分ORマージ)</button>
+					<button type="button" id="btn-import-trigger" class="btn btn-secondary">📂 JSONファイルを選択してインポート</button>
 					<input type="file" id="file-import-input" accept=".json" style="display: none;">
+				</div>
+				<div id="pending-import-panel" hidden>
+					<p id="pending-import-status" role="status"></p>
+					<label><input type="checkbox" id="checkbox-replace-pending-import"> 送信待ちを新しい完全インポートでやり直す（同じ種別または全データのJSON）</label>
+					<button type="button" id="btn-reapprove-import" class="btn btn-secondary">完全インポートを再確認</button>
 				</div>
 			</div>
 
@@ -801,7 +802,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.8.0</span>
+					<span class="badge badge-info" id="badge-current-version">v1.11.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
@@ -817,10 +818,10 @@
 	</main>
 
 	<!-- ==================== MODAL: EDIT TRANSACTION ==================== -->
-	<div id="modal-edit-tx" class="modal-overlay">
+	<div id="modal-edit-tx" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="edit-tx-title">
 		<div class="modal">
 			<div class="modal-header">
-				<h3 class="modal-title">✏️ 取引明細の修正</h3>
+				<h3 class="modal-title" id="edit-tx-title">✏️ 取引明細の修正</h3>
 				<button type="button" class="close-btn" id="btn-close-edit-tx">&times;</button>
 			</div>
 			<form id="edit-tx-form">
@@ -866,11 +867,17 @@
 							<select id="edit-tx-category" class="form-control"></select>
 						</div>
 						<div class="form-group">
-							<label class="form-label" for="edit-tx-subcategory">計中項目</label>
+							<label class="form-label" for="edit-tx-subcategory">計上中項目</label>
 							<select id="edit-tx-subcategory" class="form-control"></select>
 						</div>
 					</div>
-					<div class="form-row">
+					<div class="form-group">
+						<label class="checkbox-label" for="edit-chk-sync-actual-category">
+							<input type="checkbox" id="edit-chk-sync-actual-category" checked>
+							実態分類を計上分類と同じにする
+						</label>
+					</div>
+					<div class="form-row" id="edit-actual-category-container" style="display: none;">
 						<div class="form-group">
 							<label class="form-label" for="edit-tx-actual-category">実態大項目</label>
 							<select id="edit-tx-actual-category" class="form-control"></select>
@@ -885,7 +892,10 @@
 				<div class="form-row">
 					<div class="form-group" style="flex: 2;">
 						<label class="form-label" for="edit-tx-memo">メモ</label>
-						<input type="text" id="edit-tx-memo" class="form-control">
+						<div class="suggest-wrapper">
+							<input type="text" id="edit-tx-memo" class="form-control" autocomplete="off">
+							<div id="edit-memo-suggest-dropdown" class="suggest-dropdown" style="display: none;"></div>
+						</div>
 					</div>
 					<div class="form-group" style="flex: 1;">
 						<label class="form-label" for="edit-tx-status">ステータス</label>
@@ -897,13 +907,23 @@
 				</div>
 
 				<div class="form-group">
-					<label class="form-label" for="edit-tx-tags">タグ (カンマ区切り)</label>
-					<input type="text" id="edit-tx-tags" class="form-control">
+					<label class="form-label" for="edit-tag-text">タグ</label>
+					<div class="suggest-wrapper">
+						<div id="edit-tags-chip-container" class="tags-input-box">
+							<div id="edit-tags-chips-list" class="tags-chips-list"></div>
+							<input type="text" id="edit-tag-text" class="tags-inner-input" autocomplete="off" placeholder="タグを入力してEnter">
+							<input type="hidden" id="edit-tx-tags">
+						</div>
+						<div id="edit-tags-suggest-dropdown" class="suggest-dropdown" style="display: none;"></div>
+					</div>
 				</div>
 
-				<div style="display: flex; gap: 8px; margin-top: 16px;">
-					<button type="submit" class="btn btn-primary" style="flex: 2;">💾 修正内容を保存</button>
-					<button type="button" id="btn-edit-delete-tx" class="btn btn-danger" style="flex: 1;">🗑️ 削除</button>
+				<div class="edit-save-actions">
+					<button type="button" id="btn-cancel-edit-tx" class="btn btn-secondary">キャンセル</button>
+					<button type="submit" class="btn btn-primary">💾 修正内容を保存</button>
+				</div>
+				<div class="edit-delete-actions">
+					<button type="button" id="btn-edit-delete-tx" class="btn btn-danger">🗑️ 削除</button>
 				</div>
 			</form>
 		</div>
@@ -1080,6 +1100,27 @@
 		</div>
 	</div>
 
+	<!-- Complete import requires an exact confirmation word. -->
+	<div id="modal-replacement-import" class="modal-overlay">
+		<div class="modal" role="dialog" aria-modal="true" aria-labelledby="replacement-import-title">
+			<div class="modal-header">
+				<h3 id="replacement-import-title" class="modal-title">完全インポートの最終確認</h3>
+				<button type="button" class="close-btn" id="btn-close-replacement-import" aria-label="確認を閉じる">&times;</button>
+			</div>
+			<p id="replacement-import-summary"></p>
+			<p>置き換え前のデータが必要な場合は、先にJSONをエクスポートしてください。取込後の月締め・締め済み明細修正では、通常どおり残高を再計算します。</p>
+			<div class="form-group">
+				<label class="form-label" for="replacement-import-word">実行するには「完全インポート」と正確に入力してください</label>
+				<input id="replacement-import-word" class="form-control" type="text" autocomplete="off" spellcheck="false">
+			</div>
+			<p id="replacement-import-error" role="alert"></p>
+			<div class="edit-save-actions">
+				<button type="button" id="btn-cancel-replacement-import" class="btn btn-secondary">キャンセル</button>
+				<button type="button" id="btn-confirm-replacement-import" class="btn btn-danger" disabled>対象データを完全に置き換える</button>
+			</div>
+		</div>
+	</div>
+
 	<!-- ==================== MODAL: APP UPDATE CONFIRMATION ==================== -->
 	<div id="modal-app-update" class="modal-overlay">
 		<div class="modal">
@@ -1094,6 +1135,27 @@
 			<div style="display: flex; gap: 8px; margin-top: 16px;">
 				<button type="button" id="btn-dismiss-app-update" class="btn btn-secondary btn-block">後で</button>
 				<button type="button" id="btn-confirm-app-update" class="btn btn-primary btn-block">⚡ 今すぐアップデート</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- ==================== MODAL: MASTER CONFLICT ==================== -->
+	<div id="modal-master-conflict" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="master-conflict-title" aria-describedby="master-conflict-note">
+		<div class="modal master-conflict-modal">
+			<div class="modal-header">
+				<h3 id="master-conflict-title" class="modal-title">設定の競合を解決</h3>
+				<button type="button" id="btn-close-master-conflict" class="close-btn" aria-label="競合解決を取り消す">&times;</button>
+			</div>
+			<p id="master-conflict-note">同じ設定が手元とサーバーで変更されている。各項目で採用する値を選択する。取消時は双方の設定を保持する。完了済みの明細同期は巻き戻さない。</p>
+			<div class="master-conflict-bulk-actions">
+				<button type="button" id="btn-master-conflict-all-local" class="btn btn-secondary">全項目を手元にする</button>
+				<button type="button" id="btn-master-conflict-all-remote" class="btn btn-secondary">全項目をサーバーにする</button>
+			</div>
+			<div id="master-conflict-list"></div>
+			<p id="master-conflict-error" class="master-conflict-error" role="alert"></p>
+			<div class="edit-save-actions">
+				<button type="button" id="btn-cancel-master-conflict" class="btn btn-secondary">取消</button>
+				<button type="button" id="btn-apply-master-conflict" class="btn btn-primary" disabled>選択内容で解決して同期</button>
 			</div>
 		</div>
 	</div>

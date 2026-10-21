@@ -2,6 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { useBrowser, seed, records, cashflow, settings, submit, waitForDialog, value } from '../helpers/ui_fixture.js';
 
+async function openEdit(d, id) {
+	await d.click(`#month-tx-list [data-id="${id}"]`);
+	await d.waitFor(`document.getElementById("modal-edit-tx").classList.contains("active") && document.getElementById("edit-tx-id").value === ${JSON.stringify(id)}`);
+}
+
 describe('Usability migration and operation boundaries', { timeout: 180000 }, () => {
 	const fixture = useBrowser();
 	it('keeps the passkey controls open when settings are refreshed asynchronously', async () => {
@@ -69,18 +74,18 @@ describe('Usability migration and operation boundaries', { timeout: 180000 }, ()
 		await d.click('.mode-tab-btn[data-mode="prepaid"]'); await d.fill('#input-prepaid-months', '3'); await d.click('#btn-save-tx');
 		await d.waitFor('(async () => (await window.__yose_app.db.getTransactions()).length === 4)()');
 		const parent = (await records(d)).find(tx => tx.amortization_meta.is_payment_record);
-		await cashflow(d); await d.click(`#month-tx-list [data-id="${parent.id}"]`);
+		await cashflow(d); await openEdit(d, parent.id);
 		await d.fill('#edit-tx-memo', '予定を維持'); await submit(d, '#edit-tx-form');
 		await d.waitFor('!document.getElementById("modal-edit-tx").classList.contains("active")');
 		assert.ok((await records(d)).every(tx => tx.amount_pending));
 		const child = (await records(d)).find(tx => tx.type === 'expense' && tx.target_month === '2026-10');
-		await d.click(`#month-tx-list [data-id="${child.id}"]`);
+		await openEdit(d, child.id);
 		await d.fill('#edit-tx-amount', '10'); await d.setConfirm(false); await submit(d, '#edit-tx-form');
 		await d.waitFor('!document.getElementById("modal-edit-tx").classList.contains("active")');
 		assert.equal((await records(d)).find(tx => tx.id === child.id).amount_pending, false);
 		assert.ok((await records(d)).filter(tx => tx.id !== child.id).every(tx => tx.amount_pending));
 		await d.setConfirm(true);
-		await d.click(`#month-tx-list [data-id="${parent.id}"]`);
+		await openEdit(d, parent.id);
 		await d.fill('#edit-tx-amount', '1001'); await submit(d, '#edit-tx-form');
 		await d.waitFor('(async () => (await window.__yose_app.db.getTransaction(' + JSON.stringify(parent.id) + ')).amount === 1001)()');
 		assert.ok((await records(d)).every(tx => !tx.amount_pending));
@@ -117,7 +122,7 @@ describe('Usability migration and operation boundaries', { timeout: 180000 }, ()
 			else {
 				const parent = before.find(tx => tx.amortization_meta.is_payment_record);
 				await d.waitFor(`document.querySelector('#month-tx-list [data-id="${parent.id}"]') !== null`);
-				await d.click(`#month-tx-list [data-id="${parent.id}"]`);
+				await openEdit(d, parent.id);
 				if (operation === 'delete') await d.click('#btn-edit-delete-tx');
 				else { await d.fill('#edit-tx-memo', '保存しない'); await submit(d, '#edit-tx-form'); }
 			}

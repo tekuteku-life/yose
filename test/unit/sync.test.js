@@ -485,7 +485,7 @@ describe('js/sync.js - Unit Tests', () => {
 				async () => sync.registerInitialKey('test-pub-key-b64'),
 				/Failed to fetch endpoint/
 			);
-			assert.equal(sync.lastError, 'Failed to fetch endpoint');
+			assert.match(sync.lastError, /GAS.*公開権限.*Failed to fetch endpoint/);
 		});
 	});
 });

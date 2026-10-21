@@ -14,6 +14,8 @@ import {
 	escapeHtml
 } from '../logic.js';
 
+import { TagMemoInput } from './tag_memo_input.js';
+
 export class TransactionInputController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
@@ -109,7 +111,6 @@ export class TransactionInputController {
 		}
 
 		// Memo autocomplete & auto-categorization (Requirement 3.19 & 3.40.1)
-		const memoInput = document.getElementById('input-memo');
 		const handleMemoChange = async (e) => {
 			const val = (e?.target?.value ?? (typeof e === 'string' ? e : '')).trim();
 			const match = this.memoHistoryMap[val];
@@ -139,87 +140,12 @@ export class TransactionInputController {
 		};
 		this.handleMemoChange = handleMemoChange;
 
-		memoInput?.addEventListener('focus', () => {
-			this.renderMemoSuggestions(memoInput.value);
+		this.tagMemoInput = new TagMemoInput({
+			host: this, source: this,
+			ids: { text: 'input-tag-text', chips: 'tags-chips-list', hidden: 'input-tags', tags: 'tags-suggest-dropdown', box: 'tags-chip-container', memo: 'input-memo', memos: 'memo-suggest-dropdown' },
+			onMemoChange: handleMemoChange
 		});
-		memoInput?.addEventListener('input', (e) => {
-			this.renderMemoSuggestions(e.target.value);
-			handleMemoChange(e);
-		});
-		memoInput?.addEventListener('change', handleMemoChange);
-
-		// Tag chips input handling (Requirement 3.18 & 3.40.1)
-		const tagTextInput = document.getElementById('input-tag-text');
-		const tagsChipsList = document.getElementById('tags-chips-list');
-		const hiddenTagsInput = document.getElementById('input-tags');
-
-		tagTextInput?.addEventListener('focus', () => {
-			this.renderTagSuggestions(tagTextInput.value);
-		});
-		tagTextInput?.addEventListener('input', (e) => {
-			this.renderTagSuggestions(e.target.value);
-		});
-
-		tagTextInput?.addEventListener('keydown', (e) => {
-			if (e.key === 'Enter' || e.key === ',') {
-				e.preventDefault();
-				const val = tagTextInput.value.trim();
-				if (val) {
-					this.addTag(val);
-					tagTextInput.value = '';
-					this.renderTagSuggestions('');
-				}
-			} else if (e.key === 'Backspace' && tagTextInput.value === '' && this.confirmedTags.length > 0) {
-				this.confirmedTags.pop();
-				this.renderTagChips();
-			} else if (e.key === 'Escape') {
-				const tagsDropdown = document.getElementById('tags-suggest-dropdown');
-				if (tagsDropdown) tagsDropdown.style.display = 'none';
-			}
-		});
-
-		memoInput?.addEventListener('keydown', (e) => {
-			if (e.key === 'Escape') {
-				const memoDropdown = document.getElementById('memo-suggest-dropdown');
-				if (memoDropdown) memoDropdown.style.display = 'none';
-			}
-		});
-
-		tagTextInput?.addEventListener('blur', () => {
-			const val = tagTextInput.value.trim();
-			if (val) {
-				this.addTag(val);
-				tagTextInput.value = '';
-			}
-		});
-
-		// Global dismiss for custom suggestion dropdowns
-		document.addEventListener('click', (e) => {
-			if (!e.target.closest('#input-memo') && !e.target.closest('#memo-suggest-dropdown')) {
-				const memoDropdown = document.getElementById('memo-suggest-dropdown');
-				if (memoDropdown) memoDropdown.style.display = 'none';
-			}
-			if (!e.target.closest('#tags-chip-container') && !e.target.closest('#tags-suggest-dropdown')) {
-				const tagsDropdown = document.getElementById('tags-suggest-dropdown');
-				if (tagsDropdown) tagsDropdown.style.display = 'none';
-			}
-		});
-
-		tagsChipsList?.addEventListener('click', (e) => {
-			const btn = e.target.closest('.tag-chip-del');
-			if (btn && btn.dataset.tagIndex !== undefined) {
-				const idx = Number(btn.dataset.tagIndex);
-				this.confirmedTags.splice(idx, 1);
-				this.renderTagChips();
-			}
-		});
-
-		hiddenTagsInput?.addEventListener('change', () => {
-			if (hiddenTagsInput.value) {
-				this.confirmedTags = hiddenTagsInput.value.split(',').map(s => s.trim()).filter(Boolean);
-				this.renderTagChips();
-			}
-		});
+		this.tagMemoInput.setup();
 
 		// Unsettled Advance List settlement click (Requirement 3.20)
 		document.getElementById('unsettled-advance-list')?.addEventListener('click', async (e) => {
@@ -327,6 +253,13 @@ export class TransactionInputController {
 		}
 	}
 
+	replaceOptionsKeepingSelection(select, html) {
+		if (!select) return;
+		const previous = select.value;
+		select.innerHTML = html;
+		if (Array.from(select.options).some(option => option.value === previous)) select.value = previous;
+	}
+
 	async populateMasterDropdowns() {
 		const config = await this.db.getMasterConfig();
 		if (!config) return;
@@ -341,14 +274,14 @@ export class TransactionInputController {
 			`<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.type)})</option>`
 		).join('');
 
-		if (accSelect) accSelect.innerHTML = buildAccountOptions();
-		if (toAccSelect) toAccSelect.innerHTML = buildAccountOptions();
+		this.replaceOptionsKeepingSelection(accSelect, buildAccountOptions());
+		this.replaceOptionsKeepingSelection(toAccSelect, buildAccountOptions());
 
 		if (pointAccSelect) {
-			pointAccSelect.innerHTML = [
+			this.replaceOptionsKeepingSelection(pointAccSelect, [
 				'<option value="">ポイント相殺として計上（口座指定なし）</option>',
 				...activeAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.type)})</option>`)
-			].join('');
+			].join(''));
 		}
 
 		// Categories filtered by current input-type
@@ -377,12 +310,14 @@ export class TransactionInputController {
 			`<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`
 		).join('');
 
-		if (catSelect) catSelect.innerHTML = buildCategoryOptions();
-		if (actCatSelect) actCatSelect.innerHTML = buildCategoryOptions();
+		const previousCategory = catSelect?.value;
+		const previousActual = actCatSelect?.value;
+		this.replaceOptionsKeepingSelection(catSelect, buildCategoryOptions());
+		this.replaceOptionsKeepingSelection(actCatSelect, buildCategoryOptions());
 
 		if (activeCategories.length > 0) {
-			await this.updateSubcategories(activeCategories[0].id, 'select-subcategory');
-			await this.updateSubcategories(activeCategories[0].id, 'select-actual-subcategory');
+			await this.updateSubcategories(catSelect?.value || activeCategories[0].id, 'select-subcategory', null, catSelect?.value === previousCategory);
+			await this.updateSubcategories(actCatSelect?.value || activeCategories[0].id, 'select-actual-subcategory', null, actCatSelect?.value === previousActual);
 		} else {
 			const subSelect = document.getElementById('select-subcategory');
 			const actSubSelect = document.getElementById('select-actual-subcategory');
@@ -391,117 +326,38 @@ export class TransactionInputController {
 		}
 	}
 
-	async updateSubcategories(categoryId, targetSelectId) {
-		const select = document.getElementById(targetSelectId);
+	async updateSubcategories(categoryId, targetSelectId, preserveId = null, keepSelection = false) {
+		const select = /** @type {HTMLSelectElement} */ (document.getElementById(targetSelectId));
 		if (!select) return;
 		const config = await this.db.getMasterConfig();
+		const parentIds = { 'select-subcategory': 'select-category', 'select-actual-subcategory': 'select-actual-category', 'edit-tx-subcategory': 'edit-tx-category', 'edit-tx-actual-subcategory': 'edit-tx-actual-category' };
+		const parent = document.getElementById(parentIds[targetSelectId]);
+		if (parent && parent.value !== categoryId) return;
+		const previous = keepSelection && select.options.length ? select.value : null;
 		const cat = (config?.categories || []).find(c => c.id === categoryId);
 		const emptyOption = '<option value="">（指定なし / 費目のみ）</option>';
-		if (!cat || !cat.subcategories) {
-			select.innerHTML = emptyOption;
-			return;
-		}
-		const activeSubs = cat.subcategories.filter(s => !s.is_archived);
+		const activeSubs = (cat?.subcategories || []).filter(s => !s.is_archived || s.id === preserveId);
+		if (preserveId && !activeSubs.some(s => s.id === preserveId)) activeSubs.push({ id: preserveId, name: `不明な項目 (${preserveId})`, is_archived: true });
 		select.innerHTML = [
 			emptyOption,
-			...activeSubs.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`)
+			...activeSubs.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}${s.is_archived ? '（アーカイブ済み）' : ''}</option>`)
 		].join('');
-		if (activeSubs.length > 0) {
-			select.value = activeSubs[0].id;
-		}
+		if (previous !== null && Array.from(select.options).some(option => option.value === previous)) select.value = previous;
+		else if (activeSubs.length > 0) select.value = activeSubs[0].id;
 	}
 
-	renderTagChips() {
-		const container = document.getElementById('tags-chips-list');
-		const hiddenInput = document.getElementById('input-tags');
-		if (hiddenInput) hiddenInput.value = this.confirmedTags.join(', ');
-		if (!container) return;
+	renderTagChips() { this.tagMemoInput.renderTagChips(); }
 
-		container.innerHTML = this.confirmedTags.map((tag, idx) => `
-			<span class="tag-chip">
-				${escapeHtml(tag)}
-				<button type="button" class="tag-chip-del" data-tag-index="${idx}" aria-label="タグ削除">&times;</button>
-			</span>
-		`).join('');
-	}
-
-	addTag(tagStr) {
-		if (!tagStr) return;
-		const parts = tagStr.split(',').map(s => s.trim()).filter(Boolean);
-		for (const p of parts) {
-			if (!this.confirmedTags.includes(p)) {
-				this.confirmedTags.push(p);
-			}
-		}
-		this.renderTagChips();
-	}
+	addTag(tagStr) { this.tagMemoInput.addTag(tagStr); }
 
 	async updateTagAndMemoSuggestions() {
 		this.availableTags = await this.db.getUniqueTags();
 		this.memoHistoryMap = await this.db.getMemoHistory();
 	}
 
-	renderMemoSuggestions(query = '') {
-		const dropdown = document.getElementById('memo-suggest-dropdown');
-		if (!dropdown) return;
-		const allMemos = Object.keys(this.memoHistoryMap || {});
-		const q = String(query || '').trim().toLowerCase();
-		const filtered = q ? allMemos.filter(m => m.toLowerCase().includes(q)) : allMemos;
-		if (filtered.length === 0) {
-			dropdown.style.display = 'none';
-			dropdown.innerHTML = '';
-			return;
-		}
-		dropdown.innerHTML = filtered.slice(0, 15).map(m => {
-			const match = this.memoHistoryMap[m];
-			const subText = match?.category_id ? ` <span style="font-size: 0.75rem; color: var(--text-muted);">(${escapeHtml(match.category_id)})</span>` : '';
-			return `<div class="suggest-item" data-value="${escapeHtml(m)}"><span>📝 ${escapeHtml(m)}</span>${subText}</div>`;
-		}).join('');
-		dropdown.style.display = 'block';
+	renderMemoSuggestions(query = '') { this.tagMemoInput.renderMemoSuggestions(query); }
 
-		dropdown.querySelectorAll('.suggest-item').forEach(item => {
-			item.addEventListener('click', (e) => {
-				e.stopPropagation();
-				const val = item.dataset.value;
-				const input = document.getElementById('input-memo');
-				if (input) {
-					input.value = val;
-					this.handleMemoChange(val);
-				}
-				dropdown.style.display = 'none';
-			});
-		});
-	}
-
-	renderTagSuggestions(query = '') {
-		const dropdown = document.getElementById('tags-suggest-dropdown');
-		if (!dropdown) return;
-		const allTags = this.availableTags || [];
-		const q = String(query || '').trim().toLowerCase();
-		const filtered = q
-			? allTags.filter(t => t.toLowerCase().includes(q) && !this.confirmedTags.includes(t))
-			: allTags.filter(t => !this.confirmedTags.includes(t));
-		if (filtered.length === 0) {
-			dropdown.style.display = 'none';
-			dropdown.innerHTML = '';
-			return;
-		}
-		dropdown.innerHTML = filtered.slice(0, 15).map(t => {
-			return `<div class="suggest-item" data-value="${escapeHtml(t)}"><span>🏷️ #${escapeHtml(t)}</span></div>`;
-		}).join('');
-		dropdown.style.display = 'block';
-
-		dropdown.querySelectorAll('.suggest-item').forEach(item => {
-			item.addEventListener('click', (e) => {
-				e.stopPropagation();
-				const val = item.dataset.value;
-				this.addTag(val);
-				const input = document.getElementById('input-tag-text');
-				if (input) input.value = '';
-				dropdown.style.display = 'none';
-			});
-		});
-	}
+	renderTagSuggestions(query = '') { this.tagMemoInput.renderTagSuggestions(query); }
 
 	async renderUnsettledAdvanceList() {
 		const list = document.getElementById('unsettled-advance-list');

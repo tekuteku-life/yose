@@ -223,10 +223,11 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 		await driver.fill('#input-amount', '4200');
 		await driver.fill('#input-memo', 'ペットシーツ購入');
 		await driver.click('#btn-save-tx');
-		await new Promise(r => setTimeout(r, 100));
+		await driver.waitFor('document.getElementById("recent-tx-list").textContent.includes("ペットシーツ購入") && document.getElementById("input-memo").value === ""');
 
 		// 4) Verify in Cashflow tab (#category-breakdown-list, #cross-matrix-table-container, #select-category-filter, #month-tx-list)
 		await driver.click('.tab-btn[data-analytics-target="cashflow"]');
+		await driver.waitFor('document.getElementById("category-breakdown-list").textContent.includes("ペット費") && document.getElementById("category-breakdown-list").textContent.includes("¥4,200") && document.getElementById("cross-matrix-table-container").textContent.includes("ペット費") && Array.from(document.getElementById("select-category-filter").options).some(option => option.value === "cat_pet_test") && document.getElementById("month-tx-list").textContent.includes("ペットシーツ購入")');
 		const breakdownText = await driver.textContent('#category-breakdown-list');
 		assert.ok(breakdownText.includes('ペット費'), 'Added category should appear in #category-breakdown-list');
 		assert.ok(breakdownText.includes('¥4,200'), 'Category breakdown should show ¥4,200 for ペット費');
@@ -241,6 +242,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 
 		// 5) Verify in Budget tab (#budget-category-progress-container)
 		await driver.click('.tab-btn[data-analytics-target="budget"]');
+		await driver.waitFor('document.getElementById("budget-category-progress-container").textContent.includes("ペット費") && document.getElementById("budget-category-progress-container").textContent.includes("¥120,000") && document.getElementById("budget-category-progress-container").textContent.includes("¥4,200")');
 		const budgetProgressText = await driver.textContent('#budget-category-progress-container');
 		assert.ok(budgetProgressText.includes('ペット費'), 'Added category should appear in #budget-category-progress-container');
 		assert.ok(budgetProgressText.includes('¥120,000'), 'Budget progress should show ¥120,000 budget for ペット費');
@@ -386,15 +388,15 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 		await driver.select('#m-acc-type', 'bank');
 		await driver.fill('#m-acc-init-bal', '50000');
 		await driver.evaluate('document.getElementById("form-master-account").requestSubmit()');
-		await new Promise(r => setTimeout(r, 150));
+		await driver.waitFor('!document.getElementById("modal-master-item").classList.contains("active") && document.querySelector(".btn-archive-account[data-id=acc_temp_archive]") !== null');
 
 		// Archive acc_temp_archive
 		await driver.click('.btn-archive-account[data-id="acc_temp_archive"]');
-		await new Promise(r => setTimeout(r, 150));
+		await driver.waitFor('document.querySelector(".btn-archive-account[data-id=acc_temp_archive]").textContent.includes("復元")');
 
 		// Check if archived account is excluded from #account-balances-list in Summary tabs
 		await driver.click('.tab-btn[data-analytics-target="assets"]');
-		await new Promise(r => setTimeout(r, 100));
+		await driver.waitFor('document.getElementById("account-balances-title").textContent === "口座別残高" && !document.getElementById("account-balances-list").textContent.includes("一時テスト口座")');
 		const accountBalancesText = await driver.textContent('#account-balances-list');
 		assert.equal(
 			accountBalancesText.includes('一時テスト口座'),
@@ -407,7 +409,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 		await new Promise(r => setTimeout(r, 100));
 		await driver.click('.master-tab-btn[data-master="categories"]');
 		await driver.click('.btn-archive-cat[data-id="cat_pet_test"]');
-		await new Promise(r => setTimeout(r, 150));
+		await driver.waitFor('document.querySelector(".btn-archive-cat[data-id=cat_pet_test]").textContent.includes("復元") && !document.getElementById("budget-categories-list-container").textContent.includes("ペット費")');
 
 		const budgetCatContainerAfterArchive = await driver.textContent('#budget-categories-list-container');
 		assert.equal(
@@ -620,7 +622,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 
 		// 1) Monthly mode (default for 2026-10)
 		await driver.click('#control-granularity .segment-btn[data-granularity="monthly"]');
-		await new Promise(r => setTimeout(r, 120));
+		await driver.waitFor('document.querySelector("#month-tx-list [data-id=tx_today_oct]") !== null && document.querySelector("#month-tx-list [data-id=tx_2026_feb]") === null && document.getElementById("month-tx-list-title").textContent.includes("月別")');
 		let monthList = await driver.textContent('#month-tx-list');
 		assert.ok(monthList.includes('本日10月20日支出'), 'Monthly list should include October transaction');
 		assert.equal(monthList.includes('2026年2月支出'), false, 'Monthly list for October must NOT include February transaction');
@@ -628,7 +630,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 
 		// 2) Yearly mode (2026)
 		await driver.click('#control-granularity .segment-btn[data-granularity="yearly"]');
-		await new Promise(r => setTimeout(r, 150));
+		await driver.waitFor('document.querySelector("#month-tx-list [data-id=tx_today_oct]") !== null && document.querySelector("#month-tx-list [data-id=tx_2026_feb]") !== null && document.getElementById("month-tx-list-title").textContent.includes("年間")');
 		let yearlyList = await driver.textContent('#month-tx-list');
 		assert.ok(yearlyList.includes('本日10月20日支出'), 'Yearly list for 2026 should include October transaction');
 		assert.ok(yearlyList.includes('2026年2月支出'), 'Yearly list for 2026 should include February transaction');
@@ -638,7 +640,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 
 		// 3) Daily mode (2026-10-20)
 		await driver.click('#control-granularity .segment-btn[data-granularity="daily"]');
-		await new Promise(r => setTimeout(r, 150));
+		await driver.waitFor('document.querySelector("#month-tx-list [data-id=tx_today_oct]") !== null && document.querySelector("#month-tx-list [data-id=tx_2026_feb]") === null && document.getElementById("month-tx-list-title").textContent.includes("日別")');
 		let dailyList = await driver.textContent('#month-tx-list');
 		assert.ok(dailyList.includes('本日10月20日支出'), 'Daily list for 2026-10-20 should include today transaction');
 		assert.equal(dailyList.includes('2026年2月支出'), false, 'Daily list must NOT include other date transaction');
@@ -674,7 +676,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 		`);
 
 		await driver.click('#control-granularity .segment-btn[data-granularity="yearly"]');
-		await new Promise(r => setTimeout(r, 150));
+		await driver.waitFor('document.getElementById("tx-pagination-controls").checkVisibility() && document.querySelector("#month-tx-list [data-id^=tx_bulk_page_]") !== null && document.getElementById("month-tx-list-title").textContent.includes("年間")');
 		assert.equal(await driver.isVisible('#tx-pagination-controls'), true, 'Pagination controls should be visible when items exceed page size');
 		const pageInfo = await driver.textContent('#tx-pagination-info');
 		assert.ok(pageInfo.includes('ページ'), 'Pagination info should display current page');
