@@ -173,7 +173,7 @@ export class AppCoordinator {
 		window.addEventListener('popstate', () => {
 			if (this.allowNavigation) return;
 			if (restoring) { restoring = false; return; }
-			if (document.getElementById('modal-edit-tx')?.classList.contains('active') || document.getElementById('modal-master-conflict')?.classList.contains('active')) {
+			if (['modal-edit-tx', 'modal-master-conflict', 'modal-replacement-import'].some(id => document.getElementById(id)?.classList.contains('active'))) {
 				this.closeTopModal();
 				restoring = true; history.forward();
 				return;
@@ -306,12 +306,27 @@ export class AppCoordinator {
 
 	setupCollapsiblePanes() {
 		if (typeof document === 'undefined') return;
+		const interactive = 'button, a, input, select, textarea, label, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [tabindex]';
 		const cards = document.querySelectorAll('#tab-summary .card[id], #tab-settings .card[id]');
 		cards.forEach(card => {
 			const paneId = card.id;
 			const titleEl = card.querySelector('.card-title');
-			if (!paneId || !titleEl) return;
-			if (titleEl.querySelector('.card-collapse-btn')) return;
+			if (!paneId || !titleEl || titleEl.querySelector('.card-collapse-btn')) return;
+
+			const toggle = () => this.setPaneCollapsed(paneId, !card.classList.contains('collapsed'));
+			const titleButton = document.createElement('button');
+			titleButton.type = 'button';
+			titleButton.className = 'card-collapse-title';
+			titleButton.setAttribute('aria-expanded', 'true');
+			for (const node of Array.from(titleEl.childNodes)) {
+				if (node.nodeType === Node.TEXT_NODE || (node instanceof Element && !node.matches(interactive) && !node.querySelector(interactive))) titleButton.appendChild(node);
+			}
+			titleEl.prepend(titleButton);
+			titleEl.classList.add('collapsible-card-title');
+			titleButton.addEventListener('click', event => {
+				event.stopPropagation();
+				toggle();
+			});
 
 			const btn = document.createElement('button');
 			btn.type = 'button';
@@ -320,14 +335,15 @@ export class AppCoordinator {
 			btn.setAttribute('aria-expanded', 'true');
 			btn.title = 'ペインの表示・非表示を切り替え';
 			btn.textContent = '▼ 非表示';
-
-			btn.addEventListener('click', async (e) => {
-				e.stopPropagation();
-				const nextCollapsed = !card.classList.contains('collapsed');
-				await this.setPaneCollapsed(paneId, nextCollapsed);
+			btn.addEventListener('click', event => {
+				event.stopPropagation();
+				toggle();
 			});
-
 			titleEl.appendChild(btn);
+			titleEl.addEventListener('click', event => {
+				if (event.target instanceof Element && event.target.closest(interactive)) return;
+				toggle();
+			});
 		});
 	}
 
@@ -345,10 +361,9 @@ export class AppCoordinator {
 			const card = document.getElementById(paneId);
 			if (card) {
 				card.classList.toggle('collapsed', Boolean(isCollapsed));
-				const btn = card.querySelector('.card-collapse-btn');
-				if (btn) {
+				for (const btn of card.querySelectorAll('.card-collapse-btn, .card-collapse-title')) {
 					btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-					btn.textContent = isCollapsed ? '▶ 表示' : '▼ 非表示';
+					if (btn.classList.contains('card-collapse-btn')) btn.textContent = isCollapsed ? '▶ 表示' : '▼ 非表示';
 				}
 			}
 		}
@@ -360,10 +375,9 @@ export class AppCoordinator {
 			const card = document.getElementById(paneId);
 			if (card) {
 				card.classList.toggle('collapsed', Boolean(isCollapsed));
-				const btn = card.querySelector('.card-collapse-btn');
-				if (btn) {
+				for (const btn of card.querySelectorAll('.card-collapse-btn, .card-collapse-title')) {
 					btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-					btn.textContent = isCollapsed ? '▶ 表示' : '▼ 非表示';
+					if (btn.classList.contains('card-collapse-btn')) btn.textContent = isCollapsed ? '▶ 表示' : '▼ 非表示';
 				}
 			}
 		}

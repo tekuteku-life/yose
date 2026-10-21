@@ -52,9 +52,12 @@ export class TransactionEditController {
 			if (catGroup) catGroup.style.display = isTransfer ? 'none' : 'block';
 		});
 
-		catSelect?.addEventListener('change', () => {
-			this.coordinator.txInputController.updateSubcategories(catSelect.value, 'edit-tx-subcategory');
+		catSelect?.addEventListener('change', async () => {
+			await this.coordinator.txInputController.updateSubcategories(catSelect.value, 'edit-tx-subcategory');
+			this.syncActualClassification();
 		});
+		document.getElementById('edit-tx-subcategory')?.addEventListener('change', () => this.syncActualClassification());
+		document.getElementById('edit-chk-sync-actual-category')?.addEventListener('change', () => this.syncActualClassification());
 
 		actCatSelect?.addEventListener('change', () => {
 			this.coordinator.txInputController.updateSubcategories(actCatSelect.value, 'edit-tx-actual-subcategory');
@@ -143,6 +146,9 @@ export class TransactionEditController {
 		await this.coordinator.txInputController.updateSubcategories(actCatId, 'edit-tx-actual-subcategory', tx.actual_subcategory_id);
 		const actSubSelect = document.getElementById('edit-tx-actual-subcategory');
 		if (actSubSelect) actSubSelect.value = tx.actual_subcategory_id || '';
+		const sameClassification = document.getElementById('edit-chk-sync-actual-category');
+		if (sameClassification) sameClassification.checked = catId === actCatId && (tx.subcategory_id || '') === (tx.actual_subcategory_id || '');
+		this.syncActualClassification();
 
 		if (memoInput) memoInput.value = tx.memo || '';
 		if (tagsInput) tagsInput.value = (tx.tags || []).join(', ');
@@ -165,9 +171,24 @@ export class TransactionEditController {
 		modal.classList.add('active');
 	}
 
+	syncActualClassification() {
+		const same = document.getElementById('edit-chk-sync-actual-category')?.checked;
+		const container = document.getElementById('edit-actual-category-container');
+		if (container) container.style.display = same ? 'none' : 'block';
+		if (!same) return;
+		for (const [sourceId, targetId] of [['edit-tx-category', 'edit-tx-actual-category'], ['edit-tx-subcategory', 'edit-tx-actual-subcategory']]) {
+			const source = document.getElementById(sourceId);
+			const target = document.getElementById(targetId);
+			if (source && target) {
+				target.innerHTML = source.innerHTML;
+				target.value = source.value;
+			}
+		}
+	}
+
 	captureValues() {
 		return JSON.stringify({
-			fields: Array.from(document.querySelectorAll('#edit-tx-form input, #edit-tx-form select'), element => [element.id, element.value]),
+			fields: Array.from(document.querySelectorAll('#edit-tx-form input, #edit-tx-form select'), element => [element.id, element.value, element instanceof HTMLInputElement && element.type === 'checkbox' ? element.checked : null]),
 			tax: this.currentTaxMeta
 		});
 	}
@@ -197,8 +218,9 @@ export class TransactionEditController {
 		const editToAccount = document.getElementById('edit-tx-to-account')?.value;
 		const editCat = document.getElementById('edit-tx-category')?.value;
 		const editSub = document.getElementById('edit-tx-subcategory')?.value || null;
-		const editActCat = document.getElementById('edit-tx-actual-category')?.value;
-		const editActSub = document.getElementById('edit-tx-actual-subcategory')?.value || null;
+		const sameClassification = document.getElementById('edit-chk-sync-actual-category')?.checked;
+		const editActCat = sameClassification ? editCat : document.getElementById('edit-tx-actual-category')?.value;
+		const editActSub = sameClassification ? editSub : document.getElementById('edit-tx-actual-subcategory')?.value || null;
 		const editMemo = document.getElementById('edit-tx-memo')?.value || '';
 		const editTags = (document.getElementById('edit-tx-tags')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
 		const editStatus = document.getElementById('edit-tx-status')?.value || 'confirmed';

@@ -522,6 +522,7 @@ function createResponse(obj) {
 // ==========================================
 
 function handleAction(action, payload) {
+	recoverReplacementImport();
 	switch (action) {
 		case 'push_diff':
 			return handlePushDiff(payload);
@@ -529,6 +530,8 @@ function handleAction(action, payload) {
 			return handleCloseMonth(payload);
 		case 'retroactive_update':
 			return handleRetroactiveUpdate(payload);
+		case 'replace_import':
+			return handleReplaceImport(payload);
 		case 'fetch_state':
 			return handleFetchState();
 		case 'fetch_master':
@@ -563,8 +566,9 @@ function newerTransaction(a, b) {
 }
 
 function handleFetchState() {
+	recoverReplacementImport();
 	const archives = readArchives();
-	return {
+	const state = {
 		success: true,
 		master_config: sharedMasterConfig(loadJsonFile('master_config.json', { schema_version: 2 })),
 		snapshot: loadJsonFile('summary_snapshot.json', { schema_version: 2, last_closed_month: null, account_balances: {}, monthly_summaries: {} }),
@@ -572,6 +576,177 @@ function handleFetchState() {
 		archived_transactions: archives.flatMap(archive => archive.transactions || []),
 		archive_months: archives.map(archive => archive.month)
 	};
+	return { ...state, state_version: replacementStateVersion(state) };
+}
+
+function replacementStateVersion(state) {
+	return canonicalJsonStringify({ master_config: state.master_config, snapshot: state.snapshot, pending_diffs: state.pending_diffs, archived_transactions: state.archived_transactions, archive_months: state.archive_months });
+}
+
+function writeReplacementCommit(value) {
+	const ss = getStorageSpreadsheet();
+	if (!ss) throw new Error('Storage spreadsheet is unavailable');
+	const sheet = ss.getSheetByName('replacement_commit') || ss.insertSheet('replacement_commit');
+	// A single-cell write is the commit point. Never clear the previous marker first.
+	sheet.getRange(1, 1, 1, 1).setValues([[JSON.stringify(value)]]);
+}
+
+function recoverReplacementImport() {
+	const markerSheet = getStorageSpreadsheet()?.getSheetByName('replacement_commit');
+	if (!markerSheet || !markerSheet.getLastRow()) return;
+	const marker = loadJsonFromSheet(markerSheet, undefined);
+	if (marker === undefined) throw new Error('完全インポートの確定記録を読み取れません。同期を中断しました。');
+	if (marker === null) return;
+	const journal = loadJsonFile('replacement_journal.json', null);
+	if (!journal || journal.id !== marker.id || !Array.isArray(journal.writes)) throw new Error('完全インポートの復旧記録が不正です。同期を中断しました。');
+	for (const write of journal.writes) saveJsonFile(write.file, write.data);
+	writeReplacementCommit(null);
+}
+
+function validateReplacementData(data, current) {
+	const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+	const requireValid = (valid, field) => { if (!valid) throw new Error(`完全インポートの形式が不正です: ${field}`); };
+	const safe = value => {
+		if (typeof value === 'number') requireValid(Number.isFinite(value), 'number');
+		if (!value || typeof value !== 'object') return;
+		for (const [key, child] of Object.entries(value)) {
+			requireValid(!['__proto__', 'constructor', 'prototype'].includes(key), 'unsafe key');
+			safe(child);
+		}
+	};
+	safe(data);
+	requireValid(object(data) && data.schema_version === 2, 'schema_version');
+	const fields = { full_backup: ['transactions', 'master_config', 'summary_snapshot'], transactions: ['transactions'], master_config: ['master_config'], annual_budgets: ['annual_budgets'], summary_snapshot: ['summary_snapshot'] };
+	requireValid(Object.hasOwn(fields, data.export_type), 'export_type');
+	for (const field of fields[data.export_type]) requireValid(Object.hasOwn(data, field), field);
+	for (const field of ['transactions', 'master_config', 'annual_budgets', 'summary_snapshot']) if (Object.hasOwn(data, field)) requireValid(fields[data.export_type].includes(field), `種別外のデータ: ${field}`);
+	const items = (value, field) => {
+		requireValid(Array.isArray(value), field);
+		const ids = new Set();
+		for (const item of value) {
+			requireValid(object(item) && typeof item.id === 'string' && item.id.length > 0 && !['__proto__', 'constructor', 'prototype'].includes(item.id) && !ids.has(item.id), `${field}.id`);
+			ids.add(item.id);
+		}
+		return value;
+	};
+	const strings = (value, keys, field) => { for (const key of keys) if (value[key] != null) requireValid(typeof value[key] === 'string', `${field}.${key}`); };
+	const numbers = (value, keys, field) => { for (const key of keys) if (value[key] != null) requireValid(typeof value[key] === 'number' && Number.isFinite(value[key]), `${field}.${key}`); };
+	const booleans = (value, field) => { for (const key of ['is_deleted', 'amount_pending', 'is_archived', 'is_active', 'is_asset', 'is_payment_record', 'is_point_split']) if (Object.hasOwn(value, key)) requireValid(typeof value[key] === 'boolean', `${field}.${key}`); };
+	const month = value => typeof value === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
+	const validateBudgets = budgets => {
+		requireValid(object(budgets), 'annual_budgets');
+		for (const [year, budget] of Object.entries(budgets)) {
+			requireValid(/^\d{4}$/.test(year) && object(budget), 'annual_budgets.year');
+			numbers(budget, ['expense_budget', 'savings_target_amount', 'savings_target_rate', 'target_savings_rate'], 'annual_budgets.year');
+			if (budget.category_budgets !== undefined) { requireValid(object(budget.category_budgets), 'category_budgets'); numbers(budget.category_budgets, Object.keys(budget.category_budgets), 'category_budgets'); }
+		}
+	};
+	const has = field => fields[data.export_type].includes(field);
+	if (has('transactions')) {
+		for (const tx of items(data.transactions, 'transactions')) {
+			booleans(tx, 'transactions');
+			requireValid(['expense', 'income', 'transfer'].includes(tx.type) && ['planned', 'confirmed'].includes(tx.status), 'transactions.type/status');
+			requireValid(month(tx.target_month) && /^\d{4}-\d{2}-\d{2}$/.test(tx.date || '') && !Number.isNaN(Date.parse(tx.date)) && new Date(tx.date).toISOString().slice(0, 10) === tx.date, 'transactions.date/target_month');
+			requireValid(typeof tx.amount === 'number' && Number.isFinite(tx.amount) && tx.amount >= 0, 'transactions.amount');
+			requireValid(typeof tx.account_id === 'string' && tx.account_id.length > 0, 'transactions.account_id');
+			if (tx.type === 'transfer') requireValid(typeof tx.to_account_id === 'string' && tx.to_account_id.length > 0 && tx.to_account_id !== tx.account_id, 'transactions.to_account_id');
+			strings(tx, ['memo', 'created_at', 'updated_at', 'account_id', 'to_account_id', 'category_id', 'subcategory_id', 'actual_category_id', 'actual_subcategory_id', 'group_id'], 'transactions');
+			if (tx.tags !== undefined) requireValid(Array.isArray(tx.tags) && tx.tags.every(tag => typeof tag === 'string'), 'transactions.tags');
+			for (const field of ['tax_meta', 'amortization_meta', 'auto_settlement_meta']) if (tx[field] != null) requireValid(object(tx[field]), `transactions.${field}`);
+		}
+	}
+	let config = current.master_config;
+	if (has('master_config')) {
+		requireValid(object(data.master_config), 'master_config');
+		config = sharedMasterConfig(data.master_config);
+		for (const field of ['accounts', 'categories', 'recurring_rules', 'holidays']) requireValid(Array.isArray(config[field]), `master_config.${field}`);
+		for (const field of ['accounts', 'categories', 'recurring_rules']) {
+			if (config[field] === undefined) continue;
+			for (const item of items(config[field], field)) {
+				booleans(item, field);
+				strings(item, ['name', 'type', 'icon', 'updated_at', 'account_id', 'to_account_id', 'category_id', 'subcategory_id', 'actual_category_id', 'actual_subcategory_id', 'debit_account_id', 'settlement_account_id', 'premium_pay_account_id', 'memo', 'start_date', 'end_date', 'maturity_date'], field);
+				numbers(item, ['initial_balance', 'amount', 'day_of_month', 'closing_day', 'debit_day', 'debit_month_offset', 'premium_amount', 'premium_day', 'maturity_amount', 'interval_months', 'amortize_months'], field);
+				if (item.subcategories !== undefined) for (const sub of items(item.subcategories, 'subcategories')) { booleans(sub, 'subcategories'); strings(sub, ['name'], 'subcategories'); }
+			}
+		}
+		if (config.holidays !== undefined) requireValid(Array.isArray(config.holidays) && config.holidays.every(day => typeof day === 'string'), 'holidays');
+	}
+	if (has('annual_budgets')) config = { ...config, annual_budgets: data.annual_budgets };
+	if (config.annual_budgets !== undefined) validateBudgets(config.annual_budgets);
+	const snapshot = has('summary_snapshot') ? data.summary_snapshot : current.snapshot;
+	requireValid(object(snapshot), 'summary_snapshot');
+	if (snapshot.last_closed_month != null) requireValid(month(snapshot.last_closed_month), 'last_closed_month');
+	for (const field of ['account_balances', 'monthly_summaries']) if (snapshot[field] !== undefined) requireValid(object(snapshot[field]), `summary_snapshot.${field}`);
+	if (snapshot.account_balances) numbers(snapshot.account_balances, Object.keys(snapshot.account_balances), 'account_balances');
+	for (const [key, value] of Object.entries(snapshot.monthly_summaries || {})) {
+		requireValid(month(key) && object(value), 'monthly_summaries');
+		numbers(value, ['income_total', 'expense_total', 'net_income', 'income_confirmed', 'expense_confirmed', 'total_income', 'total_expense'], 'monthly_summaries');
+		for (const field of ['by_category', 'by_actual_category', 'closing_balances']) if (value[field] !== undefined) requireValid(object(value[field]), `monthly_summaries.${field}`);
+	}
+	if (snapshot.external_assets !== undefined) requireValid(Array.isArray(snapshot.external_assets) && snapshot.external_assets.every(object), 'external_assets');
+	const transactions = has('transactions') ? data.transactions : [...current.pending_diffs, ...current.archived_transactions];
+	const accounts = new Set(items(config.accounts || [], 'accounts').map(item => item.id));
+	const categories = new Map(items(config.categories || [], 'categories').map(item => [item.id, new Set(items(item.subcategories || [], 'subcategories').map(sub => sub.id))]));
+	const ref = (value, choices, field) => { if (value != null && value !== '') requireValid(choices.has(value), `${field}: 参照先 ${value} が存在しません`); };
+	for (const account of config.accounts || []) for (const field of ['debit_account_id', 'settlement_account_id', 'premium_pay_account_id']) ref(account[field], accounts, field);
+	for (const entry of [...transactions.filter(tx => !tx.is_deleted), ...items(config.recurring_rules || [], 'recurring_rules')]) {
+		for (const field of ['account_id', 'to_account_id']) ref(entry[field], accounts, field);
+		for (const prefix of ['', 'actual_']) {
+			ref(entry[`${prefix}category_id`], categories, `${prefix}category_id`);
+			ref(entry[`${prefix}subcategory_id`], categories.get(entry[`${prefix}category_id`]) || new Set(), `${prefix}subcategory_id`);
+		}
+	}
+	for (const id of Object.keys(snapshot.account_balances || {})) ref(id, accounts, 'account_balances');
+	for (const budget of Object.values(config.annual_budgets || {})) for (const id of Object.keys(budget.category_budgets || {})) ref(id, categories, 'category_budgets');
+	return { config, snapshot, transactions, replaceTransactions: has('transactions'), replaceMaster: has('master_config') || has('annual_budgets'), replaceSnapshot: has('summary_snapshot') };
+}
+
+function handleReplaceImport(payload) {
+	try {
+		if (!payload || !/^[a-zA-Z0-9_-]{1,128}$/.test(payload.import_id || '') || typeof payload.base_version !== 'string') throw new Error('完全インポートの ID または基点が不正です');
+		const fingerprint = canonicalJsonStringify(payload.data);
+		const receipts = loadJsonFile('replacement_receipts.json', {});
+		const previous = Object.hasOwn(receipts, payload.import_id) ? receipts[payload.import_id] : null;
+		if (previous) {
+			if (previous.fingerprint !== fingerprint) throw new Error('同じ完全インポート ID に異なるデータが指定されています');
+			return previous.response;
+		}
+		const current = handleFetchState();
+		if (payload.base_version !== current.state_version) throw new Error('完全インポートの取得後にサーバーデータが変更され競合しました。設定画面で完全インポートを再確認してください。');
+		const next = validateReplacementData(payload.data, current);
+		const writes = [];
+		let importedAt = null;
+		if (next.replaceTransactions) {
+			const archives = new Map(current.archive_months.map(month => [month, []]));
+			const pending = [];
+			const currentTransactions = [...current.pending_diffs, ...current.archived_transactions];
+			const newestTimestamp = [...currentTransactions, ...next.transactions].reduce((latest, tx) => Math.max(latest, Date.parse(tx.updated_at || '') || 0), Date.now());
+			importedAt = new Date(newestTimestamp + 1).toISOString();
+			const importedIds = new Set(next.transactions.map(tx => tx.id));
+			const omitted = new Map();
+			for (const tx of currentTransactions) if (!importedIds.has(tx.id) && (!omitted.has(tx.id) || newerTransaction(tx, omitted.get(tx.id)))) omitted.set(tx.id, tx);
+			const tombstones = [...omitted.values()].map(tx => ({ ...tx, is_deleted: true }));
+			for (const transaction of [...next.transactions, ...tombstones]) {
+				const tx = { ...storedTransaction(transaction), updated_at: importedAt, sync_status: 'synced' };
+				if (next.snapshot.last_closed_month && tx.target_month <= next.snapshot.last_closed_month) {
+					if (!archives.has(tx.target_month)) archives.set(tx.target_month, []);
+					archives.get(tx.target_month).push(tx);
+				} else pending.push(tx);
+			}
+			writes.push({ file: 'pending_diffs.json', data: { schema_version: 2, transactions: pending } });
+			for (const [month, transactions] of archives) writes.push({ file: `archives/${month}.json`, data: { schema_version: 2, transactions } });
+		}
+		if (next.replaceMaster) writes.push({ file: 'master_config.json', data: next.config });
+		if (next.replaceSnapshot) writes.push({ file: 'summary_snapshot.json', data: next.snapshot });
+		const response = { success: true, import_id: payload.import_id, master_config: next.config, imported_at: importedAt };
+		writes.push({ file: 'replacement_receipts.json', data: { ...receipts, [payload.import_id]: { fingerprint, response } } });
+		const journal = { id: payload.import_id, writes };
+		saveJsonFile('replacement_journal.json', journal);
+		if (canonicalJsonStringify(loadJsonFile('replacement_journal.json', null)) !== canonicalJsonStringify(journal)) throw new Error('完全インポートの復旧記録を保存できませんでした');
+		writeReplacementCommit({ id: payload.import_id });
+		recoverReplacementImport();
+		return response;
+	} catch (error) { return { success: false, error: error.message }; }
 }
 
 function sharedMasterConfig(config) {

@@ -77,15 +77,16 @@ export class SyncStatusController {
 		}
 		const unsynced = await this.db.getUnsyncedTransactions();
 		const masterPending = await this.db.hasUnsyncedMasterConfig();
+		const importPending = await this.db.getPendingImport();
 		if (showProgress()) return;
 		const count = unsynced?.length || 0;
 		const masterConflict = (this.syncManager.masterConflictPaths?.length || 0) > 0;
 		badge.title = this.syncManager.lastError || '';
-		if (count === 0 && !masterPending && !masterConflict) {
+		if (count === 0 && !masterPending && !masterConflict && !importPending) {
 			badge.textContent = this.syncManager.lastError ? '同期失敗' : '同期済';
 			badge.className = this.syncManager.lastError ? 'badge badge-danger' : 'badge badge-success';
 		} else {
-			const masterText = masterConflict ? '設定の確認待ち' : masterPending ? '設定が未同期' : '';
+			const masterText = importPending ? '完全取込が送信待ち' : masterConflict ? '設定の確認待ち' : masterPending ? '設定が未同期' : '';
 			badge.textContent = `${this.syncManager.lastError ? '同期失敗 / ' : ''}${count ? `未同期: ${count}件` : ''}${count && masterText ? ' / ' : ''}${masterText}`;
 			badge.className = this.syncManager.lastError ? 'badge badge-danger' : 'badge badge-info';
 		}

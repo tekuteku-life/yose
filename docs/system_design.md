@@ -301,6 +301,8 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 ### 3.15 バックアップJSONインポート時の非破壊・差分マージ（ORマージ）要件
 
+本節は既定の差分マージ方式を定義する。明示選択による完全インポートは3.45に従う。
+
 1. **課題と設計方針**
    * 従来のバックアップJSON復元は、既存のローカルマスタ設定やスナップショットを一括上書き（Overwrite）していたため、インポートファイルに含まれないローカル側の独自費目・追加口座・祝日設定が消失する問題があった。
    * これを全面的に改善し、**ローカルデータを消去せず、インポートJSONとの差分のみを取り込んで重複なく統合する非破壊ORマージ方式（Deduplicated Union Merge）** を採用する。
@@ -469,7 +471,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * 設定タブのバックアップ領域を「📦 データエクスポート・バックアップ & インポート」カードへと拡張。
    * 「💾 各種データJSONダウンロード」ボタン（`#btn-open-export-modal`）を配置し、押下時にモーダル（`#modal-export-json`）を表示。
    * モーダル内には、全データ一括、取引明細、マスタ設定、年間予算、残高スナップショットの各説明文と、ワンクリックダウンロードボタン（`#btn-export-full`, `#btn-export-transactions`, `#btn-export-master`, `#btn-export-budgets`, `#btn-export-snapshot`）を整然と配置。
-   * 「📂 JSONインポート (自動判別・差分ORマージ)」ボタンから、上記のどのJSONファイルを指定してもシームレスに判別・マージが行われる統一的UXを実現。
+   * 取込方式の既定を差分マージとし、「JSONファイルを選択してインポート」から上記の各JSON種別を自動判別する。完全インポートを明示選択した場合は3.45の確認と置換を行う。
 
 ### 3.27 費目別推移・内訳のドーナツグラフ可視化要件
 
@@ -785,6 +787,22 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 設定競合の確認を取り消した場合は `master_conflict_cancelled`、自動同期で確認できない場合は `master_conflict` として返す。通信失敗とは区別し、`lastError` を設定しない。競合項目は専用状態へ保持し、ヘッダーに「設定の確認待ち」と表示する。明細だけの同期成功では解除せず、共有マスタの調停・共有基点保存が成功したときに解除する。
 
 取消時は今回の設定競合の上書きを行わず、手元とサーバーの設定を保持する。確認前の明細受信や、再受信前の設定・明細送信が完了している場合は巻き戻さない。同期結果はその時点までの送受信件数と残未同期件数を保持し、画面も同期全体を取り消したとは表示しない。実通信・署名・サーバー版比較の失敗は従来どおり失敗として通知する。初回共有基点の推定とマージ規則は変更しない。
+
+### 3.45 セクション操作・編集分類・完全インポート
+
+カードはタイトル文字とタイトルバーの余白から開閉できるものとする。内包するボタン・リンク・入力・選択・ラベル等の操作は開閉と分離し、1回の操作で二重反転しない。キーボードと開閉状態の読み上げ、既存の状態保存を維持する。狭い画面ではタイトルバーを折り返し、見出しに約12文字分（コンテナ幅が上限）の幅を確保して1文字ずつの縦積みを防ぐ。
+
+明細編集では計上・実態の大項目と中項目がともに一致する場合、入力画面と同じ「実態分類を計上分類と同じにする」を初期ONとし、実態欄を畳む。ON中の計上変更は保存時も実態に反映する。一致しない明細はOFFとし、独立した値を維持する。未指定値・振替・一括編集・変更破棄確認の扱いを既存編集と整合させる。
+
+インポートの既定は従来の非破壊差分マージである。追加の完全インポートではファイルの種別（全データ、明細、マスタ、年間予算、スナップショット）に対応する範囲を丸ごと置き換え、同一更新日時の手編集も採用し、対象範囲内のファイルにない値を削除する。全体ファイルと型・ID・参照の整合性を検査してから、対象・件数・削除範囲・次回同期でサーバーの同種データも置き換える旨を表示し、マジックワード「完全インポート」の完全一致入力を最終確認とする。取消・誤入力・戻る・ロックでは書き込まない。
+
+ローカルの3業務ストアと暗号化した送信待ち完全取込outboxを単一トランザクションで更新する。確認開始時からの原本変更、暗号鍵変更、同期中、既存outbox保留中の通常取込は中止し、部分取込を行わない。認証鍵・接続先・同期共有基点は保持する。取込payloadは同一取込IDの中で不変とし、ACKで後続の手元編集を上書きしない。ACK成功時にのみ、取込対象の共有マスタ基点をサーバーの受理版へ進める。
+
+次回の各同期入口では通常受信・送信に先行して完全取込outboxを送信する。初回取得したサーバー版をoutboxへ永続化し、署名付き `replace_import` で版比較して対象種別だけを置き換える。全データ・明細の対象にはサーバー上の全アーカイブも含む。サーバーの多ファイル更新は永続ジャーナル等により中断後も旧版と新版が混在して参照されない方式とする。同じ取込IDの再送は再適用せず結果を回収し、同ID異payloadは拒否する。版競合時に基点を自動更新せず、設定で再びマジックワードを入力して再承認したときだけ最新状態に対して試行する。保留状態は設定画面と同期表示で確認できる。送信不能な保留を修正ファイルでやり直す場合は、専用チェックとmagic確認により、同種または全データのファイルだけを新IDで置き換える。旧保留を含む原本比較を行い、旧要求が適用済でもロールバックとは扱わない。
+
+サーバーで省略された既存明細は削除通知として保持して他端末にも伝播する。通常の一覧には表示しない。明示取込時だけ、サーバー・ファイル・現在時刻の最大値を超える確定日時を取込明細と削除通知へ付与する。ACKは一致する現行明細をその版で同期済みにし、同IDの後続編集は内容を保持してさらに新しい未同期版へ進める。通常の差分マージ規則は変更しない。
+
+取込スナップショットも完全置換の対象である。以後の通常の月締め・締め済み明細修正では、通常仕様どおりサーバーが残高を再計算する。完全取込の最終確認はデータ置換の承認であり、既存の再月締め確認を恒久的に無効化しない。
 
 ## 4. 同期トリガー・通信・セキュリティ要件
 
@@ -1821,6 +1839,7 @@ flowchart TD
 | **3.40** | 入力サジェストUI制御（ネイティブdatalist撤廃とインラインドロップダウン）・クレカ引落口座連携表示・集計粒度別明細表示およびページネーション | `js/ui/tx_input_controller.js`, `js/ui/master_controller.js`, `js/ui/tx_list_controller.js`, `index.html`, `css/style.css`, `js/db/defaults.js` | - | `master_config` (`debit_account_id`), `pending_diffs` | `test/ui/headless_ui.test.js`, `test/unit/master_management.test.js` |
 | **3.41** | 静的型チェック自動検証（check:types）および集計・設定全機能網羅UIテスト拡充（予定トグル・軸切替・年次予算・テーマ） | `package.json`, `jsconfig.json`, `types/ambient.d.ts`, `js/logic/aggregator.js`, `js/ui/tx_list_controller.js`, `js/ui/settings_controller.js`, `js/ui/summary_controller.js` | - | `master_config` (`annual_budgets`) | `npm run check:types`, `test/ui/headless_ui.test.js` |
 | **3.44.2** | 設定競合の比較・項目別解消と取消 | `js/logic/master_sync.js`, `js/ui/master_conflict_controller.js`, `js/ui/sync_status_controller.js`, `js/sync.js` | 既存 `update_master` の版検査を維持 | 暗号化共有マスタ・共有基点 | `test/unit/master_conflict_resolution.test.js`, `test/integration/master_conflict_outcomes.test.js`, `test/ui/master_conflict_resolution.test.js` |
+| **3.45** | タイトルバー開閉・編集分類共通化・種別別完全取込とサーバー反映 | `js/ui/coordinator.js`, `js/ui/tx_edit_controller.js`, `js/ui/backup_import_controller.js`, `js/db/backup_replacement.js`, `js/db/yose_db.js`, `js/sync.js`, `gas/Code.gs` | `replace_import` | 業務3ストア・暗号化outbox・サーバー復旧journal/receipt | `test/ui/section_and_edit_categories.test.js`, `test/ui/replacement_import.test.js`, `test/integration/replacement_import.test.js`, `test/integration/full_import_sync.test.js`, `test/system/full_import_recovery_scenario.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |

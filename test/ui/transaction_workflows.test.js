@@ -162,6 +162,7 @@ describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 		await d.fill('#edit-tx-memo', '保存後');
 		await d.fill('#edit-tx-tags', '編集, 確認');
 		await d.select('#edit-tx-subcategory', '');
+		await d.click('#edit-chk-sync-actual-category');
 		await d.select('#edit-tx-actual-subcategory', '');
 		await submit(d, '#edit-tx-form');
 		await d.waitFor('!document.getElementById("modal-edit-tx").classList.contains("active")');
@@ -387,6 +388,7 @@ describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 		await d.select('#edit-tx-type', 'income');
 		await d.select('#edit-tx-category', 'cat_income_main');
 		await d.select('#edit-tx-subcategory', 'sub_salary');
+		await d.click('#edit-chk-sync-actual-category');
 		await d.select('#edit-tx-actual-category', 'cat_point_income');
 		await d.select('#edit-tx-actual-subcategory', 'sub_point_reward');
 		await submit(d, '#edit-tx-form');

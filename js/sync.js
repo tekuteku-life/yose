@@ -75,6 +75,7 @@ export class SyncManager {
 		this.isSyncing = true; this.lastError = null;
 		let pendingCount = 0;
 		try {
+			await this.flushPendingImport();
 			pendingCount = (await this.db.getUnsyncedTransactions()).length;
 			const remote = await this.sendRequest('fetch_master', {});
 			await this.syncSharedMaster(remote.master_config);
@@ -84,6 +85,33 @@ export class SyncManager {
 			this.lastError = error.message; throw error;
 		}
 		finally { this.isSyncing = false; }
+	}
+
+	async flushPendingImport() {
+		if (!this.db.getPendingImport) return;
+		const privateKey = this.privateKey, encryptionKey = this.db.encryptionKey;
+		const isSessionValid = () => Boolean(privateKey) && this.privateKey === privateKey && this.db.encryptionKey === encryptionKey;
+		const checkSession = () => {
+			if (!isSessionValid()) throw new Error('認証がロックまたは変更されました。解除後に完全インポートを同期し直してください。');
+		};
+		let pending = await this.db.getPendingImport();
+		if (!pending) return;
+		checkSession();
+		if (pending.base_version === undefined) {
+			const remote = await this.sendRequest('fetch_state', {});
+			checkSession();
+			if (typeof remote.state_version !== 'string') throw new Error('完全インポート同期には GAS の更新が必要です。手元のデータと送信待ちを保持しています。');
+			const bound = { ...pending, base_version: remote.state_version };
+			if (!await this.db.updatePendingImport(pending, bound, { isSessionValid })) throw new Error('完全インポートの送信待ちが変更されました。再度同期してください。');
+			pending = bound;
+		}
+		checkSession();
+		const response = await this.sendRequest('replace_import', { import_id: pending.id, data: pending.data, base_version: pending.base_version });
+		checkSession();
+		if (response.import_id !== pending.id) throw new Error('完全インポートの同期応答を確認できませんでした。送信待ちを保持しています。');
+		if (Array.isArray(pending.data.transactions) && (typeof response.imported_at !== 'string' || !Number.isFinite(Date.parse(response.imported_at)))) throw new Error('完全インポートの受理時刻を確認できませんでした。送信待ちを保持しています。');
+		if (!await this.db.acknowledgePendingImport(pending, response.master_config || null, { isSessionValid, importedAt: response.imported_at })) throw new Error('完全インポートの送信待ちが変更されました。再度同期してください。');
+		this.masterConflictPaths = [];
 	}
 
 	masterConflictOutcome(error, syncedCount = 0, downloadedCount = 0, pendingCount = 0) {
@@ -245,6 +273,7 @@ export class SyncManager {
 	}
 
 	async pushPending({ keepalive = false } = {}) {
+		await this.flushPendingImport();
 		const unsynced = await this.db.getUnsyncedTransactions();
 		if (!unsynced?.length) return { status: 'up_to_date', synced_count: 0 };
 		const snapshot = await this.db.getSnapshot();
@@ -269,6 +298,7 @@ export class SyncManager {
 	}
 
 	async downloadTransactions() {
+		await this.flushPendingImport();
 		const response = await this.sendRequest('fetch_state', {});
 		const count = await this.db.mergeRemoteTransactions([...(response.archived_transactions || []), ...(response.pending_diffs || [])]);
 		if (response.snapshot) await this.db.saveSnapshot(response.snapshot);
@@ -345,6 +375,7 @@ export class SyncManager {
 		this.lastError = null;
 
 		try {
+			await this.flushPendingImport();
 			// First save locally
 			const submitted = await this.db.putTransaction(transaction);
 
@@ -382,6 +413,7 @@ export class SyncManager {
 		this.isSyncing = true;
 		let pendingCount = 0;
 		try {
+			await this.flushPendingImport();
 			pendingCount = (await this.db.getUnsyncedTransactions()).length;
 			const response = await this.sendRequest('fetch_state', {});
 			if (response.master_config) {

@@ -37,6 +37,7 @@ describe('Master configuration synchronization UI', { timeout: 120000 }, () => {
 		assert.ok(await d.evaluate('document.getElementById("select-account").textContent.includes("通信待ち即時口座")'));
 		assert.equal(await d.evaluate('document.getElementById("sync-badge").getAttribute("aria-busy")'), 'true');
 		assert.equal(await d.evaluate('document.getElementById("btn-manual-sync").disabled'), true);
+		await d.waitFor('typeof window.__releaseMaster === "function"');
 		await d.evaluate('window.__deferMaster = false; window.__releaseMaster()');
 		await d.waitFor('document.getElementById("sync-badge").textContent === "同期済"');
 		assert.equal(await d.evaluate('document.getElementById("btn-manual-sync").disabled'), false);
@@ -112,6 +113,7 @@ describe('Master configuration synchronization UI', { timeout: 120000 }, () => {
 		await d.click('#btn-header-sync');
 		await d.waitFor('document.getElementById("sync-badge").textContent === "同期中…"');
 		assert.equal(await d.evaluate('document.getElementById("btn-header-sync").disabled'), true);
+		await d.waitFor('typeof window.__releaseMaster === "function"');
 		await d.evaluate('window.__deferMaster = false; window.__releaseMaster()');
 		await waitForDialog(d, '差分同期完了');
 		await d.waitFor('document.getElementById("sync-badge").textContent === "同期済"');
@@ -129,6 +131,7 @@ describe('Master configuration synchronization UI', { timeout: 120000 }, () => {
 		await d.click('#chk-sync-actual-category');
 		await d.select('#select-actual-category', 'cat_housing'); await d.select('#select-actual-subcategory', 'sub_utilities');
 		await d.fill('#input-memo', '通信待ち中の入力'); await d.fill('#input-amount', '123');
+		await d.waitFor('typeof window.__releaseMaster === "function"');
 		await d.evaluate('window.__remoteMaster.categories.find(c => c.id === "cat_food").name = "受信された別費目"; window.__deferMaster = false; window.__releaseMaster()');
 		await d.waitFor('document.getElementById("sync-badge").textContent === "同期済" && document.getElementById("select-category").textContent.includes("受信された別費目")');
 		for (const [selector, expected] of [['#select-account', 'acc_bank_main'], ['#select-category', 'cat_social'], ['#select-subcategory', 'sub_leisure'], ['#select-actual-category', 'cat_housing'], ['#select-actual-subcategory', 'sub_utilities'], ['#input-memo', '通信待ち中の入力'], ['#input-amount', '123']]) assert.equal(await value(d, selector), expected);

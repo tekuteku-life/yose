@@ -3,6 +3,8 @@
  * Manages Settings tab, Key Management (3 Subcards), Annual Budgets, Backup Import/Export, and PWA Update.
  */
 
+import { BackupImportController } from './backup_import_controller.js';
+
 import {
 	formatDate,
 	aggregateMonthlySummaries,
@@ -26,6 +28,7 @@ import {
 export class SettingsController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
+		this.backupImportController = new BackupImportController(coordinator);
 	}
 
 	get db() {
@@ -41,6 +44,7 @@ export class SettingsController {
 	}
 
 	setupSettingsView() {
+		this.backupImportController.setup();
 		// Generate new key
 		document.getElementById('btn-generate-key')?.addEventListener('click', async () => {
 			if (confirm('新しいEd25519鍵ペアを生成しますか？\n（GAS側の USER_PUBLIC_KEYS の更新が必要になります）')) {
@@ -180,6 +184,10 @@ export class SettingsController {
 					data = JSON.parse(text);
 				} catch (parseErr) {
 					throw new Error('不正なJSONファイル形式です: ' + parseErr.message);
+				}
+				if (document.getElementById('select-import-mode').value === 'replace') {
+					await this.backupImportController.preview(data);
+					return;
 				}
 				const res = await this.db.importFullData(data);
 				const s = res?.stats || {};
@@ -538,7 +546,12 @@ export class SettingsController {
 		});
 	}
 
+	async renderPendingImport() {
+		await this.backupImportController.renderPending();
+	}
+
 	async renderSettings() {
+		await this.renderPendingImport();
 		this.authController.updateKeyDisplay();
 		const badgeVer = document.getElementById('badge-current-version');
 		if (badgeVer) badgeVer.textContent = `v${CURRENT_APP_VERSION}`;

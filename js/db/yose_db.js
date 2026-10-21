@@ -6,6 +6,7 @@ import { buildMasterMigration } from '../logic/master_maintenance.js';
 import { DEFAULT_MASTER_CONFIG, DEFAULT_SUMMARY_SNAPSHOT } from './defaults.js';
 import { StorageEngine } from './storage_engine.js';
 import { BackupMerger } from './backup_merger.js';
+import { prepareReplacementData, assertReplacementReferences, IMPORT_CONFIRMATION_WORD } from './backup_replacement.js';
 import { formatDate, calculateCreditCardDebitDate } from '../logic/date_utils.js';
 import { canonicalJsonStringify } from '../crypto.js';
 import { createCreditCardSettlementTransaction } from '../logic/transaction_factory.js';
@@ -313,6 +314,7 @@ export class YoseDB extends StorageEngine {
 	}
 
 	async importFullData(data) {
+		if (await this.getPendingImport()) throw new Error('完全インポートが送信待ちです。先に同期してください。');
 		if (!data) {
 			throw new Error('Invalid data schema version');
 		}
@@ -406,6 +408,109 @@ export class YoseDB extends StorageEngine {
 		}
 
 		return { success: true, stats, detectedType };
+	}
+
+	async getPendingImport() {
+		return this.decryptRecord(await this.getRaw('master_config', 'pending_import'));
+	}
+
+	async captureImportState() {
+		const [transactions, master, snapshot, pending, base] = await Promise.all([
+			this.getAllRaw('transactions'), this.getRaw('master_config', 'current'), this.getRaw('summary_snapshot', 'current'), this.getRaw('master_config', 'pending_import'), this.getRaw('master_config', 'sync_base')
+		]);
+		return { transactions, master, snapshot, pending, base };
+	}
+
+	async prepareReplacementImport(input, { replacePending = false } = {}) {
+		const encryptionKey = this.encryptionKey;
+		if (!encryptionKey) throw new Error('データがロックされています。解除してから確認してください。');
+		const { data, detectedType } = prepareReplacementData(input);
+		const expected = await this.captureImportState();
+		if (expected.pending) {
+			if (!replacePending) throw new Error('完全インポートが送信待ちです。先に同期するか、送信待ちのやり直しを選択してください。');
+			const previous = await this.decryptRecord(expected.pending);
+			if (detectedType !== previous.detectedType && detectedType !== 'full_backup') throw new Error('送信待ちと同じ種別、または全データのJSONを選択してください。');
+		}
+		const currentMaster = await this.decryptRecord(expected.master);
+		const currentSnapshot = await this.decryptRecord(expected.snapshot);
+		const master = data.master_config || (data.annual_budgets ? { ...currentMaster, annual_budgets: data.annual_budgets } : currentMaster);
+		const snapshot = data.summary_snapshot || currentSnapshot;
+		const transactions = data.transactions || await Promise.all(expected.transactions.map(raw => this.decryptRecord(raw)));
+		assertReplacementReferences(master, transactions, snapshot);
+		if (this.encryptionKey !== encryptionKey) throw new Error('確認中に認証鍵が変更されました');
+		return { id: crypto.randomUUID(), created_at: new Date().toISOString(), data, detectedType, expected, encryptionKey, master, snapshot, transactions };
+	}
+
+	async commitReplacementImport(plan, { confirmation = '', isSessionValid = () => Boolean(true) } = {}) {
+		if (confirmation !== IMPORT_CONFIRMATION_WORD) throw new Error('確認の文字が一致しません');
+		const valid = () => Boolean(plan.encryptionKey && this.encryptionKey === plan.encryptionKey && isSessionValid());
+		if (!valid()) throw new Error('認証または同期状態が変更されました');
+		const data = structuredClone(plan.data);
+		const replacements = {};
+		if (data.transactions) {
+			const now = new Date(plan.transactions.reduce((latest, tx) => Math.max(latest, Date.parse(tx.updated_at || '') || 0), Date.now()) + 1).toISOString();
+			data.transactions = data.transactions.map(tx => {
+				const next = { ...tx, created_at: tx.created_at || now, updated_at: now, sync_status: 'unsynced' };
+				delete next.previous_target_month;
+				delete next.reclose_approved_months;
+				return next;
+			});
+			replacements.transactions = await Promise.all(data.transactions.map(tx => this.encryptRecord(tx, { id: tx.id, target_month: tx.target_month, date: tx.date, sync_status: tx.sync_status, is_deleted: Boolean(tx.is_deleted) })));
+		}
+		if (data.master_config || data.annual_budgets) replacements.master = await this.encryptRecord(plan.master);
+		if (data.summary_snapshot) replacements.snapshot = await this.encryptRecord(plan.snapshot);
+		const pendingData = structuredClone(data);
+		if (pendingData.master_config) pendingData.master_config = sharedMasterConfig(pendingData.master_config);
+		const pending = { id: plan.id, created_at: plan.created_at, detectedType: plan.detectedType, data: pendingData };
+		replacements.pending = await this.encryptRecord(pending);
+		if (!valid()) throw new Error('暗号化中に認証または同期状態が変更されました');
+		if (!await this.replaceImportBatch(plan.expected, replacements, valid)) throw new Error('確認中にデータが変更されました。ファイルを選択して確認し直してください。');
+		return { success: true, detectedType: plan.detectedType, transactionCount: data.transactions?.length || 0 };
+	}
+
+	async updatePendingImport(submitted, replacement, { isSessionValid = () => Boolean(true) } = {}) {
+		const encryptionKey = this.encryptionKey;
+		if (!encryptionKey) throw new Error('データがロックされています');
+		const expected = await this.captureImportState();
+		if (canonicalJsonStringify(await this.decryptRecord(expected.pending)) !== canonicalJsonStringify(submitted)) return false;
+		if (replacement.id !== submitted.id || canonicalJsonStringify(replacement.data) !== canonicalJsonStringify(submitted.data)) throw new Error('送信待ちデータの変更はできません');
+		const pending = await this.encryptRecord(replacement);
+		const valid = () => this.encryptionKey === encryptionKey && isSessionValid();
+		if (!valid()) throw new Error('認証鍵が変更されました');
+		return this.replaceImportBatch(expected, { pending }, valid);
+	}
+
+	async acknowledgePendingImport(submitted, acceptedMaster = null, { isSessionValid = () => Boolean(true), importedAt = null } = {}) {
+		const encryptionKey = this.encryptionKey;
+		if (!encryptionKey) throw new Error('データがロックされています');
+		if (importedAt !== null && (typeof importedAt !== 'string' || !Number.isFinite(Date.parse(importedAt)))) throw new Error('完全インポートの確定日時が不正です');
+		const expected = await this.captureImportState();
+		if (canonicalJsonStringify(await this.decryptRecord(expected.pending)) !== canonicalJsonStringify(submitted)) return false;
+		const replacements = { pending: null };
+		if (submitted.data.transactions) {
+			const sent = new Map(submitted.data.transactions.map(tx => [tx.id, tx]));
+			replacements.transactions = [];
+			for (const raw of expected.transactions) {
+				const current = await this.decryptRecord(raw);
+				const submittedTransaction = sent.get(current.id);
+				if (!submittedTransaction) {
+					replacements.transactions.push(raw);
+					continue;
+				}
+				const matches = canonicalJsonStringify(current) === canonicalJsonStringify(submittedTransaction);
+				if (!matches && !importedAt) {
+					replacements.transactions.push(raw);
+					continue;
+				}
+				const updatedAt = importedAt ? (matches ? importedAt : new Date(Math.max(Date.parse(current.updated_at || '') || 0, Date.parse(importedAt) + 1)).toISOString()) : current.updated_at;
+				const acknowledged = { ...current, updated_at: updatedAt, sync_status: matches ? 'synced' : 'unsynced' };
+				replacements.transactions.push(await this.encryptRecord(acknowledged, { id: current.id, target_month: current.target_month, date: current.date, sync_status: acknowledged.sync_status, is_deleted: Boolean(current.is_deleted) }));
+			}
+		}
+		if (acceptedMaster && ['full_backup', 'master_config', 'annual_budgets'].includes(submitted.detectedType)) replacements.base = await this.encryptRecord(sharedMasterConfig(acceptedMaster));
+		const valid = () => this.encryptionKey === encryptionKey && isSessionValid();
+		if (!valid()) throw new Error('認証鍵が変更されました');
+		return this.replaceImportBatch(expected, replacements, valid);
 	}
 
 	// --- Advance Unsettled Tracking (Requirement 3.20) ---

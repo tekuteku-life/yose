@@ -1075,6 +1075,29 @@ header {
 }
 
 /* Collapsible Card Panes (Requirement 3.37) */
+.collapsible-card-title {
+	cursor: pointer;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.card-collapse-title {
+	flex: 1 1 12em;
+	min-width: min(100%, 12em);
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.card-collapse-title:focus-visible {
+	outline: 2px solid var(--primary);
+	outline-offset: 4px;
+}
+
 .card-collapse-btn {
 	background: var(--bg-hover);
 	border: 1px solid var(--border);
