@@ -112,9 +112,9 @@ describe('shared master merge and synchronization', () => {
 	it('retains both versions on conflict, allows cancelling, and resolves explicitly on a later retry', async () => {
 		const { db, sync, state } = await setup();
 		await db.saveMasterConfig({ ...master('手元') }); state.remote = master('リモート');
-		await assert.rejects(sync.syncBidirectional(), /競合/);
+		assert.equal((await sync.syncBidirectional()).status, 'master_conflict');
 		assert.equal((await db.getMasterConfig()).accounts[0].name, '手元'); assert.equal(state.remote.accounts[0].name, 'リモート');
-		await assert.rejects(sync.syncBidirectional({ approveMasterConflict: async () => false }), /競合/);
+		assert.equal((await sync.syncBidirectional({ approveMasterConflict: async () => false })).status, 'master_conflict_cancelled');
 		await sync.syncBidirectional({ approveMasterConflict: async paths => { assert.ok(paths.includes('accounts.a.name')); return true; } });
 		assert.equal(state.remote.accounts[0].name, '手元'); assert.equal(await db.hasUnsyncedMasterConfig(), false);
 	});
@@ -139,7 +139,7 @@ describe('shared master merge and synchronization', () => {
 	it('requires confirmation for divergent first-sync existing data and imports remote into default local data', async () => {
 		const { db, sync, state } = await setup();
 		await db.deleteRaw('master_config', 'sync_base'); state.remote = master('リモート既存'); await db.saveMasterConfig(master('ローカル既存'));
-		await assert.rejects(sync.syncBidirectional(), /競合/);
+		assert.equal((await sync.syncBidirectional()).status, 'master_conflict');
 		await db.saveMasterConfig(copy(DEFAULT_MASTER_CONFIG));
 		await sync.syncBidirectional(); assert.equal((await db.getMasterConfig()).accounts[0].name, 'リモート既存');
 	});

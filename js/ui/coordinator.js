@@ -19,6 +19,7 @@ import { SummaryController } from './summary_controller.js';
 import { MasterController } from './master_controller.js';
 import { SettingsController } from './settings_controller.js';
 import { MaintenanceController } from './maintenance_controller.js';
+import { MasterConflictController } from './master_conflict_controller.js';
 
 export class AppCoordinator {
 	constructor() {
@@ -50,6 +51,7 @@ export class AppCoordinator {
 		this.masterController = new MasterController(this);
 		this.settingsController = new SettingsController(this);
 		this.maintenanceController = new MaintenanceController(this);
+		this.masterConflictController = new MasterConflictController(this);
 	}
 
 	// Backward-compatible accessors for key states and components
@@ -107,6 +109,7 @@ export class AppCoordinator {
 			this.summaryController.setupSummaryView();
 			this.settingsController.setupSettingsView();
 			this.maintenanceController.setup();
+			this.masterConflictController.setup();
 			this.masterController.setupMasterTabs();
 			this.syncStatusController.updateNetworkBadge();
 
@@ -170,7 +173,7 @@ export class AppCoordinator {
 		window.addEventListener('popstate', () => {
 			if (this.allowNavigation) return;
 			if (restoring) { restoring = false; return; }
-			if (document.getElementById('modal-edit-tx')?.classList.contains('active')) {
+			if (document.getElementById('modal-edit-tx')?.classList.contains('active') || document.getElementById('modal-master-conflict')?.classList.contains('active')) {
 				this.closeTopModal();
 				restoring = true; history.forward();
 				return;
@@ -198,6 +201,7 @@ export class AppCoordinator {
 	closeTopModal() {
 		const top = this.getTopModal();
 		if (top?.id === 'modal-edit-tx') return this.txEditController.requestClose();
+		if (top?.id === 'modal-master-conflict') { this.masterConflictController.cancel(); return true; }
 		/** @type {HTMLElement} */ (top?.querySelector('.close-btn'))?.click();
 		return true;
 	}

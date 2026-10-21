@@ -790,7 +790,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.9.0</span>
+					<span class="badge badge-info" id="badge-current-version">v1.10.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
@@ -1096,6 +1096,27 @@
 			<div style="display: flex; gap: 8px; margin-top: 16px;">
 				<button type="button" id="btn-dismiss-app-update" class="btn btn-secondary btn-block">後で</button>
 				<button type="button" id="btn-confirm-app-update" class="btn btn-primary btn-block">⚡ 今すぐアップデート</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- ==================== MODAL: MASTER CONFLICT ==================== -->
+	<div id="modal-master-conflict" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="master-conflict-title" aria-describedby="master-conflict-note">
+		<div class="modal master-conflict-modal">
+			<div class="modal-header">
+				<h3 id="master-conflict-title" class="modal-title">設定の競合を解決</h3>
+				<button type="button" id="btn-close-master-conflict" class="close-btn" aria-label="競合解決を取り消す">&times;</button>
+			</div>
+			<p id="master-conflict-note">同じ設定が手元とサーバーで変更されている。各項目で採用する値を選択する。取消時は双方の設定を保持する。完了済みの明細同期は巻き戻さない。</p>
+			<div class="master-conflict-bulk-actions">
+				<button type="button" id="btn-master-conflict-all-local" class="btn btn-secondary">全項目を手元にする</button>
+				<button type="button" id="btn-master-conflict-all-remote" class="btn btn-secondary">全項目をサーバーにする</button>
+			</div>
+			<div id="master-conflict-list"></div>
+			<p id="master-conflict-error" class="master-conflict-error" role="alert"></p>
+			<div class="edit-save-actions">
+				<button type="button" id="btn-cancel-master-conflict" class="btn btn-secondary">取消</button>
+				<button type="button" id="btn-apply-master-conflict" class="btn btn-primary" disabled>選択内容で解決して同期</button>
 			</div>
 		</div>
 	</div>

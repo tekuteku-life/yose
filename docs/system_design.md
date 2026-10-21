@@ -776,6 +776,16 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 共有マスタの背景保存には署名済み `fetch_master` を使用し、明細アーカイブを取得せず共有マスタのみ受信する。手動差分同期とonline復帰では `fetch_state` から始まる統合双方向同期を使用する。本文受信完了まで30秒のtimeoutを適用し、サーバー側の処理成否が不明な場合は自動再送せず次回の再取得で調停する。ロック解除によるSyncManager再生成時は同期状態の旧購読を解除して再購読する。
 
 
+### 3.44.2 設定競合の確認取消と確認待ち
+
+手動同期で競合した場合は比較モーダルを表示し、各項目の手元・サーバー値から採用側を選ぶ。全項目選択後に明示適用する。全件手元・全件サーバーの補助操作は選択だけを設定する。非競合合成は維持し、削除・未設定・null・空値は区別する。参照整合性に問題がある場合は設定名と項目を画面内に表示し、選択を修正できるようにする。配列IDを含む構造化経路で適用し、任意IDのドットやHTMLを実行・誤解釈しない。
+
+確認中の共有ローカル値変更、認証ロック、サーバーの版変更を検査し、古い選択を流用しない。×・取消・Escape・戻る・認証ロックは確認待機を終了し、両設定を保持する。UIは競合IDの選択辞書を返し、同期層が内部Mapへ変換して採用側と選択集合を検証する。基点推定や自動マージ規則は変更しない。
+
+設定競合の確認を取り消した場合は `master_conflict_cancelled`、自動同期で確認できない場合は `master_conflict` として返す。通信失敗とは区別し、`lastError` を設定しない。競合項目は専用状態へ保持し、ヘッダーに「設定の確認待ち」と表示する。明細だけの同期成功では解除せず、共有マスタの調停・共有基点保存が成功したときに解除する。
+
+取消時は今回の設定競合の上書きを行わず、手元とサーバーの設定を保持する。確認前の明細受信や、再受信前の設定・明細送信が完了している場合は巻き戻さない。同期結果はその時点までの送受信件数と残未同期件数を保持し、画面も同期全体を取り消したとは表示しない。実通信・署名・サーバー版比較の失敗は従来どおり失敗として通知する。初回共有基点の推定とマージ規則は変更しない。
+
 ## 4. 同期トリガー・通信・セキュリティ要件
 
 ### 4.1 ローカルからGoogle Driveへの同期トリガー
@@ -1810,6 +1820,7 @@ flowchart TD
 | **3.39** | ヘッドレスChrome UIテストによる品質保証とUI/UX・安全性不具合の恒久的修正（Chartガード、中項目参照、XSS防御、アーカイブ非表示、年別集計分離、口座ドリルダウン、PIN表示） | `js/ui/chart_controller.js`, `js/ui/master_controller.js`, `js/ui/summary_controller.js`, `js/ui/settings_controller.js`, `js/ui/auth_controller.js` | - | `master_config` | `test/ui/headless_ui.test.js`, `test/unit/master_management.test.js` |
 | **3.40** | 入力サジェストUI制御（ネイティブdatalist撤廃とインラインドロップダウン）・クレカ引落口座連携表示・集計粒度別明細表示およびページネーション | `js/ui/tx_input_controller.js`, `js/ui/master_controller.js`, `js/ui/tx_list_controller.js`, `index.html`, `css/style.css`, `js/db/defaults.js` | - | `master_config` (`debit_account_id`), `pending_diffs` | `test/ui/headless_ui.test.js`, `test/unit/master_management.test.js` |
 | **3.41** | 静的型チェック自動検証（check:types）および集計・設定全機能網羅UIテスト拡充（予定トグル・軸切替・年次予算・テーマ） | `package.json`, `jsconfig.json`, `types/ambient.d.ts`, `js/logic/aggregator.js`, `js/ui/tx_list_controller.js`, `js/ui/settings_controller.js`, `js/ui/summary_controller.js` | - | `master_config` (`annual_budgets`) | `npm run check:types`, `test/ui/headless_ui.test.js` |
+| **3.44.2** | 設定競合の比較・項目別解消と取消 | `js/logic/master_sync.js`, `js/ui/master_conflict_controller.js`, `js/ui/sync_status_controller.js`, `js/sync.js` | 既存 `update_master` の版検査を維持 | 暗号化共有マスタ・共有基点 | `test/unit/master_conflict_resolution.test.js`, `test/integration/master_conflict_outcomes.test.js`, `test/ui/master_conflict_resolution.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |

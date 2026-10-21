@@ -4,7 +4,17 @@
 
 import { createSignedRequest, canonicalJsonStringify } from './crypto.js';
 import { DEFAULT_MASTER_CONFIG } from './db/defaults.js';
-import { sharedMasterConfig, mergeMasterConfigs, assertMasterReferences } from './logic/master_sync.js';
+import { sharedMasterConfig, mergeMasterConfigs, resolveMasterConflicts, assertMasterReferences } from './logic/master_sync.js';
+
+class MasterConflictError extends Error {
+	constructor(paths, cancelled, reason = null) {
+		super(`設定マスタの確認が必要です（${paths.join('、')}）。`);
+		this.name = 'MasterConflictError';
+		this.paths = paths;
+		this.cancelled = cancelled;
+		this.reason = reason;
+	}
+}
 
 export class SyncManager {
 	/**
@@ -26,6 +36,7 @@ export class SyncManager {
 		this.requestTimeoutMs = 30000;
 		this.lastSyncedAt = null;
 		this.lastError = null;
+		this.masterConflictPaths = [];
 		this._listenersAttached = false;
 		this._onOnlineBound = null;
 		this._onVisibilityBound = null;
@@ -62,30 +73,73 @@ export class SyncManager {
 	async syncMaster() {
 		if (this.isSyncing) return { status: 'already_syncing' };
 		this.isSyncing = true; this.lastError = null;
+		let pendingCount = 0;
 		try {
+			pendingCount = (await this.db.getUnsyncedTransactions()).length;
 			const remote = await this.sendRequest('fetch_master', {});
 			await this.syncSharedMaster(remote.master_config);
 			return { status: 'synced' };
-		} catch (error) { this.lastError = error.message; throw error; }
+		} catch (error) {
+			if (error instanceof MasterConflictError) return this.masterConflictOutcome(error, 0, 0, pendingCount);
+			this.lastError = error.message; throw error;
+		}
 		finally { this.isSyncing = false; }
+	}
+
+	masterConflictOutcome(error, syncedCount = 0, downloadedCount = 0, pendingCount = 0) {
+		this.masterConflictPaths = [...error.paths];
+		this.lastError = null;
+		return {
+			status: error.cancelled ? 'master_conflict_cancelled' : 'master_conflict',
+			conflict_paths: [...error.paths],
+			reason: error.reason,
+			synced_count: syncedCount,
+			downloaded_count: downloadedCount,
+			pending_count: pendingCount
+		};
 	}
 
 	async syncSharedMaster(remoteConfig, approveMasterConflict = null) {
 		if (!remoteConfig) return;
+		const privateKey = this.privateKey, encryptionKey = this.db.encryptionKey;
+		const isSessionValid = () => this.privateKey !== null && this.privateKey === privateKey && this.db.encryptionKey === encryptionKey;
 		const remote = sharedMasterConfig(remoteConfig);
 		const local = await this.db.getMasterConfig();
 		const sharedLocal = sharedMasterConfig(local);
 		const base = await this.db.getMasterSyncBase() || (Object.keys(remote).some(key => key !== 'schema_version') ? sharedMasterConfig(DEFAULT_MASTER_CONFIG) : { schema_version: 2 });
-		const { config, conflicts } = mergeMasterConfigs(base, sharedLocal, remote);
-		if (conflicts.length && (!approveMasterConflict || !await approveMasterConflict(conflicts))) throw new Error(`設定マスタが競合しています（${conflicts.join('、')}）。手元とサーバーを保持しました。手動差分同期で解決してください。`);
+		const mergeResult = mergeMasterConfigs(base, sharedLocal, remote);
+		const { conflicts } = mergeResult;
+		let config = mergeResult.config;
+		if (conflicts.length) {
+			this.masterConflictPaths = [...conflicts];
+			if (!approveMasterConflict) throw new MasterConflictError(conflicts, false);
+			const validateChoices = choices => {
+				let selections;
+				if (choices === true) selections = new Map(mergeResult.conflictDetails.map(detail => [detail.id, 'local']));
+				else {
+					if (!choices || typeof choices !== 'object' || Array.isArray(choices) || ![Object.prototype, null].includes(Object.getPrototypeOf(choices))) throw new Error('競合項目ごとに採用する設定を選択してください。');
+					selections = new Map(Object.entries(choices));
+				}
+				const candidate = resolveMasterConflicts(mergeResult, selections);
+				assertMasterReferences(candidate);
+				return candidate;
+			};
+			const choices = await approveMasterConflict(conflicts, mergeResult.conflictDetails, validateChoices);
+			if (!choices) throw new MasterConflictError(conflicts, true);
+			if (!isSessionValid()) throw new Error('認証がロックまたは変更されました。解除後に設定を確認し直してください。');
+			if (canonicalJsonStringify(sharedMasterConfig(await this.db.getMasterConfig())) !== canonicalJsonStringify(sharedLocal)) throw new MasterConflictError(conflicts, false, 'local_changed');
+			config = validateChoices(choices);
+		}
 		assertMasterReferences(config);
+		if (!isSessionValid()) throw new Error('認証がロックまたは変更されました。解除後に設定を確認し直してください。');
 		let accepted = remote;
 		if (canonicalJsonStringify(config) !== canonicalJsonStringify(remote)) {
 			const response = await this.sendRequest('update_master', { master_config: config, base_version: canonicalJsonStringify(remote) });
 			if (response.master_conflict) throw new Error('設定マスタが別端末で更新されました。手元の変更を保持しています。手動差分同期で再取得してください。');
 			accepted = response.master_config || config;
 		}
-		const committed = await this.db.commitMasterSync(local, accepted);
+		const committed = await this.db.commitMasterSync(local, accepted, { isSessionValid });
+		this.masterConflictPaths = [];
 		if (canonicalJsonStringify(sharedMasterConfig(committed)) !== canonicalJsonStringify(sharedLocal)) {
 			for (const listener of this._masterListeners) Promise.resolve().then(() => listener()).catch(error => console.warn('Master view refresh failed:', error.message));
 		}
@@ -226,8 +280,12 @@ export class SyncManager {
 		if (this.isSyncing) return { status: 'already_syncing', synced_count: 0, downloaded_count: 0 };
 		this.isSyncing = true; this.lastError = null;
 		let stage = '受信';
+		let syncedCount = 0, downloadedCount = 0;
+		let pendingCount = 0;
 		try {
 			const first = await this.downloadTransactions();
+			downloadedCount += first.count;
+			pendingCount = (await this.db.getUnsyncedTransactions()).length;
 			await this.syncSharedMaster(first.response.master_config, approveMasterConflict);
 			const closed = (await this.db.getSnapshot())?.last_closed_month;
 			const pending = await this.db.getUnsyncedTransactions();
@@ -242,12 +300,18 @@ export class SyncManager {
 			}
 			stage = '送信';
 			const uploaded = await this.pushPending();
+			syncedCount = uploaded.synced_count;
 			stage = '再受信';
 			const last = await this.downloadTransactions();
+			downloadedCount += last.count;
+			pendingCount = (await this.db.getUnsyncedTransactions()).length;
 			await this.syncSharedMaster(last.response.master_config, approveMasterConflict);
 			this.lastSyncedAt = new Date().toISOString();
 			return { status: 'synced', synced_count: uploaded.synced_count, downloaded_count: first.count + last.count, pending_count: (await this.db.getUnsyncedTransactions()).length };
-		} catch (error) { this.lastError = `${stage}: ${error.message}`; throw new Error(this.lastError); }
+		} catch (error) {
+			if (error instanceof MasterConflictError) return this.masterConflictOutcome(error, syncedCount, downloadedCount, pendingCount);
+			this.lastError = `${stage}: ${error.message}`; throw new Error(this.lastError);
+		}
 		finally { this.isSyncing = false; }
 	}
 
@@ -316,7 +380,9 @@ export class SyncManager {
 			throw new Error('Another sync operation is in progress');
 		}
 		this.isSyncing = true;
+		let pendingCount = 0;
 		try {
+			pendingCount = (await this.db.getUnsyncedTransactions()).length;
 			const response = await this.sendRequest('fetch_state', {});
 			if (response.master_config) {
 				await this.syncSharedMaster(response.master_config);
@@ -326,6 +392,9 @@ export class SyncManager {
 			}
 			await this.db.mergeRemoteTransactions([...(response.archived_transactions || []), ...(response.pending_diffs || [])]);
 			return response;
+		} catch (error) {
+			if (error instanceof MasterConflictError) return this.masterConflictOutcome(error, 0, 0, pendingCount);
+			this.lastError = error.message; throw error;
 		} finally {
 			this.isSyncing = false;
 		}

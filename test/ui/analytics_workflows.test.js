@@ -38,8 +38,10 @@ describe('Analytics, pagination, and navigation', { timeout: 120000 }, () => {
 		await d.click('.tab-btn[data-analytics-target="cashflow"]');
 		await d.waitFor('document.getElementById("tx-pagination-info").textContent.includes("全 61 件")');
 		await d.click('#btn-tx-next-page');
+		await d.waitFor('document.getElementById("tx-pagination-info").textContent.startsWith("2 / 3") && document.querySelectorAll("#month-tx-list .tx-item").length === 30');
 		assert.ok((await d.textContent('#tx-pagination-info')).startsWith('2 / 3'));
 		await d.click('#btn-tx-next-page');
+		await d.waitFor('document.getElementById("tx-pagination-info").textContent.startsWith("3 / 3") && document.querySelectorAll("#month-tx-list .tx-item").length === 1');
 		assert.ok((await d.textContent('#tx-pagination-info')).startsWith('3 / 3'));
 		assert.equal((await rowIds(d)).length, 1);
 	});
@@ -97,12 +99,12 @@ describe('Analytics, pagination, and navigation', { timeout: 120000 }, () => {
 		await d.click('#card-month-tx-list .card-collapse-btn');
 		assert.equal(await d.isVisible('#month-tx-list'), false);
 		await d.click('#category-breakdown-list [data-filter-category="cat_food"]');
-		await d.waitFor('document.getElementById("select-category-filter").value === "cat_food" && !document.getElementById("card-month-tx-list").classList.contains("collapsed")');
+		await d.waitFor('document.getElementById("select-category-filter").value === "cat_food" && !document.getElementById("card-month-tx-list").classList.contains("collapsed") && Array.from(document.querySelectorAll("#month-tx-list .tx-item"), row => row.dataset.id).join() === "food"');
 		assert.deepEqual(await rowIds(d), ['food']);
 		assert.equal(await value(d, '#input-tx-search'), '');
 		assert.equal(await value(d, '#select-status-filter'), 'all');
 		await d.click('#tag-breakdown-list [data-filter-tag="家"]');
-		await d.waitFor('document.getElementById("select-tag-filter").value === "家"');
+		await d.waitFor('document.getElementById("select-tag-filter").value === "家" && Array.from(document.querySelectorAll("#month-tx-list .tx-item"), row => row.dataset.id).join() === "housing"');
 		assert.deepEqual(await rowIds(d), ['housing']);
 		assert.equal(await value(d, '#select-category-filter'), 'all');
 	});

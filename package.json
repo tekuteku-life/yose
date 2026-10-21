@@ -1,6 +1,6 @@
 {
 	"name": "yose",
-	"version": "1.9.0",
+	"version": "1.10.0",
 	"description": "よせあつめ家計簿 - 脱ベンダーロックイン・複式簿記ライクなPWA家計・資産管理システム",
 	"type": "module",
 	"scripts": {
@@ -12,7 +12,7 @@
 		"test:unit": "node --test test/unit/*.test.js",
 		"test:integration": "node --test test/integration/*.test.js",
 		"test:system": "node --test test/system/*.test.js",
-		"test:ui": "node --test test/ui/*.test.js",
+		"test:ui": "node --test --test-concurrency=4 test/ui/*.test.js",
 		"setup:gas": "node scripts/setup_gas.js"
 	},
 	"keywords": [

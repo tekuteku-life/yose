@@ -73,11 +73,15 @@ describe('Master configuration synchronization UI', { timeout: 120000 }, () => {
 			config.accounts.find(a => a.id === 'acc_wallet').name = '手元優先候補'; await db.saveMasterConfig(config);
 			window.__remoteMaster.accounts.find(a => a.id === 'acc_wallet').name = '別端末維持';
 		})()`);
-		await settings(d); await d.setConfirm(false); await d.click('#btn-manual-sync');
-		await waitForDialog(d, '同期に失敗');
+		await settings(d); await d.click('#btn-manual-sync');
+		await d.waitFor('document.getElementById("modal-master-conflict").classList.contains("active")');
+		await d.click('#btn-cancel-master-conflict');
+		await waitForDialog(d, '設定の競合確認を取り消しました');
 		assert.equal(await d.evaluate('window.__remoteMaster.accounts.find(a => a.id === "acc_wallet").name'), '別端末維持');
 		assert.equal(await d.evaluate('(async () => (await window.__yose_app.db.getMasterConfig()).accounts.find(a => a.id === "acc_wallet").name)()'), '手元優先候補');
-		await d.setConfirm(true); await d.click('#btn-manual-sync');
+		await d.click('#btn-manual-sync');
+		await d.waitFor('document.getElementById("modal-master-conflict").classList.contains("active")');
+		await d.click('#btn-master-conflict-all-local'); await d.click('#btn-apply-master-conflict');
 		await waitForDialog(d, '差分同期完了');
 		assert.equal(await d.evaluate('window.__remoteMaster.accounts.find(a => a.id === "acc_wallet").name'), '手元優先候補');
 	});
@@ -130,4 +134,48 @@ describe('Master configuration synchronization UI', { timeout: 120000 }, () => {
 		for (const [selector, expected] of [['#select-account', 'acc_bank_main'], ['#select-category', 'cat_social'], ['#select-subcategory', 'sub_leisure'], ['#select-actual-category', 'cat_housing'], ['#select-actual-subcategory', 'sub_utilities'], ['#input-memo', '通信待ち中の入力'], ['#input-amount', '123']]) assert.equal(await value(d, selector), expected);
 	});
 
+});
+
+
+describe('Master conflict cancellation UI', { timeout: 120000 }, () => {
+	const fixture = useBrowser();
+	for (const button of ['#btn-header-sync', '#btn-manual-sync']) {
+		it(`shows cancellation and a pending setting instead of failure through ${button}`, async () => {
+			const d = fixture.driver; await mockMasterServer(d); await settings(d);
+			await d.evaluate(`(async () => {
+				const db=window.__yose_app.db, config=await db.getMasterConfig();
+				config.accounts.find(a=>a.id==='acc_wallet').name='取消の手元'; await db.saveMasterConfig(config);
+				window.__remoteMaster.accounts.find(a=>a.id==='acc_wallet').name='取消の別端末';
+			})()`);
+			await d.click(button);
+			await d.waitFor('document.getElementById("modal-master-conflict").classList.contains("active")');
+			await d.click('#btn-cancel-master-conflict');
+			await waitForDialog(d, '設定の競合確認を取り消しました');
+			await d.waitFor('document.getElementById("sync-badge").textContent.includes("設定の確認待ち")');
+			assert.equal(await d.evaluate('window.__yose_app.syncManager.lastError'), null);
+			assert.ok(!(await d.textContent('#sync-badge')).includes('同期失敗'));
+			assert.equal(await d.evaluate('window.__remoteMaster.accounts.find(a=>a.id==="acc_wallet").name'), '取消の別端末');
+			assert.equal(await d.evaluate('(async()=>(await window.__yose_app.db.getMasterConfig()).accounts.find(a=>a.id==="acc_wallet").name)()'), '取消の手元');
+			await d.click(button);
+			await d.waitFor('document.getElementById("modal-master-conflict").classList.contains("active")');
+			await d.click('#btn-master-conflict-all-local'); await d.click('#btn-apply-master-conflict');
+			await waitForDialog(d, '差分同期完了');
+			await d.waitFor('document.getElementById("sync-badge").textContent === "同期済"');
+		});
+	}
+	it('keeps the pending conflict visible after transaction-only success and distinguishes a real network failure', async () => {
+		const d=fixture.driver; await mockMasterServer(d);
+		await d.evaluate(`(async()=>{
+			const app=window.__yose_app, config=await app.db.getMasterConfig();
+			config.accounts.find(a=>a.id==='acc_wallet').name='確認待ちの手元';await app.db.saveMasterConfig(config);
+			window.__remoteMaster.accounts.find(a=>a.id==='acc_wallet').name='確認待ちの別端末';
+			window.__pendingResult=await app.syncManager.syncBidirectional();
+		})()`);
+		assert.equal(await d.evaluate('window.__pendingResult.status'), 'master_conflict');
+		await d.evaluate('window.__yose_app.syncManager.syncPendingDiffs()');
+		await d.waitFor('document.getElementById("sync-badge").textContent.includes("設定の確認待ち")');
+		await d.evaluate('window.__yose_app.syncManager.fetch=async()=>{throw new TypeError("Failed to fetch")}');
+		await d.click('#btn-header-sync'); await waitForDialog(d, '同期に失敗');
+		await d.waitFor('document.getElementById("sync-badge").textContent.includes("同期失敗") && document.getElementById("sync-badge").textContent.includes("設定の確認待ち")');
+	});
 });

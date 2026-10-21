@@ -1146,3 +1146,44 @@ header {
 @media (prefers-reduced-motion: reduce) {
 	.badge-syncing::before { animation: none; }
 }
+
+.master-conflict-modal { max-width: 760px; }
+
+.master-conflict-bulk-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 16px 0;
+}
+
+.master-conflict-row {
+	padding: 16px 0;
+	border-top: 1px solid var(--border);
+	overflow-wrap: anywhere;
+}
+
+.master-conflict-comparison {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+	margin: 12px 0;
+}
+
+.master-conflict-value {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 0.9rem;
+	padding-top: 6px;
+}
+
+.master-conflict-value pre {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 0.8rem;
+}
+
+.master-conflict-error { color: var(--danger); }
+
+@media (max-width: 420px) {
+	.master-conflict-modal .edit-save-actions { flex-wrap: wrap; }
+}

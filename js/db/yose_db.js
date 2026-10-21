@@ -38,9 +38,14 @@ export class YoseDB extends StorageEngine {
 		return canonicalJsonStringify(sharedMasterConfig(await this.getMasterConfig())) !== canonicalJsonStringify(base);
 	}
 
-	async commitMasterSync(submittedLocal, acceptedShared) {
+	async commitMasterSync(submittedLocal, acceptedShared, { isSessionValid = null } = {}) {
+		const encryptionKey = this.encryptionKey;
+		const checkSession = () => {
+			if (this.encryptionKey !== encryptionKey || (isSessionValid && !isSessionValid())) throw new Error('認証がロックまたは変更されました。解除後に設定を確認し直してください。');
+		};
 		const accepted = sharedMasterConfig(acceptedShared);
 		while (true) {
+			checkSession();
 			const raw = await this.getRaw('master_config', 'current');
 			const baseRaw = await this.getRaw('master_config', 'sync_base');
 			const current = await this.decryptRecord(raw);
@@ -51,6 +56,7 @@ export class YoseDB extends StorageEngine {
 			Object.assign(replacement, merged);
 			const encrypted = await this.encryptRecord(replacement);
 			const encryptedBase = await this.encryptRecord(accepted);
+			checkSession();
 			if (await this.compareAndPutRawBatch('master_config', [
 				{ key: 'current', expected: raw, replacement: encrypted },
 				{ key: 'sync_base', expected: baseRaw, replacement: encryptedBase }
