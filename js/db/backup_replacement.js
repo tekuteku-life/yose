@@ -1,6 +1,7 @@
 /** Strict validation for explicit, destructive backup replacement. */
 import { BackupMerger } from './backup_merger.js';
-import { assertMasterReferences, sharedMasterConfig } from '../logic/master_sync.js';
+import { sharedMasterConfig } from '../logic/master_sync.js';
+import { dataIntegrity } from '../logic/data_integrity.js';
 
 export const IMPORT_CONFIRMATION_WORD = '完全インポート';
 const FIELDS = {
@@ -51,6 +52,7 @@ export function prepareReplacementData(input) {
 			if (!BackupMerger.isSafeKey(tx.id) || ids.has(tx.id)) throw new Error('Invalid import data: 明細IDが不正または重複しています');
 			ids.add(tx.id);
 			booleans(tx, ['is_deleted', 'amount_pending', 'is_payment_record', 'is_point_split']);
+			if (tx.is_deleted === true) continue;
 			if (!/^\d{4}-\d{2}-\d{2}$/.test(tx.date || '') || !Number.isFinite(Date.parse(tx.date)) || new Date(tx.date).toISOString().slice(0, 10) !== tx.date || !/^\d{4}-(0[1-9]|1[0-2])$/.test(tx.target_month || '')) throw new Error('Invalid import data: 明細の日付・計上月が不正です');
 			if (!['expense', 'income', 'transfer'].includes(tx.type) || !['confirmed', 'planned'].includes(tx.status) || typeof tx.amount !== 'number' || !Number.isFinite(tx.amount) || tx.amount < 0 || !BackupMerger.isSafeKey(tx.account_id)) throw new Error('Invalid import data: 明細の必須値が不正です');
 			if (tx.type === 'transfer' && (!BackupMerger.isSafeKey(tx.to_account_id) || tx.account_id === tx.to_account_id)) throw new Error('Invalid import data: 振替先口座が不正です');
@@ -65,21 +67,5 @@ export function prepareReplacementData(input) {
 }
 
 export function assertReplacementReferences(config, transactions, snapshot) {
-	assertMasterReferences(config);
-	const accounts = new Set((config.accounts || []).map(item => item.id));
-	const categories = new Map((config.categories || []).map(item => [item.id, new Set((item.subcategories || []).map(sub => sub.id))]));
-	const ref = (id, collection, label) => { if (id && !collection.has(id)) throw new Error(`${label}の参照先「${id}」が見つかりません`); };
-	for (const account of config.accounts || []) ref(account.premium_pay_account_id, accounts, '保険料支払口座');
-	for (const tx of transactions.filter(item => !item.is_deleted)) {
-		for (const field of ['account_id', 'to_account_id']) ref(tx[field], accounts, `明細「${tx.id}」の口座`);
-		for (const prefix of ['', 'actual_']) {
-			ref(tx[`${prefix}category_id`], categories, `明細「${tx.id}」の費目`);
-			ref(tx[`${prefix}subcategory_id`], categories.get(tx[`${prefix}category_id`]) || new Set(), `明細「${tx.id}」の中項目`);
-		}
-	}
-	for (const [year, budget] of Object.entries(config.annual_budgets || {})) {
-		if (!BackupMerger.isValidYearKey(year)) throw new Error('Invalid import data: 予算年度が不正です');
-		for (const id of Object.keys(budget.category_budgets || {})) ref(id, categories, '年間予算の費目');
-	}
-	for (const id of Object.keys(snapshot?.account_balances || {})) ref(id, accounts, 'スナップショットの口座');
+	dataIntegrity.assertChange(null, { master_config: config, transactions, summary_snapshot: snapshot }, { strict: true, allowArchivedReferences: true });
 }

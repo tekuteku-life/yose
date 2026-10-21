@@ -5,6 +5,7 @@
 
 import { escapeHtml } from '../logic.js';
 import { TagMemoInput } from './tag_memo_input.js';
+import { canonicalJsonStringify } from '../crypto.js';
 
 export class TransactionEditController {
 	constructor(coordinator) {
@@ -12,6 +13,10 @@ export class TransactionEditController {
 		this.currentTaxMeta = null;
 		this.confirmedTags = [];
 		this.initialValues = null;
+		this.originalTransaction = null;
+		this.originalGroup = [];
+		this.busy = false;
+		this.operation = 0;
 	}
 
 	get db() {
@@ -50,6 +55,7 @@ export class TransactionEditController {
 			const catGroup = document.getElementById('edit-tx-cat-container');
 			if (toGroup) toGroup.style.display = isTransfer ? 'block' : 'none';
 			if (catGroup) catGroup.style.display = isTransfer ? 'none' : 'block';
+			if (!isTransfer) this.populateTypeCategories(typeSelect.value).catch(error => alert(`分類の更新に失敗しました: ${error.message}`));
 		});
 
 		catSelect?.addEventListener('change', async () => {
@@ -80,7 +86,7 @@ export class TransactionEditController {
 			const id = document.getElementById('edit-tx-id')?.value;
 			if (!id) return;
 			if (confirm('この明細を削除しますか？')) {
-				await this.handleEditDelete(id);
+				try { await this.handleEditDelete(id); } catch (error) { alert(`明細の削除に失敗しました: ${error.message}`); }
 			}
 		});
 	}
@@ -90,6 +96,8 @@ export class TransactionEditController {
 		if (!modal) return;
 		const tx = await this.db.getTransaction(id);
 		if (!tx) return;
+		this.originalTransaction = structuredClone(tx);
+		this.originalGroup = tx.group_id ? await this.db.getTransactions({ group_id: tx.group_id, includeDeleted: true }) : [tx];
 		this.currentTaxMeta = tx.tax_meta || null;
 
 		const config = await this.db.getMasterConfig();
@@ -110,14 +118,14 @@ export class TransactionEditController {
 		// Populate categories
 		const catSelect = document.getElementById('edit-tx-category');
 		const actCatSelect = document.getElementById('edit-tx-actual-category');
-		if (catSelect) catSelect.innerHTML = options(categories, tx.category_id);
-		if (actCatSelect) actCatSelect.innerHTML = options(categories, tx.actual_category_id || tx.category_id);
+		if (catSelect) catSelect.innerHTML = options(categories.filter(category => (category.type || 'expense') === tx.type || category.id === tx.category_id), tx.category_id);
+		if (actCatSelect) actCatSelect.innerHTML = options(categories.filter(category => (category.type || 'expense') === tx.type || category.id === (tx.actual_category_id || tx.category_id)), tx.actual_category_id || tx.category_id);
 
 		// Set values
 		const idInput = document.getElementById('edit-tx-id');
 		const dateInput = document.getElementById('edit-tx-date');
 		const typeSelect = document.getElementById('edit-tx-type');
-		const amountInput = document.getElementById('edit-tx-amount');
+		const amountInput = /** @type {HTMLInputElement} */ (document.getElementById('edit-tx-amount'));
 		const memoInput = document.getElementById('edit-tx-memo');
 		const tagsInput = document.getElementById('edit-tx-tags');
 		const statusSelect = document.getElementById('edit-tx-status');
@@ -128,7 +136,10 @@ export class TransactionEditController {
 			typeSelect.value = tx.type;
 			typeSelect.disabled = Boolean(tx.amortization_meta);
 		}
-		if (amountInput) amountInput.value = tx.amount;
+		if (amountInput) {
+			amountInput.value = tx.amount_pending ? '' : tx.amount;
+			amountInput.required = !tx.amount_pending;
+		}
 		if (accSelect) accSelect.value = tx.account_id || '';
 		if (toAccSelect) {
 			toAccSelect.value = tx.to_account_id || '';
@@ -205,15 +216,40 @@ export class TransactionEditController {
 		this.tagMemoInput.hide('memos');
 	}
 
+	async populateTypeCategories(type) {
+		const config = await this.db.getMasterConfig();
+		if (document.getElementById('edit-tx-type')?.value !== type) return;
+		const categories = (config?.categories || []).filter(category => !category.is_archived && (category.type || 'expense') === type);
+		for (const [parentId, childId] of [['edit-tx-category', 'edit-tx-subcategory'], ['edit-tx-actual-category', 'edit-tx-actual-subcategory']]) {
+			const parent = document.getElementById(parentId);
+			const old = parent.value;
+			parent.innerHTML = categories.map(category => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`).join('');
+			if (categories.some(category => category.id === old)) parent.value = old;
+			await this.coordinator.txInputController.updateSubcategories(parent.value, childId);
+			if (document.getElementById('edit-tx-type')?.value !== type) return;
+		}
+		this.syncActualClassification();
+	}
+
 	async handleEditFormSubmit() {
+		if (this.busy) return;
+		this.busy = true;
+		const operation = ++this.operation;
+		try { return await this.saveEdit(); }
+		finally { if (operation === this.operation) this.busy = false; }
+	}
+
+	async saveEdit() {
 		this.tagMemoInput.commitPending();
 		const id = document.getElementById('edit-tx-id')?.value;
 		const tx = await this.db.getTransaction(id);
-		if (!tx) return;
+		if (!tx) throw new Error('明細が削除または変更されました。開き直して確認してください。');
+		if (!this.originalTransaction || this.originalTransaction.id !== id || canonicalJsonStringify(tx) !== canonicalJsonStringify(this.originalTransaction)) throw new Error('明細が別の操作で変更されました。開き直して確認してください。');
 
 		const editDate = document.getElementById('edit-tx-date')?.value;
 		const editType = document.getElementById('edit-tx-type')?.value;
-		const editAmount = Number(document.getElementById('edit-tx-amount')?.value) || 0;
+		const amountInput = document.getElementById('edit-tx-amount')?.value.trim() || '';
+		const editAmount = Number(amountInput) || 0;
 		const editAccount = document.getElementById('edit-tx-account')?.value;
 		const editToAccount = document.getElementById('edit-tx-to-account')?.value;
 		const editCat = document.getElementById('edit-tx-category')?.value;
@@ -230,11 +266,16 @@ export class TransactionEditController {
 		const groupTxs = tx.group_id && (tx.amortization_meta || tx.group_id.startsWith('grp_prepaid'))
 			? await this.db.getTransactionsByGroupId(tx.group_id)
 			: [];
+		for (const current of groupTxs) {
+			const original = this.originalGroup.find(record => record.id === current.id);
+			if (!original || canonicalJsonStringify(original) !== canonicalJsonStringify(current)) throw new Error('関連明細が変更されました。開き直して確認してください。');
+		}
 		const paymentTx = groupTxs.find(t => t.amortization_meta?.is_payment_record);
 		const amortTxs = groupTxs.filter(t => t.type === 'expense' && t.amortization_meta && !t.amortization_meta.is_payment_record);
 		const cascade = paymentTx && amortTxs.length > 0 && groupTxs.length > 1 && confirm('この取引は前払分割計上の一部です。\n関連する明細の費目・メモ・タグと、変更された金額を連動更新しますか？\n（キャンセル: この明細のみ修正）');
-		const amountChanged = editAmount !== tx.amount;
-		const amountPending = Boolean(tx.amount_pending && !(amountChanged && editAmount > 0));
+		const amountChanged = editAmount !== tx.amount || Boolean(tx.amount_pending && amountInput);
+		const amountPending = Boolean(tx.amount_pending && !amountInput);
+		if (amountPending && editStatus === 'confirmed') throw new Error('金額未入力の予定は確定できません。金額を入力してください。');
 		const ownChanges = { id, date: editDate, target_month: editDate.slice(0, 7), status: editStatus, amount_pending: amountPending, ...movement };
 		const prospective = (cascade ? groupTxs : [tx]).map(record => ({
 			...record,
@@ -248,7 +289,7 @@ export class TransactionEditController {
 		if (cascade) {
 			/** @type {Record<string, any>} */
 			const updates = { memo: editMemo, tags: editTags, reclose_approved_months: approved };
-			if (editAmount !== tx.amount) {
+			if (amountChanged) {
 				updates.total_amount = tx.amortization_meta?.is_payment_record ? editAmount : editAmount * amortTxs.length;
 			}
 			if (tx.type === 'expense') {
@@ -270,7 +311,7 @@ export class TransactionEditController {
 				...movement,
 				updated_at: new Date().toISOString(),
 				sync_status: 'unsynced'
-			});
+			}, { expectedTransactions: this.originalGroup });
 			changedTxs = await this.db.getTransactionsByGroupId(tx.group_id);
 		} else {
 			Object.assign(tx, {
@@ -294,10 +335,11 @@ export class TransactionEditController {
 				updated_at: new Date().toISOString(),
 				sync_status: 'unsynced'
 			});
-			await this.db.putTransaction(tx);
-			changedTxs = [tx];
+			const saved = await this.db.putTransaction(tx, { expectedTransactions: [this.originalTransaction] });
+			changedTxs = [saved];
 		}
 
+		this.busy = false;
 		this.close();
 		this.coordinator.showToast(cascade ? '✅ 関連明細を一括修正しました' : '✅ 明細を修正しました');
 		const snapshot = await this.db.getSnapshot();
@@ -305,7 +347,8 @@ export class TransactionEditController {
 		if (closedTxs.length > 0 && this.syncManager?.gasUrl && this.syncManager?.privateKey) {
 			try {
 				await this.syncManager.syncPendingDiffs();
-				alert('過去締め月の明細を修正し、スナップショットを再計算しました');
+				const latest = await Promise.all(changedTxs.map(record => this.db.getTransaction(record.id)));
+				alert(latest.every(record => record?.sync_status === 'synced') ? '過去締め月の明細を修正し、スナップショットを再計算しました' : '変更を端末内に保存しました。同期は未完了です。');
 			} catch (err) {
 				alert(`遡及更新エラー: ${err.message}`);
 			}
@@ -316,26 +359,39 @@ export class TransactionEditController {
 	}
 
 	async handleEditDelete(id) {
+		if (this.busy) return;
+		this.busy = true;
+		const operation = ++this.operation;
+		try { return await this.deleteEdit(id); }
+		finally { if (operation === this.operation) this.busy = false; }
+	}
+
+	async deleteEdit(id) {
 		const tx = await this.db.getTransaction(id);
 		if (!tx) return;
+		const editingCurrent = document.getElementById('modal-edit-tx')?.classList.contains('active') && this.originalTransaction?.id === id;
+		const original = editingCurrent ? this.originalTransaction : structuredClone(tx);
+		if (canonicalJsonStringify(tx) !== canonicalJsonStringify(original)) throw new Error('明細が別の操作で変更されました。開き直して確認してください。');
 		const approved = await this.coordinator.approveClosedChanges([{ ...tx, is_deleted: true }], [tx]);
 		if (approved === null) return;
 		tx.is_deleted = true;
 		tx.reclose_approved_months = approved;
 		tx.updated_at = new Date().toISOString();
 		tx.sync_status = 'unsynced';
-		await this.db.putTransaction(tx);
+		const saved = await this.db.putTransaction(tx, { expectedTransactions: [original] });
 		this.coordinator.showToast('🗑️ 明細を削除しました');
 
 		const snapshot = await this.db.getSnapshot();
-		const isPastClosed = snapshot?.last_closed_month && tx.target_month <= snapshot.last_closed_month;
+		const isPastClosed = snapshot?.last_closed_month && saved.target_month <= snapshot.last_closed_month;
 
+		this.busy = false;
 		this.close();
 
 		if (isPastClosed && this.syncManager?.gasUrl && this.syncManager?.privateKey) {
 			try {
-				const response = await this.syncManager.sendRetroactiveUpdate(tx);
-				alert(response.conflict ? '別端末の新しい変更を反映したため、削除は行いませんでした。' : '過去締め月の明細を削除し、スナップショットを再計算しました');
+				await this.syncManager.syncPendingDiffs();
+				const latest = await this.db.getTransaction(id);
+				alert(!latest?.is_deleted ? '別端末の新しい変更を反映したため、削除は行いませんでした。' : latest.sync_status === 'synced' ? '過去締め月の明細を削除し、スナップショットを再計算しました' : '削除を端末内に保存しました。同期は未完了です。');
 			} catch (err) {
 				alert(`遡及削除エラー: ${err.message}`);
 			}

@@ -13,10 +13,10 @@ describe('encrypted IndexedDB atomic updates', () => {
 		global.window = { indexedDB: createMockIndexedDB() };
 		db = new YoseDB(); await db.init();
 		db.setEncryptionKey(await generateDatabaseMasterKey());
+		await db.putTransactions([transaction('a'), transaction('b')]);
 		const config = await db.getMasterConfig();
 		config.categories.find(category => category.id === 'cat_food').is_archived = true;
 		await db.saveMasterConfig(config);
-		await db.putTransactions([transaction('a'), transaction('b')]);
 	});
 	afterEach(() => { delete global.window; });
 

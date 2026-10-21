@@ -179,25 +179,37 @@ export class SummaryController {
 	}
 
 	async handleGenerateRecurring() {
+		if (this.generatingRecurring) return;
+		this.generatingRecurring = true;
+		try { await this.generateRecurring(); }
+		catch (error) { alert(`定期予定の生成に失敗しました: ${error.message}`); }
+		finally { this.generatingRecurring = false; }
+	}
+
+	async generateRecurring() {
+		const targetMonth = this.coordinator.currentMonth;
 		const snapshot = await this.db.getSnapshot();
-		if (snapshot?.last_closed_month && this.coordinator.currentMonth <= snapshot.last_closed_month) {
+		if (snapshot?.last_closed_month && targetMonth <= snapshot.last_closed_month) {
 			alert('締め済み月に予定は生成できません。未締めの月を選択してください。'); return;
 		}
 		const config = await this.db.getMasterConfig();
-		const existing = await this.db.getTransactions({ target_month: this.coordinator.currentMonth, includeDeleted: true });
-		const generated = generateRecurringTransactions(
+		const existing = await this.db.getTransactions({ target_month: targetMonth, includeDeleted: true });
+		const candidates = generateRecurringTransactions(
 			config.recurring_rules || [],
-			this.coordinator.currentMonth,
+			targetMonth,
 			config.holidays || [],
 			existing
 		);
+		// Deletion markers may omit their month; look up stable candidate IDs directly.
+		const originals = await Promise.all(candidates.map(record => this.db.getTransaction(record.id)));
+		const generated = candidates.filter((_record, index) => !originals[index] || originals[index].is_deleted);
 
 		if (generated.length === 0) {
-			alert(`${this.coordinator.currentMonth} の定期予定はすでに生成されているか、対象ルールがありません`);
+			alert(`${targetMonth} の定期予定はすでに生成されているか、対象ルールがありません`);
 			return;
 		}
 
-		await this.db.putTransactions(generated);
+		await this.db.putTransactions(generated, { expectedTransactions: originals.filter(record => record?.is_deleted) });
 		alert(`${generated.length} 件の定期予定（planned）を生成しました`);
 		await this.coordinator.refreshAllViews();
 	}

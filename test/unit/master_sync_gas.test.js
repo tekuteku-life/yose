@@ -11,7 +11,7 @@ describe('GAS master synchronization concurrency', () => {
 	beforeEach(() => { env = new MockGasEnvironment(); env.setupGlobals(); });
 	afterEach(() => env.teardownGlobals());
 	it('rejects a stale master version without changing the server configuration', () => {
-		const remote = { schema_version: 2, accounts: [{ id: 'a', name: '他端末' }] };
+		const remote = { schema_version: 2, accounts: [{ id: 'a', name: '他端末', type: 'cash' }] };
 		gas.saveJsonFile('master_config.json', remote);
 		const response = gas.handleAction('update_master', { master_config: { schema_version: 2, accounts: [] }, base_version: canonicalJsonStringify({ schema_version: 2, accounts: [] }) });
 		assert.equal(response.master_conflict, true);
@@ -21,7 +21,7 @@ describe('GAS master synchronization concurrency', () => {
 	it('accepts a matching base and excludes device-local and security settings from stored and fetched master', () => {
 		const remote = { schema_version: 2, accounts: [] };
 		gas.saveJsonFile('master_config.json', { ...remote, theme: 'dark', synced_passkey_bundle: 'secret' });
-		const next = { ...remote, accounts: [{ id: 'a', name: '新規' }], theme: 'light', collapsed_panes: { private: true }, security: 'secret' };
+		const next = { ...remote, accounts: [{ id: 'a', name: '新規', type: 'cash' }], theme: 'light', collapsed_panes: { private: true }, security: 'secret' };
 		const response = gas.handleAction('update_master', { master_config: next, base_version: canonicalJsonStringify(remote) });
 		assert.equal(response.success, true);
 		assert.deepEqual(gas.loadJsonFile('master_config.json', {}), { ...remote, accounts: next.accounts });

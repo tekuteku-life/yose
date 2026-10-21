@@ -34,7 +34,7 @@ describe('GAS complete import replacement and durable recovery', () => {
 	});
 	afterEach(() => env.teardownGlobals());
 
-	it('replaces all transactions including archived IDs and keeps unrelated master and snapshot', () => {
+	it('replaces all transactions including archived IDs and recalculates closed summaries', () => {
 		const previous = serverState();
 		const next = [transaction('new-pending', { amount: 14 }), transaction('new-archive', { target_month: '2026-08', date: '2026-08-01' })];
 		assert.equal(replace(importData('transactions', { transactions: next })).success, true);
@@ -42,7 +42,9 @@ describe('GAS complete import replacement and durable recovery', () => {
 		assert.deepEqual(state.pending_diffs.filter(tx => !tx.is_deleted).map(tx => tx.id), ['new-pending']);
 		assert.deepEqual(state.archived_transactions.filter(tx => !tx.is_deleted).map(tx => tx.id), ['new-archive']);
 		assert.deepEqual(state.master_config, previous.master_config);
-		assert.deepEqual(state.snapshot, previous.snapshot);
+		assert.equal(state.snapshot.monthly_summaries['2026-08'].expense_total, 100);
+		assert.equal(state.snapshot.monthly_summaries['2026-09'].expense_total, 0);
+		assert.equal(state.snapshot.account_balances.acc_wallet, 14900);
 		assert.notEqual(state.state_version, previous.state_version);
 	});
 	it('replaces all backup domains and accepts changed older IDs without timestamp merge', () => {
@@ -71,7 +73,10 @@ describe('GAS complete import replacement and durable recovery', () => {
 			if (type === 'master_config') assert.deepEqual(state.master_config, fields.master_config);
 			else if (type === 'annual_budgets') assert.deepEqual(state.master_config, { ...previous.master_config, annual_budgets: {} });
 			else assert.deepEqual(state.master_config, previous.master_config);
-			assert.deepEqual(state.snapshot, type === 'summary_snapshot' ? fields.summary_snapshot : previous.snapshot);
+			if (type === 'transactions') {
+				assert.equal(state.snapshot.monthly_summaries['2026-09'].expense_total, 0);
+				assert.equal(state.snapshot.account_balances.acc_wallet, 15000);
+			} else assert.deepEqual(state.snapshot, type === 'summary_snapshot' ? fields.summary_snapshot : previous.snapshot);
 		});
 	}
 	it('retries an acknowledged import idempotently while preserving later server edits', () => {
@@ -268,6 +273,11 @@ function createPendingSync({ fail = null, lock = null } = {}) {
 		acknowledgePendingImport: async submitted => { if (canonicalJsonStringify(submitted) !== canonicalJsonStringify(pending)) return false; pending = null; return true; },
 		getUnsyncedTransactions: async () => [],
 		getSnapshot: async () => ({}),
+		getMasterConfig: async () => master(),
+		getTransaction: async () => null,
+		getTransactions: async () => [],
+		validateRemoteState: async () => {},
+		commitSyncResponse: async () => ({ synced_count: 0, downloaded_count: 0 }),
 		mergeRemoteTransactions: async () => 0,
 		saveSnapshot: async () => {},
 		setSetting: async () => {}
@@ -342,6 +352,24 @@ describe('complete import real encrypted DB and signed GAS synchronization', () 
 		const plan = await db.prepareReplacementImport(data);
 		await db.commitReplacementImport(plan, { confirmation: '完全インポート' });
 	}
+	it('commits the recalculated replacement snapshot even when pending-only sync performs no later download', async () => {
+		const original = transaction('closed-replacement', { date: '2026-09-01', target_month: '2026-09', sync_status: 'synced', amount: 100 });
+		await db.putTransaction(original);
+		gas.saveJsonFile('archives/2026-09.json', { transactions: [original] });
+		const snapshot = await db.getSnapshot();
+		snapshot.monthly_summaries['2026-09'] = gas.computeMonthlySummary([original], snapshot.account_balances);
+		snapshot.account_balances = snapshot.monthly_summaries['2026-09'].closing_balances;
+		await db.saveSnapshot(snapshot); gas.saveJsonFile('summary_snapshot.json', snapshot);
+		await queue(importData('transactions', { transactions: [{ ...original, amount: 300 }] }));
+		const actions = [], fetch = sync.fetch;
+		sync.fetch = async (...args) => { actions.push(JSON.parse(args[1].body).action); return fetch(...args); };
+		await sync.syncPendingDiffs();
+		assert.deepEqual(actions, ['fetch_state', 'replace_import']);
+		assert.equal((await db.getSnapshot()).monthly_summaries['2026-09'].expense_total, 300);
+		assert.equal((await db.getSnapshot()).account_balances.acc_wallet, 14700);
+		assert.deepEqual(await db.getSnapshot(), serverState().snapshot);
+		assert.equal(await db.getPendingImport(), null);
+	});
 	for (const type of ['master_config', 'annual_budgets', 'full_backup']) {
 		it(`preserves later local settings and transactions around ${type} replacement ACK`, async () => {
 			const config = await db.getMasterConfig(); config.accounts[0].name = 'JSON の口座';

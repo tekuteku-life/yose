@@ -302,7 +302,10 @@ function getOrCreateFile(fileName, defaultContent = '{}') {
 	};
 }
 
+let stagedMutationWrites = null;
+
 function loadJsonFile(fileName, defaultContent = {}) {
+	if (stagedMutationWrites?.has(fileName)) return JSON.parse(JSON.stringify(stagedMutationWrites.get(fileName)));
 	const ss = getStorageSpreadsheet();
 	if (ss) {
 		const sheetName = safeSheetName(fileName);
@@ -310,12 +313,22 @@ function loadJsonFile(fileName, defaultContent = {}) {
 		if (!sheet) {
 			return defaultContent;
 		}
+		if (/^(master_config|summary_snapshot|pending_diffs|replacement_journal|replacement_receipts)\.json$/.test(fileName) || /^archives\//.test(fileName)) {
+			try {
+				const rows = sheet.getLastRow();
+				if (!rows) throw new Error('empty');
+				const content = sheet.getRange(1, 1, rows, 1).getValues().map(row => row[0]).join('');
+				if (!content.trim()) throw new Error('empty');
+				return JSON.parse(content);
+			} catch (error) { throw new Error(`保存データ「${fileName}」を読み取れません。原本を保持して処理を中断しました。`); }
+		}
 		return loadJsonFromSheet(sheet, defaultContent);
 	}
 	return defaultContent;
 }
 
 function saveJsonFile(fileName, data) {
+	if (stagedMutationWrites) { stagedMutationWrites.set(fileName, JSON.parse(JSON.stringify(data))); return; }
 	const ss = getStorageSpreadsheet();
 	if (ss) {
 		const sheetName = safeSheetName(fileName);
@@ -546,7 +559,45 @@ function handleAction(action, payload) {
 }
 
 function readArchives() {
-	return getStorageSpreadsheet().getSheets().map(sheet => sheet.getName()).filter(name => /^arch_\d{4}-\d{2}$/.test(name)).sort().map(name => ({ month: name.slice(5), ...loadJsonFile(`archives/${name.slice(5)}.json`, { transactions: [] }) }));
+	const ss = getStorageSpreadsheet();
+	const months = new Set((ss?.getSheets() || []).map(sheet => sheet.getName()).filter(name => /^arch_\d{4}-\d{2}$/.test(name)).map(name => name.slice(5)));
+	for (const file of stagedMutationWrites?.keys() || []) if (/^archives\/\d{4}-\d{2}\.json$/.test(file)) months.add(file.slice(9, 16));
+	return [...months].sort().map(month => ({ month, ...loadJsonFile(`archives/${month}.json`, { transactions: [] }) }));
+}
+
+function integrityState() {
+	return {
+		master_config: sharedMasterConfig(loadJsonFile('master_config.json', { schema_version: 2 })),
+		transactions: [...loadJsonFile('pending_diffs.json', { transactions: [] }).transactions, ...readArchives().flatMap(archive => archive.transactions || [])],
+		summary_snapshot: loadJsonFile('summary_snapshot.json', {})
+	};
+}
+
+function commitMutationWrites(id, writes) {
+	const journal = { id, writes };
+	saveJsonFile('replacement_journal.json', journal);
+	if (canonicalJsonStringify(loadJsonFile('replacement_journal.json', null)) !== canonicalJsonStringify(journal)) throw new Error('変更の復旧記録を保存できませんでした');
+	writeReplacementCommit({ id });
+	recoverReplacementImport();
+}
+
+function runIntegrityMutation(action, callback) {
+	if (stagedMutationWrites) return callback();
+	try {
+		recoverReplacementImport();
+		const before = integrityState();
+		stagedMutationWrites = new Map();
+		let result, writes;
+		try {
+			result = callback();
+			if (!result?.success) return result;
+			const after = integrityState();
+			createDataIntegrityValidator().assertChange(before, after, { allowArchivedReferences: ['push_diff', 'retroactive_update', 'close_month'].includes(action) });
+			writes = [...stagedMutationWrites].map(([file, data]) => ({ file, data }));
+		} finally { stagedMutationWrites = null; }
+		if (writes.length) commitMutationWrites(`mutation-${action}-${Date.now()}`, writes);
+		return result;
+	} catch (error) { return { success: false, error: error.message }; }
 }
 
 function transactionContentVersion(transaction) {
@@ -561,8 +612,13 @@ function storedTransaction(transaction) {
 	return stored;
 }
 
+function transactionTimestamp(transaction) {
+	const parsed = typeof transaction?.updated_at === 'string' ? Date.parse(transaction.updated_at) : NaN;
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function newerTransaction(a, b) {
-	return (Date.parse(a.updated_at || '') || 0) > (Date.parse(b.updated_at || '') || 0);
+	return transactionTimestamp(a) > transactionTimestamp(b);
 }
 
 function handleFetchState() {
@@ -606,98 +662,22 @@ function recoverReplacementImport() {
 function validateReplacementData(data, current) {
 	const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 	const requireValid = (valid, field) => { if (!valid) throw new Error(`完全インポートの形式が不正です: ${field}`); };
-	const safe = value => {
-		if (typeof value === 'number') requireValid(Number.isFinite(value), 'number');
-		if (!value || typeof value !== 'object') return;
-		for (const [key, child] of Object.entries(value)) {
-			requireValid(!['__proto__', 'constructor', 'prototype'].includes(key), 'unsafe key');
-			safe(child);
-		}
-	};
-	safe(data);
 	requireValid(object(data) && data.schema_version === 2, 'schema_version');
 	const fields = { full_backup: ['transactions', 'master_config', 'summary_snapshot'], transactions: ['transactions'], master_config: ['master_config'], annual_budgets: ['annual_budgets'], summary_snapshot: ['summary_snapshot'] };
 	requireValid(Object.hasOwn(fields, data.export_type), 'export_type');
 	for (const field of fields[data.export_type]) requireValid(Object.hasOwn(data, field), field);
 	for (const field of ['transactions', 'master_config', 'annual_budgets', 'summary_snapshot']) if (Object.hasOwn(data, field)) requireValid(fields[data.export_type].includes(field), `種別外のデータ: ${field}`);
-	const items = (value, field) => {
-		requireValid(Array.isArray(value), field);
-		const ids = new Set();
-		for (const item of value) {
-			requireValid(object(item) && typeof item.id === 'string' && item.id.length > 0 && !['__proto__', 'constructor', 'prototype'].includes(item.id) && !ids.has(item.id), `${field}.id`);
-			ids.add(item.id);
-		}
-		return value;
-	};
-	const strings = (value, keys, field) => { for (const key of keys) if (value[key] != null) requireValid(typeof value[key] === 'string', `${field}.${key}`); };
-	const numbers = (value, keys, field) => { for (const key of keys) if (value[key] != null) requireValid(typeof value[key] === 'number' && Number.isFinite(value[key]), `${field}.${key}`); };
-	const booleans = (value, field) => { for (const key of ['is_deleted', 'amount_pending', 'is_archived', 'is_active', 'is_asset', 'is_payment_record', 'is_point_split']) if (Object.hasOwn(value, key)) requireValid(typeof value[key] === 'boolean', `${field}.${key}`); };
-	const month = value => typeof value === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
-	const validateBudgets = budgets => {
-		requireValid(object(budgets), 'annual_budgets');
-		for (const [year, budget] of Object.entries(budgets)) {
-			requireValid(/^\d{4}$/.test(year) && object(budget), 'annual_budgets.year');
-			numbers(budget, ['expense_budget', 'savings_target_amount', 'savings_target_rate', 'target_savings_rate'], 'annual_budgets.year');
-			if (budget.category_budgets !== undefined) { requireValid(object(budget.category_budgets), 'category_budgets'); numbers(budget.category_budgets, Object.keys(budget.category_budgets), 'category_budgets'); }
-		}
-	};
 	const has = field => fields[data.export_type].includes(field);
-	if (has('transactions')) {
-		for (const tx of items(data.transactions, 'transactions')) {
-			booleans(tx, 'transactions');
-			requireValid(['expense', 'income', 'transfer'].includes(tx.type) && ['planned', 'confirmed'].includes(tx.status), 'transactions.type/status');
-			requireValid(month(tx.target_month) && /^\d{4}-\d{2}-\d{2}$/.test(tx.date || '') && !Number.isNaN(Date.parse(tx.date)) && new Date(tx.date).toISOString().slice(0, 10) === tx.date, 'transactions.date/target_month');
-			requireValid(typeof tx.amount === 'number' && Number.isFinite(tx.amount) && tx.amount >= 0, 'transactions.amount');
-			requireValid(typeof tx.account_id === 'string' && tx.account_id.length > 0, 'transactions.account_id');
-			if (tx.type === 'transfer') requireValid(typeof tx.to_account_id === 'string' && tx.to_account_id.length > 0 && tx.to_account_id !== tx.account_id, 'transactions.to_account_id');
-			strings(tx, ['memo', 'created_at', 'updated_at', 'account_id', 'to_account_id', 'category_id', 'subcategory_id', 'actual_category_id', 'actual_subcategory_id', 'group_id'], 'transactions');
-			if (tx.tags !== undefined) requireValid(Array.isArray(tx.tags) && tx.tags.every(tag => typeof tag === 'string'), 'transactions.tags');
-			for (const field of ['tax_meta', 'amortization_meta', 'auto_settlement_meta']) if (tx[field] != null) requireValid(object(tx[field]), `transactions.${field}`);
-		}
-	}
 	let config = current.master_config;
 	if (has('master_config')) {
 		requireValid(object(data.master_config), 'master_config');
 		config = sharedMasterConfig(data.master_config);
 		for (const field of ['accounts', 'categories', 'recurring_rules', 'holidays']) requireValid(Array.isArray(config[field]), `master_config.${field}`);
-		for (const field of ['accounts', 'categories', 'recurring_rules']) {
-			if (config[field] === undefined) continue;
-			for (const item of items(config[field], field)) {
-				booleans(item, field);
-				strings(item, ['name', 'type', 'icon', 'updated_at', 'account_id', 'to_account_id', 'category_id', 'subcategory_id', 'actual_category_id', 'actual_subcategory_id', 'debit_account_id', 'settlement_account_id', 'premium_pay_account_id', 'memo', 'start_date', 'end_date', 'maturity_date'], field);
-				numbers(item, ['initial_balance', 'amount', 'day_of_month', 'closing_day', 'debit_day', 'debit_month_offset', 'premium_amount', 'premium_day', 'maturity_amount', 'interval_months', 'amortize_months'], field);
-				if (item.subcategories !== undefined) for (const sub of items(item.subcategories, 'subcategories')) { booleans(sub, 'subcategories'); strings(sub, ['name'], 'subcategories'); }
-			}
-		}
-		if (config.holidays !== undefined) requireValid(Array.isArray(config.holidays) && config.holidays.every(day => typeof day === 'string'), 'holidays');
 	}
 	if (has('annual_budgets')) config = { ...config, annual_budgets: data.annual_budgets };
-	if (config.annual_budgets !== undefined) validateBudgets(config.annual_budgets);
 	const snapshot = has('summary_snapshot') ? data.summary_snapshot : current.snapshot;
-	requireValid(object(snapshot), 'summary_snapshot');
-	if (snapshot.last_closed_month != null) requireValid(month(snapshot.last_closed_month), 'last_closed_month');
-	for (const field of ['account_balances', 'monthly_summaries']) if (snapshot[field] !== undefined) requireValid(object(snapshot[field]), `summary_snapshot.${field}`);
-	if (snapshot.account_balances) numbers(snapshot.account_balances, Object.keys(snapshot.account_balances), 'account_balances');
-	for (const [key, value] of Object.entries(snapshot.monthly_summaries || {})) {
-		requireValid(month(key) && object(value), 'monthly_summaries');
-		numbers(value, ['income_total', 'expense_total', 'net_income', 'income_confirmed', 'expense_confirmed', 'total_income', 'total_expense'], 'monthly_summaries');
-		for (const field of ['by_category', 'by_actual_category', 'closing_balances']) if (value[field] !== undefined) requireValid(object(value[field]), `monthly_summaries.${field}`);
-	}
-	if (snapshot.external_assets !== undefined) requireValid(Array.isArray(snapshot.external_assets) && snapshot.external_assets.every(object), 'external_assets');
 	const transactions = has('transactions') ? data.transactions : [...current.pending_diffs, ...current.archived_transactions];
-	const accounts = new Set(items(config.accounts || [], 'accounts').map(item => item.id));
-	const categories = new Map(items(config.categories || [], 'categories').map(item => [item.id, new Set(items(item.subcategories || [], 'subcategories').map(sub => sub.id))]));
-	const ref = (value, choices, field) => { if (value != null && value !== '') requireValid(choices.has(value), `${field}: 参照先 ${value} が存在しません`); };
-	for (const account of config.accounts || []) for (const field of ['debit_account_id', 'settlement_account_id', 'premium_pay_account_id']) ref(account[field], accounts, field);
-	for (const entry of [...transactions.filter(tx => !tx.is_deleted), ...items(config.recurring_rules || [], 'recurring_rules')]) {
-		for (const field of ['account_id', 'to_account_id']) ref(entry[field], accounts, field);
-		for (const prefix of ['', 'actual_']) {
-			ref(entry[`${prefix}category_id`], categories, `${prefix}category_id`);
-			ref(entry[`${prefix}subcategory_id`], categories.get(entry[`${prefix}category_id`]) || new Set(), `${prefix}subcategory_id`);
-		}
-	}
-	for (const id of Object.keys(snapshot.account_balances || {})) ref(id, accounts, 'account_balances');
-	for (const budget of Object.values(config.annual_budgets || {})) for (const id of Object.keys(budget.category_budgets || {})) ref(id, categories, 'category_budgets');
+	createDataIntegrityValidator().assertChange({}, { master_config: config, transactions, summary_snapshot: snapshot }, { strict: true, allowArchivedReferences: true });
 	return { config, snapshot, transactions, replaceTransactions: has('transactions'), replaceMaster: has('master_config') || has('annual_budgets'), replaceSnapshot: has('summary_snapshot') };
 }
 
@@ -720,12 +700,12 @@ function handleReplaceImport(payload) {
 			const archives = new Map(current.archive_months.map(month => [month, []]));
 			const pending = [];
 			const currentTransactions = [...current.pending_diffs, ...current.archived_transactions];
-			const newestTimestamp = [...currentTransactions, ...next.transactions].reduce((latest, tx) => Math.max(latest, Date.parse(tx.updated_at || '') || 0), Date.now());
+			const newestTimestamp = [...currentTransactions, ...next.transactions].reduce((latest, tx) => Math.max(latest, transactionTimestamp(tx)), Date.now());
 			importedAt = new Date(newestTimestamp + 1).toISOString();
 			const importedIds = new Set(next.transactions.map(tx => tx.id));
 			const omitted = new Map();
 			for (const tx of currentTransactions) if (!importedIds.has(tx.id) && (!omitted.has(tx.id) || newerTransaction(tx, omitted.get(tx.id)))) omitted.set(tx.id, tx);
-			const tombstones = [...omitted.values()].map(tx => ({ ...tx, is_deleted: true }));
+			const tombstones = [...omitted.keys()].map(id => ({ id, is_deleted: true }));
 			for (const transaction of [...next.transactions, ...tombstones]) {
 				const tx = { ...storedTransaction(transaction), updated_at: importedAt, sync_status: 'synced' };
 				if (next.snapshot.last_closed_month && tx.target_month <= next.snapshot.last_closed_month) {
@@ -738,13 +718,20 @@ function handleReplaceImport(payload) {
 		}
 		if (next.replaceMaster) writes.push({ file: 'master_config.json', data: next.config });
 		if (next.replaceSnapshot) writes.push({ file: 'summary_snapshot.json', data: next.snapshot });
-		const response = { success: true, import_id: payload.import_id, master_config: next.config, imported_at: importedAt };
+		else if (next.replaceTransactions || (next.replaceMaster && canonicalJsonStringify((current.master_config.accounts || []).map(account => [account.id, account.initial_balance])) !== canonicalJsonStringify((next.config.accounts || []).map(account => [account.id, account.initial_balance])))) {
+			stagedMutationWrites = new Map(writes.map(write => [write.file, write.data]));
+			try { recalculateArchiveCascade(JSON.parse(JSON.stringify(next.snapshot)));
+				const recalculated = stagedMutationWrites.get('summary_snapshot.json');
+				if (recalculated) writes.push({ file: 'summary_snapshot.json', data: recalculated });
+			} finally { stagedMutationWrites = null; }
+		}
+		const acceptedSnapshot = writes.find(write => write.file === 'summary_snapshot.json')?.data || next.snapshot;
+		stagedMutationWrites = new Map(writes.map(write => [write.file, write.data]));
+		try { createDataIntegrityValidator().assertChange(null, integrityState(), { strict: true, allowArchivedReferences: true }); }
+		finally { stagedMutationWrites = null; }
+		const response = { success: true, import_id: payload.import_id, master_config: next.config, snapshot: acceptedSnapshot, imported_at: importedAt };
 		writes.push({ file: 'replacement_receipts.json', data: { ...receipts, [payload.import_id]: { fingerprint, response } } });
-		const journal = { id: payload.import_id, writes };
-		saveJsonFile('replacement_journal.json', journal);
-		if (canonicalJsonStringify(loadJsonFile('replacement_journal.json', null)) !== canonicalJsonStringify(journal)) throw new Error('完全インポートの復旧記録を保存できませんでした');
-		writeReplacementCommit({ id: payload.import_id });
-		recoverReplacementImport();
+		commitMutationWrites(payload.import_id, writes);
 		return response;
 	} catch (error) { return { success: false, error: error.message }; }
 }
@@ -764,6 +751,10 @@ function sharedMasterConfig(config) {
 }
 
 function handleUpdateMaster(payload) {
+	return runIntegrityMutation('update_master', () => applyUpdateMaster(payload));
+}
+
+function applyUpdateMaster(payload) {
 	if (!payload || !payload.master_config) return { success: false, error: 'Missing master_config in payload' };
 	if (typeof payload.base_version !== 'string') return { success: false, error: 'Missing base_version; update the app and retry synchronization' };
 	try {
@@ -771,12 +762,24 @@ function handleUpdateMaster(payload) {
 		const next = sharedMasterConfig(payload.master_config);
 		if (payload.base_version !== canonicalJsonStringify(current)) return { success: true, master_conflict: true, master_config: current };
 		saveJsonFile('master_config.json', next);
-		return { success: true, master_config: next };
+		const previousBalances = Object.fromEntries((current.accounts || []).map(account => [account.id, account.initial_balance]));
+		const nextBalances = Object.fromEntries((next.accounts || []).map(account => [account.id, account.initial_balance]));
+		if (canonicalJsonStringify(previousBalances) !== canonicalJsonStringify(nextBalances)) recalculateArchiveCascade(loadJsonFile('summary_snapshot.json', {}));
+		return { success: true, master_config: next, ...(stagedMutationWrites?.has('summary_snapshot.json') ? { snapshot: loadJsonFile('summary_snapshot.json', {}) } : {}) };
 	} catch (error) { return { success: false, error: error.message }; }
 }
 
 function handlePushDiff(payload) {
+	return runIntegrityMutation('push_diff', () => applyPushDiff(payload));
+}
+
+function applyPushDiff(payload) {
 	if (!payload || !Array.isArray(payload.transactions)) return { success: false, error: 'Missing or invalid transactions in payload' };
+	const submittedIds = new Set();
+	for (const tx of payload.transactions) {
+		if (!tx || typeof tx !== 'object' || submittedIds.has(tx.id)) return { success: false, error: 'Invalid or duplicate transaction ID' };
+		submittedIds.add(tx.id);
+	}
 	const pending = loadJsonFile('pending_diffs.json', { transactions: [] });
 	const snapshot = loadJsonFile('summary_snapshot.json', {});
 	const archives = readArchives();
@@ -784,7 +787,7 @@ function handlePushDiff(payload) {
 	const map = new Map((pending.transactions || []).map(tx => [tx.id, tx]));
 	const accepted = [], conflicts = [];
 	for (const tx of payload.transactions) {
-		const current = all.filter(item => item.id === tx.id).sort((a, b) => (Date.parse(b.updated_at || '') || 0) - (Date.parse(a.updated_at || '') || 0))[0];
+		const current = all.filter(item => item.id === tx.id).sort((a, b) => transactionTimestamp(b) - transactionTimestamp(a))[0];
 		if (current && newerTransaction(current, tx)) { conflicts.push(current); continue; }
 		if ((snapshot.last_closed_month && tx.target_month <= snapshot.last_closed_month) || archives.some(archive => archive.transactions.some(item => item.id === tx.id))) {
 			return { success: false, error: '再月締めの確認が必要です。手動同期で最新状態を取得してください。' };
@@ -797,8 +800,12 @@ function handlePushDiff(payload) {
 }
 
 function handleCloseMonth(payload) {
+	return runIntegrityMutation('close_month', () => applyCloseMonth(payload));
+}
+
+function applyCloseMonth(payload) {
 	const targetMonth = payload?.target_month;
-	if (!targetMonth) return { success: false, error: 'Missing target_month' };
+	if (typeof targetMonth !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth)) return { success: false, error: 'Invalid target_month' };
 	const pending = loadJsonFile('pending_diffs.json', { transactions: [] });
 	const snapshot = loadJsonFile('summary_snapshot.json', { account_balances: {}, monthly_summaries: {} });
 	const existing = loadJsonFile(`archives/${targetMonth}.json`, { transactions: [] });
@@ -835,13 +842,17 @@ function handleCloseMonth(payload) {
 }
 
 function handleRetroactiveUpdate(payload) {
+	return runIntegrityMutation('retroactive_update', () => applyRetroactiveUpdate(payload));
+}
+
+function applyRetroactiveUpdate(payload) {
 	const tx = payload?.transaction;
-	if (!tx?.id || !/^\d{4}-\d{2}$/.test(tx.target_month || '')) return { success: false, error: 'Missing transaction or target_month' };
+	if (!tx?.id || (!(tx.is_deleted === true && tx.target_month === undefined) && !/^\d{4}-\d{2}$/.test(tx.target_month || ''))) return { success: false, error: 'Missing transaction or target_month' };
 	const snapshot = loadJsonFile('summary_snapshot.json', { monthly_summaries: {}, account_balances: {} });
 	const archives = readArchives();
 	const pending = loadJsonFile('pending_diffs.json', { transactions: [] });
 	const all = [...archives.flatMap(archive => archive.transactions || []), ...(pending.transactions || [])];
-	const newer = all.filter(item => item.id === tx.id && newerTransaction(item, tx)).sort((a, b) => (Date.parse(b.updated_at || '') || 0) - (Date.parse(a.updated_at || '') || 0))[0];
+	const newer = all.filter(item => item.id === tx.id && newerTransaction(item, tx)).sort((a, b) => transactionTimestamp(b) - transactionTimestamp(a))[0];
 	if (newer) return { success: true, conflict: true, transaction: newer, snapshot };
 	const isClosed = snapshot.last_closed_month && tx.target_month <= snapshot.last_closed_month;
 	const required = new Set(archives.filter(archive => archive.transactions.some(item => item.id === tx.id)).map(archive => archive.month));
@@ -870,9 +881,9 @@ function handleRetroactiveUpdate(payload) {
 
 function recalculateArchiveCascade(snapshot) {
 	if (!snapshot || !snapshot.monthly_summaries) return;
+	const previousContent = canonicalJsonStringify(snapshot);
 
-	const closedMonths = Object.keys(snapshot.monthly_summaries).sort();
-	if (closedMonths.length === 0) return;
+	const closedMonths = [...new Set([...Object.keys(snapshot.monthly_summaries), ...readArchives().map(archive => archive.month).filter(month => snapshot.last_closed_month && month <= snapshot.last_closed_month)])].sort();
 
 	// Find initial starting balance from master or prior month
 	let runningBalances = {};
@@ -889,11 +900,17 @@ function recalculateArchiveCascade(snapshot) {
 	}
 
 	snapshot.account_balances = runningBalances;
+	if (canonicalJsonStringify(snapshot) === previousContent) return;
 	snapshot.calculated_at = new Date().toISOString();
 	saveJsonFile('summary_snapshot.json', snapshot);
 }
 
 function handleUpdateExternalAssets(payload) {
+	return runIntegrityMutation('update_external_assets', () => applyUpdateExternalAssets(payload));
+}
+
+function applyUpdateExternalAssets(payload) {
+	if (!payload || !Array.isArray(payload.external_assets)) return { success: false, error: 'Invalid external_assets' };
 	const snapshot = loadJsonFile('summary_snapshot.json', { external_assets: [] });
 	if (Array.isArray(payload.external_assets)) {
 		snapshot.external_assets = payload.external_assets;
@@ -930,7 +947,7 @@ function computeMonthlySummary(transactions, initialBalances = {}) {
 
 			// Actual category
 			const actCat = tx.actual_category_id || cat;
-			const actSub = tx.actual_subcategory_id || sub;
+			const actSub = (tx.actual_subcategory_id !== undefined ? tx.actual_subcategory_id : actCat === cat ? tx.subcategory_id : null) || 'sub_unclassified';
 			if (!byActualCategory[actCat]) byActualCategory[actCat] = { total: 0, by_subcategory: {} };
 			byActualCategory[actCat].total += amt;
 			byActualCategory[actCat].by_subcategory[actSub] = (byActualCategory[actCat].by_subcategory[actSub] || 0) + amt;
@@ -958,6 +975,257 @@ function computeMonthlySummary(transactions, initialBalances = {}) {
 		closing_balances: closingBalances
 	};
 }
+
+// BEGIN GENERATED DATA INTEGRITY
+/** Shared, dependency-free schema and transition checks. Embedded into GAS by script. */
+function createDataIntegrityValidator() {
+	const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+	const safeId = value => typeof value === 'string' && value.length > 0 && !['__proto__', 'constructor', 'prototype'].includes(value);
+	const month = value => typeof value === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
+	const date = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+	const accountTypes = ['bank', 'cash', 'credit_card', 'loan', 'point', 'receivable', 'prepaid', 'investment', 'insurance', 'asset', 'electronic_money'];
+	const issues = state => {
+		const found = [];
+		const issue = (code, path, message, value = null) => {
+			const encoded = object(value) || Array.isArray(value) ? JSON.stringify(value) : `${typeof value}:${String(value)}`;
+			found.push({ code, path, message: `${path}: ${message}`, fingerprint: JSON.stringify([code, path, encoded]) });
+		};
+		const scan = (value, path, seen = new Set()) => {
+			if (!value || typeof value !== 'object') return;
+			if (seen.has(value)) { issue('shape', path, '循環参照は保存できません'); return; }
+			seen.add(value);
+			for (const [key, child] of Object.entries(value)) {
+				if (!safeId(key)) issue('unsafe_key', `${path}.${key}`, '不正なキーです', key);
+				scan(child, `${path}.${key}`, seen);
+			}
+			seen.delete(value);
+		};
+		scan(state, 'data');
+		const list = (value, path) => {
+			if (value === undefined) return [];
+			if (!Array.isArray(value)) { issue('shape', path, '配列である必要があります', typeof value); return []; }
+			return value;
+		};
+		const number = (value, path, { required = false, integer = false, min = -Infinity, max = Infinity } = {}) => {
+			if (value == null && !required) return;
+			if (typeof value !== 'number' || !Number.isFinite(value) || (integer && !Number.isSafeInteger(value)) || value < min || value > max) issue('number', path, '数値の形式・範囲が不正です', value);
+		};
+		const bools = (item, path, fields) => { for (const field of fields) if (item[field] !== undefined && typeof item[field] !== 'boolean') issue('boolean', `${path}.${field}`, '真偽値が必要です', item[field]); };
+		const text = (item, path, fields) => { for (const field of fields) if (item[field] != null && typeof item[field] !== 'string') issue('string', `${path}.${field}`, '文字列が必要です', item[field]); };
+		const keyed = (value, path) => {
+			const map = new Map();
+			for (const item of list(value, path)) {
+				if (!object(item)) { issue('shape', path, '要素はオブジェクトである必要があります', item); continue; }
+				if (!safeId(item.id)) issue('id', `${path}.id`, 'IDが不正です', item.id);
+				if (map.has(item.id)) issue('duplicate', `${path}.${item.id}`, 'IDが重複しています', item.id);
+				else map.set(item.id, item);
+			}
+			return map;
+		};
+		const master = object(state?.master_config) ? state.master_config : {};
+		if (state?.master_config != null && !object(state.master_config)) issue('shape', 'master_config', '設定形式が不正です');
+		const accounts = keyed(master.accounts, 'accounts');
+		const categories = keyed(master.categories, 'categories');
+		const rules = keyed(master.recurring_rules, 'recurring_rules');
+		const children = new Map();
+		for (const [id, item] of categories) children.set(id, keyed(item.subcategories, `categories.${id}.subcategories`));
+		const ref = (id, map, path, required = false) => {
+			if ((id === undefined || id === null || id === '') && !required) return;
+			if (!safeId(id) || !map.has(id)) issue('reference', path, `参照先「${String(id)}」が存在しません`, id);
+		};
+		const classification = (item, path, expectedType) => {
+			for (const prefix of ['', 'actual_']) {
+				const cat = item[`${prefix}category_id`], sub = item[`${prefix}subcategory_id`];
+				ref(cat, categories, `${path}.${prefix}category_id`);
+				ref(sub, children.get(cat) || new Map(), `${path}.${prefix}subcategory_id`);
+				if (cat && categories.has(cat) && expectedType && categories.get(cat).type !== expectedType) issue('category_type', `${path}.${prefix}category_id`, '明細種別と費目の収支種別が一致しません', [cat, categories.get(cat).type, expectedType]);
+			}
+		};
+		for (const [id, item] of accounts) {
+			const path = `accounts.${id}`;
+			if (!accountTypes.includes(item.type)) issue('enum', `${path}.type`, '口座種別が不正です', item.type);
+			text(item, path, ['name', 'maturity_date']);
+			bools(item, path, ['is_asset', 'is_archived']);
+			number(item.initial_balance, `${path}.initial_balance`, { integer: true });
+			number(item.maturity_amount, `${path}.maturity_amount`, { integer: true, min: 0 });
+			for (const field of ['debit_account_id', 'settlement_account_id', 'premium_pay_account_id']) ref(item[field], accounts, `${path}.${field}`);
+			for (const field of ['debit_account_id', 'settlement_account_id']) if (item[field]) {
+				const paying = accounts.get(item[field]);
+				if (item[field] === id || (paying && !['bank', 'cash', 'asset'].includes(paying.type))) issue('account_role', `${path}.${field}`, '引落先には別の銀行・現金・資産口座が必要です', item[field]);
+			}
+			if (item.debit_account_id && item.settlement_account_id && item.debit_account_id !== item.settlement_account_id) issue('account_role', `${path}.debit_account_id`, '引落口座の参照が一致しません', [item.debit_account_id, item.settlement_account_id]);
+			for (const field of ['closing_day', 'debit_day']) if (item[field] !== 99) number(item[field], `${path}.${field}`, { integer: true, min: 1, max: 31 });
+			number(item.premium_day, `${path}.premium_day`, { integer: true, min: 1, max: 31 });
+			number(item.debit_month_offset, `${path}.debit_month_offset`, { integer: true, min: 0, max: 2 });
+			number(item.premium_amount, `${path}.premium_amount`, { integer: true, min: 0 });
+			ref(item.premium_category_id, categories, `${path}.premium_category_id`);
+			ref(item.premium_subcategory_id, children.get(item.premium_category_id) || new Map(), `${path}.premium_subcategory_id`);
+			if (item.premium_category_id && categories.get(item.premium_category_id)?.type !== 'expense') issue('category_type', `${path}.premium_category_id`, '保険料には支出費目が必要です', item.premium_category_id);
+			if (item.maturity_date != null && item.maturity_date !== '' && !date(item.maturity_date)) issue('date', `${path}.maturity_date`, '日付が不正です', item.maturity_date);
+		}
+		for (const [id, item] of categories) {
+			const path = `categories.${id}`;
+			if (!['expense', 'income'].includes(item.type)) issue('enum', `${path}.type`, '費目種別が不正です', item.type);
+			text(item, path, ['name', 'icon']); bools(item, path, ['is_archived']);
+			for (const [subId, sub] of children.get(id)) { text(sub, `${path}.${subId}`, ['name']); bools(sub, `${path}.${subId}`, ['is_archived']); }
+		}
+		const validateTransaction = (item, path, recurring = false) => {
+			const deleted = !recurring && item.is_deleted === true;
+			if ((!deleted || item.type !== undefined) && !['expense', 'income', 'transfer'].includes(item.type)) issue('enum', `${path}.type`, '取引種別が不正です', item.type);
+			if (!recurring) {
+				if ((!deleted || item.date !== undefined) && !date(item.date)) issue('date', `${path}.date`, '日付が不正です', item.date);
+				if ((!deleted || item.target_month !== undefined) && !month(item.target_month)) issue('month', `${path}.target_month`, '計上月が不正です', item.target_month);
+				if ((!deleted || item.status !== undefined) && !['confirmed', 'planned'].includes(item.status)) issue('enum', `${path}.status`, '明細状態が不正です', item.status);
+				if (item.amount_pending === true && (item.status !== 'planned' || item.amount !== 0)) issue('pending', `${path}.amount_pending`, '金額未入力の明細は金額0の予定である必要があります', [item.status, item.amount]);
+				if (item.previous_target_month != null && !month(item.previous_target_month)) issue('month', `${path}.previous_target_month`, '移動元月が不正です', item.previous_target_month);
+			}
+			number(item.amount, `${path}.amount`, { required: !deleted || item.amount !== undefined, integer: true, min: 0 });
+			bools(item, path, ['is_deleted', 'amount_pending', 'is_active', 'is_payment_record', 'is_point_split']);
+			text(item, path, ['memo', 'group_id', 'created_at', 'updated_at']);
+			if (deleted && (typeof item.updated_at !== 'string' || !Number.isFinite(Date.parse(item.updated_at)))) issue('timestamp', `${path}.updated_at`, '削除記録には有効な更新日時が必要です', item.updated_at);
+			for (const field of ['created_at', 'updated_at']) if (item[field] != null && (typeof item[field] !== 'string' || !Number.isFinite(Date.parse(item[field])))) issue('timestamp', `${path}.${field}`, '日時が不正です', item[field]);
+			for (const field of ['tax_meta', 'amortization_meta', 'auto_settlement_meta']) if (item[field] != null && !object(item[field])) issue('shape', `${path}.${field}`, '補助情報はオブジェクトである必要があります', item[field]);
+			if (item.tags !== undefined && (!Array.isArray(item.tags) || item.tags.some(tag => typeof tag !== 'string'))) issue('shape', `${path}.tags`, 'タグは文字列の配列である必要があります', item.tags);
+			const amortization = item.amortization_meta;
+			if (object(amortization)) {
+				const role = amortization.is_payment_record;
+				if (role !== undefined && typeof role !== 'boolean') issue('amortization', `${path}.amortization_meta.is_payment_record`, '前払補助情報の役割には真偽値が必要です', role);
+				if (item.type !== (role === true ? 'transfer' : 'expense')) issue('amortization', `${path}.amortization_meta.is_payment_record`, '前払親支払は振替、配賦子明細は支出である必要があります', [role, item.type]);
+				if (typeof item.group_id !== 'string' || !item.group_id.trim()) issue('amortization', `${path}.group_id`, '前払補助情報には空でないグループIDが必要です', item.group_id);
+			}
+
+			if (!item.is_deleted) {
+				ref(item.account_id, accounts, `${path}.account_id`, true);
+				ref(item.to_account_id, accounts, `${path}.to_account_id`, item.type === 'transfer');
+				if (item.type === 'transfer' && item.account_id === item.to_account_id) issue('transfer', `${path}.to_account_id`, '振替元と振替先が同じです', item.to_account_id);
+				classification(item, path, ['expense', 'income'].includes(item.type) ? item.type : null);
+				const settlement = item.auto_settlement_meta;
+				if (object(settlement)) {
+					ref(settlement.card_id, accounts, `${path}.auto_settlement_meta.card_id`, true);
+					if (accounts.has(settlement.card_id) && accounts.get(settlement.card_id).type !== 'credit_card') issue('account_role', `${path}.auto_settlement_meta.card_id`, '精算先はカード口座である必要があります', settlement.card_id);
+					if (item.type !== 'transfer' || item.to_account_id !== settlement.card_id) issue('settlement', `${path}.auto_settlement_meta.card_id`, '精算情報と振替先が一致しません', [item.type, item.to_account_id, settlement.card_id]);
+					if (!month(settlement.billing_cycle)) issue('month', `${path}.auto_settlement_meta.billing_cycle`, '請求周期が不正です', settlement.billing_cycle);
+					if (settlement.debit_account_id != null) {
+						ref(settlement.debit_account_id, accounts, `${path}.auto_settlement_meta.debit_account_id`);
+						if (item.account_id !== settlement.debit_account_id) issue('settlement', `${path}.auto_settlement_meta.debit_account_id`, '精算情報と振替元が一致しません', [item.account_id, settlement.debit_account_id]);
+					}
+				}
+			}
+		};
+		for (const [id, item] of rules) {
+			const path = `recurring_rules.${id}`;
+			validateTransaction(item, path, true);
+			if (item.frequency !== undefined && !['monthly', 'interval_months'].includes(item.frequency)) issue('enum', `${path}.frequency`, '周期が不正です', item.frequency);
+			number(item.day_of_month, `${path}.day_of_month`, { integer: true, min: 1, max: 31 });
+			number(item.interval_months, `${path}.interval_months`, { integer: true, min: 1 });
+			number(item.amortize_months, `${path}.amortize_months`, { integer: true, min: 1 });
+			if (item.holiday_adjustment !== undefined && !['none', 'before', 'after'].includes(item.holiday_adjustment)) issue('enum', `${path}.holiday_adjustment`, '休日調整が不正です', item.holiday_adjustment);
+			for (const field of ['start_date', 'end_date']) if (item[field] != null && item[field] !== '' && !date(item[field])) issue('date', `${path}.${field}`, '日付が不正です', item[field]);
+			if (item.start_date && item.end_date && item.start_date > item.end_date) issue('date', `${path}.end_date`, '終了日が開始日より前です', [item.start_date, item.end_date]);
+			if (item.is_active) {
+				for (const field of ['account_id', 'to_account_id']) if (accounts.get(item[field])?.is_archived) issue('archived', `${path}.${field}`, '有効な定期設定にアーカイブ口座は使用できません', item[field]);
+				for (const prefix of ['', 'actual_']) {
+					if (categories.get(item[`${prefix}category_id`])?.is_archived || children.get(item[`${prefix}category_id`])?.get(item[`${prefix}subcategory_id`])?.is_archived) issue('archived', `${path}.${prefix}category_id`, '有効な定期設定にアーカイブ費目は使用できません', [item[`${prefix}category_id`], item[`${prefix}subcategory_id`]]);
+				}
+			}
+		}
+		const transactions = list(state?.transactions, 'transactions');
+		keyed(transactions, 'transactions');
+		const natural = new Set(), settlements = new Set();
+		for (const item of transactions) {
+			if (!object(item)) continue;
+			validateTransaction(item, `transactions.${item.id}`);
+			if (!item.is_deleted && item.recurring_rule_id) {
+				const key = JSON.stringify([item.recurring_rule_id, item.target_month]);
+				if (natural.has(key)) issue('duplicate_recurring', `transactions.recurring.${key}`, '同じ定期設定と計上月の明細が重複しています', key);
+				natural.add(key);
+			}
+			if (!item.is_deleted && object(item.auto_settlement_meta) && item.auto_settlement_meta.card_id && item.auto_settlement_meta.billing_cycle) {
+				const key = JSON.stringify([item.auto_settlement_meta.card_id, item.auto_settlement_meta.billing_cycle]);
+				if (settlements.has(key)) issue('duplicate_settlement', `transactions.settlement.${key}`, '同じカードと請求周期の精算明細が重複しています', key);
+				settlements.add(key);
+			}
+		}
+		if (master.holidays !== undefined) for (const day of list(master.holidays, 'holidays')) if (!date(day)) issue('date', 'holidays', '祝日の日付が不正です', day);
+		if (master.annual_budgets !== undefined && !object(master.annual_budgets)) issue('shape', 'annual_budgets', '予算は年度別のオブジェクトが必要です');
+		for (const [year, entry] of Object.entries(object(master.annual_budgets) ? master.annual_budgets : {})) {
+			const path = `annual_budgets.${year}`;
+			if (!/^\d{4}$/.test(year) || !object(entry)) { issue('shape', path, '年度予算の形式が不正です', year); continue; }
+			for (const field of ['expense_budget', 'savings_target_amount']) number(entry[field], `${path}.${field}`, { integer: true, min: 0 });
+			for (const field of ['savings_target_rate', 'target_savings_rate']) number(entry[field], `${path}.${field}`, { min: 0, max: 100 });
+			if (entry.category_budgets !== undefined && !object(entry.category_budgets)) issue('shape', `${path}.category_budgets`, '費目予算の形式が不正です');
+			for (const [id, value] of Object.entries(object(entry.category_budgets) ? entry.category_budgets : {})) { ref(id, categories, `${path}.${id}`); number(value, `${path}.${id}`, { integer: true, min: 0 }); }
+		}
+		const snapshot = state?.summary_snapshot === undefined ? {} : state.summary_snapshot;
+		if (!object(snapshot)) issue('shape', 'summary_snapshot', '集計形式が不正です');
+		else {
+			if (snapshot.last_closed_month != null && !month(snapshot.last_closed_month)) issue('month', 'summary_snapshot.last_closed_month', '締め月が不正です', snapshot.last_closed_month);
+			const numberMap = (value, path, refs = null) => {
+				if (value === undefined) return;
+				if (!object(value)) { issue('shape', path, '数値マップが必要です'); return; }
+				for (const [id, amount] of Object.entries(value)) { if (refs) ref(id, refs, `${path}.${id}`); number(amount, `${path}.${id}`, { required: true }); }
+			};
+			const categoryMap = (value, path) => {
+				if (value === undefined) return;
+				if (!object(value)) { issue('shape', path, '費目集計マップが必要です'); return; }
+				for (const [id, summary] of Object.entries(value)) {
+					if (id !== 'cat_unclassified') ref(id, categories, `${path}.${id}`);
+					if (typeof summary === 'number') { number(summary, `${path}.${id}`, { required: true }); continue; }
+					if (!object(summary)) { issue('shape', `${path}.${id}`, '費目集計が不正です'); continue; }
+					for (const field of ['total', 'confirmed', 'planned', 'total_confirmed', 'total_planned']) number(summary[field], `${path}.${id}.${field}`);
+					const subs = new Map(children.get(id) || []); subs.set('sub_unclassified', {});
+					numberMap(summary.by_subcategory, `${path}.${id}.by_subcategory`, subs);
+				}
+			};
+			numberMap(snapshot.account_balances, 'summary_snapshot.account_balances', accounts);
+			if (snapshot.monthly_summaries !== undefined && !object(snapshot.monthly_summaries)) issue('shape', 'summary_snapshot.monthly_summaries', '月別集計マップが必要です');
+			for (const [key, summary] of Object.entries(object(snapshot.monthly_summaries) ? snapshot.monthly_summaries : {})) {
+				const path = `summary_snapshot.monthly_summaries.${key}`;
+				if (!month(key) || !object(summary)) { issue('shape', path, '月別集計の形式が不正です', key); continue; }
+				for (const field of ['income_total', 'expense_total', 'net_income', 'income_confirmed', 'expense_confirmed', 'total_income', 'total_expense']) number(summary[field], `${path}.${field}`);
+				numberMap(summary.closing_balances, `${path}.closing_balances`, accounts);
+				categoryMap(summary.by_category, `${path}.by_category`); categoryMap(summary.by_actual_category, `${path}.by_actual_category`);
+			}
+			if (snapshot.external_assets !== undefined) for (const item of keyed(snapshot.external_assets, 'external_assets').values()) {
+				if (!object(item)) { issue('shape', 'external_assets', '資産の形式が不正です'); continue; }
+				text(item, 'external_assets', ['id', 'name', 'updated_at']);
+				for (const field of ['amount', 'value', 'balance', 'quantity', 'unit_price', 'market_value', 'current_value']) number(item[field], `external_assets.${field}`);
+			}
+		}
+		return found;
+	};
+	const assertChange = (before, after, { strict = false, allowArchivedReferences = false } = {}) => {
+		const allowed = new Map();
+		if (!strict) for (const item of issues(before)) allowed.set(item.fingerprint, (allowed.get(item.fingerprint) || 0) + 1);
+		const violations = [];
+		for (const item of issues(after)) {
+			const count = allowed.get(item.fingerprint) || 0;
+			if (count > 0) allowed.set(item.fingerprint, count - 1); else violations.push(item);
+		}
+		if (!allowArchivedReferences) {
+			const rows = value => Array.isArray(value) ? value.filter(object) : [];
+			const master = after?.master_config || {}, previous = new Map(rows(before?.transactions).map(tx => [tx.id, tx]));
+			const accounts = new Map(rows(master.accounts).map(item => [item.id, item]));
+			const categories = new Map(rows(master.categories).map(item => [item.id, item]));
+			for (const tx of rows(after?.transactions)) {
+				if (!object(tx) || tx.is_deleted) continue;
+				const old = previous.get(tx.id);
+				for (const field of ['account_id', 'to_account_id', 'category_id', 'subcategory_id', 'actual_category_id', 'actual_subcategory_id']) {
+					if (old && !old.is_deleted && old[field] === tx[field]) continue;
+					const parent = categories.get(tx[field.startsWith('actual_') ? 'actual_category_id' : 'category_id']);
+					const archived = field.endsWith('account_id') ? accounts.get(tx[field])?.is_archived : field.endsWith('subcategory_id') ? parent?.is_archived || rows(parent?.subcategories).find(sub => sub.id === tx[field])?.is_archived : categories.get(tx[field])?.is_archived;
+					if (tx[field] && archived) violations.push({ message: `transactions.${tx.id}.${field}: アーカイブされた設定を新たに使用できません` });
+				}
+			}
+		}
+		if (violations.length) throw new Error(`データ整合性の検証に失敗しました: ${violations.map(item => item.message).slice(0, 12).join(' / ')}`);
+		return after;
+	};
+	return { issues, assertChange };
+}
+
+const dataIntegrity = createDataIntegrityValidator();
+// END GENERATED DATA INTEGRITY
 
 // Export for Node testing environment
 if (typeof module !== 'undefined' && module.exports) {

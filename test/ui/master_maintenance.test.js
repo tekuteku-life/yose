@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { useBrowser, seed, transaction, settings, records, waitForDialog } from '../helpers/ui_fixture.js';
+import { useBrowser, seedLegacy, transaction, settings, records, waitForDialog } from '../helpers/ui_fixture.js';
 
 const fixture = useBrowser();
 async function prepare(d, closed = false) {
@@ -9,7 +9,7 @@ async function prepare(d, closed = false) {
 		config.categories.find(c => c.id === 'cat_food').is_archived = true;
 		await app.db.saveMasterConfig(config);
 	})()`);
-	await seed(d, [transaction('archived', closed ? { date: '2026-09-10', target_month: '2026-09', sync_status: 'synced' } : {}), transaction('unrelated', { category_id: 'cat_housing', actual_category_id: 'cat_housing' })]);
+	await seedLegacy(d, [transaction('archived', closed ? { date: '2026-09-10', target_month: '2026-09', sync_status: 'synced' } : {}), transaction('unrelated', { category_id: 'cat_housing', actual_category_id: 'cat_housing' })]);
 	await settings(d);
 	await d.click('#maintenance-panel summary');
 	await d.click('#btn-refresh-maintenance');

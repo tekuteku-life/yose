@@ -274,8 +274,7 @@ export class SettingsController {
 				await this.db.deleteSecurityKey('webauthn_vault');
 				const config = await this.db.getMasterConfig();
 				if (config && config.synced_passkey_bundle) {
-					delete config.synced_passkey_bundle;
-					await this.db.saveMasterConfig(config);
+					await this.db.mutateMasterConfig(current => { delete current.synced_passkey_bundle; return current; });
 				}
 				alert('WebAuthn連携を解除しました');
 				await this.renderSettings();
@@ -376,34 +375,43 @@ export class SettingsController {
 		});
 
 		document.getElementById('btn-save-annual-budget')?.addEventListener('click', async () => {
-			const year = inputBudgetYear?.value.trim() || this.coordinator.selectedYear;
-			if (!year || year.length !== 4) {
-				alert('有効な対象年（4桁）を入力してください');
-				return;
-			}
-			const exp = Number(inputExpBudget?.value) || 0;
-			const sav = Number(inputSavTarget?.value) || 0;
-			const rate = Number(inputSavRate?.value) || 0;
-
-			const category_budgets = {};
-			document.querySelectorAll('.input-cat-budget').forEach(input => {
-				const catId = input.dataset.catId;
-				const val = Number(input.value) || 0;
-				if (val > 0) {
-					category_budgets[catId] = val;
+			if (this.savingBudget) return;
+			this.savingBudget = true;
+			try {
+				const year = inputBudgetYear?.value.trim() || this.coordinator.selectedYear;
+				if (!year || year.length !== 4) {
+					alert('有効な対象年（4桁）を入力してください');
+					return;
 				}
-			});
+				const exp = Number(inputExpBudget?.value) || 0;
+				const sav = Number(inputSavTarget?.value) || 0;
+				const rate = Number(inputSavRate?.value) || 0;
 
-			await this.db.saveAnnualBudget(year, {
-				expense_budget: exp,
-				savings_target_amount: sav,
-				savings_target_rate: rate,
-				target_savings_rate: rate,
-				category_budgets
-			});
-			alert(`${year}年の年間予算・費目別目標を保存しました！`);
-			await this.coordinator.refreshAllViews();
-			void this.syncManager.queueMasterSync();
+				const baseline = this.budgetExpectedConfig || await this.db.getMasterConfig();
+				const category_budgets = { ...(baseline.annual_budgets?.[year]?.category_budgets || {}) };
+				document.querySelectorAll('.input-cat-budget').forEach(input => {
+					const catId = input.dataset.catId;
+					const val = Number(input.value) || 0;
+					if (val > 0) {
+						category_budgets[catId] = val;
+					} else delete category_budgets[catId];
+				});
+
+				const candidate = structuredClone(baseline);
+				candidate.annual_budgets ||= {};
+				candidate.annual_budgets[year] = {
+					expense_budget: exp,
+					savings_target_amount: sav,
+					savings_target_rate: rate,
+					target_savings_rate: rate,
+					category_budgets
+				};
+				await this.db.saveMasterConfig(candidate, { expectedConfig: baseline });
+				alert(`${year}年の年間予算・費目別目標を保存しました！`);
+				await this.coordinator.refreshAllViews();
+				void this.syncManager.queueMasterSync();
+			} catch (error) { alert(`年間予算の保存に失敗しました: ${error.message}`); }
+			finally { this.savingBudget = false; }
 		});
 
 		// View / Edit Master JSON
@@ -415,6 +423,7 @@ export class SettingsController {
 		btnViewMaster?.addEventListener('click', async () => {
 			if (editor.style.display === 'none') {
 				const config = await this.db.getMasterConfig();
+				this.jsonExpectedConfig = structuredClone(config);
 				txtMaster.value = JSON.stringify(config, null, 2);
 				editor.style.display = 'block';
 			} else {
@@ -425,10 +434,12 @@ export class SettingsController {
 		btnSaveMaster?.addEventListener('click', async () => {
 			try {
 				const config = JSON.parse(txtMaster.value);
-				await this.coordinator.masterController.saveMasterConfigAndSync(config);
+				const saved = await this.coordinator.masterController.saveMasterConfigAndSync(config, this.jsonExpectedConfig);
+				this.jsonExpectedConfig = structuredClone(saved);
+				txtMaster.value = JSON.stringify(saved, null, 2);
 				alert('マスタ設定を保存しました');
 			} catch (err) {
-				alert(`JSONフォーマットエラー: ${err.message}`);
+				alert(`マスタ設定の保存に失敗しました: ${err.message}`);
 			}
 		});
 
@@ -622,7 +633,9 @@ export class SettingsController {
 		const currentYear = inputBudgetYear.value.trim() || this.coordinator.selectedYear || String(new Date().getFullYear());
 		inputBudgetYear.value = currentYear;
 
-		const budget = await this.db.getAnnualBudget(currentYear);
+		const config = await this.db.getMasterConfig();
+		this.budgetExpectedConfig = structuredClone(config);
+		const budget = config?.annual_budgets?.[currentYear] || {};
 		if (inputExpBudget) inputExpBudget.value = budget?.expense_budget || '';
 		if (inputSavTarget) inputSavTarget.value = budget?.savings_target_amount || '';
 		if (inputSavRate) inputSavRate.value = budget?.savings_target_rate ?? budget?.target_savings_rate ?? '';
@@ -636,7 +649,6 @@ export class SettingsController {
 		}
 
 		// Calculate previous year actuals per category
-		const config = await this.db.getMasterConfig();
 		const categories = (config?.categories || []).filter(c => !c.is_archived && (!c.type || c.type === 'expense'));
 		const prevYearStr = String(Number(currentYear) - 1);
 		const snapshot = await this.db.getSnapshot();

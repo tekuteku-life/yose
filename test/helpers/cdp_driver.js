@@ -179,7 +179,8 @@ export class HeadlessBrowserDriver {
 		if (method === 'Fetch.requestPaused') {
 			const reqUrl = new URL(params.request.url);
 			this.requests.push({ url: params.request.url, method: params.request.method, body: params.request.postData });
-			const response = this.responses.get(reqUrl.href) || this.responses.get(reqUrl.pathname);
+			const configured = this.responses.get(reqUrl.href) || this.responses.get(reqUrl.pathname);
+			const response = typeof configured === 'function' ? await configured(params.request) : configured;
 			if (response) {
 				if (response.wait) await response.wait;
 				if (response.error) {

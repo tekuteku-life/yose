@@ -4,7 +4,7 @@
 
 import { createSignedRequest, canonicalJsonStringify } from './crypto.js';
 import { DEFAULT_MASTER_CONFIG } from './db/defaults.js';
-import { sharedMasterConfig, mergeMasterConfigs, resolveMasterConflicts, assertMasterReferences } from './logic/master_sync.js';
+import { sharedMasterConfig, mergeMasterConfigs, resolveMasterConflicts } from './logic/master_sync.js';
 
 class MasterConflictError extends Error {
 	constructor(paths, cancelled, reason = null) {
@@ -110,7 +110,7 @@ export class SyncManager {
 		checkSession();
 		if (response.import_id !== pending.id) throw new Error('完全インポートの同期応答を確認できませんでした。送信待ちを保持しています。');
 		if (Array.isArray(pending.data.transactions) && (typeof response.imported_at !== 'string' || !Number.isFinite(Date.parse(response.imported_at)))) throw new Error('完全インポートの受理時刻を確認できませんでした。送信待ちを保持しています。');
-		if (!await this.db.acknowledgePendingImport(pending, response.master_config || null, { isSessionValid, importedAt: response.imported_at })) throw new Error('完全インポートの送信待ちが変更されました。再度同期してください。');
+		if (!await this.db.acknowledgePendingImport(pending, Object.hasOwn(response, 'master_config') ? response.master_config : undefined, { isSessionValid, importedAt: response.imported_at, importedSnapshot: response.snapshot })) throw new Error('完全インポートの送信待ちが変更されました。再度同期してください。');
 		this.masterConflictPaths = [];
 	}
 
@@ -127,12 +127,17 @@ export class SyncManager {
 		};
 	}
 
-	async syncSharedMaster(remoteConfig, approveMasterConflict = null) {
-		if (!remoteConfig) return;
+	async syncSharedMaster(remoteConfig, approveMasterConflict = null, { remoteState = null } = {}) {
+		if (remoteConfig != null && (typeof remoteConfig !== 'object' || Array.isArray(remoteConfig))) throw new Error('受信設定の形式が不正です。');
 		const privateKey = this.privateKey, encryptionKey = this.db.encryptionKey;
 		const isSessionValid = () => this.privateKey !== null && this.privateKey === privateKey && this.db.encryptionKey === encryptionKey;
-		const remote = sharedMasterConfig(remoteConfig);
 		const local = await this.db.getMasterConfig();
+		if (remoteConfig == null) {
+			await this.db.validateRemoteState(sharedMasterConfig(local), remoteState || {}, local);
+			if (remoteState) await this.db.commitSyncResponse([], remoteState, { isSessionValid });
+			return;
+		}
+		const remote = sharedMasterConfig(remoteConfig);
 		const sharedLocal = sharedMasterConfig(local);
 		const base = await this.db.getMasterSyncBase() || (Object.keys(remote).some(key => key !== 'schema_version') ? sharedMasterConfig(DEFAULT_MASTER_CONFIG) : { schema_version: 2 });
 		const mergeResult = mergeMasterConfigs(base, sharedLocal, remote);
@@ -141,7 +146,7 @@ export class SyncManager {
 		if (conflicts.length) {
 			this.masterConflictPaths = [...conflicts];
 			if (!approveMasterConflict) throw new MasterConflictError(conflicts, false);
-			const validateChoices = choices => {
+			const validateChoices = async choices => {
 				let selections;
 				if (choices === true) selections = new Map(mergeResult.conflictDetails.map(detail => [detail.id, 'local']));
 				else {
@@ -149,24 +154,25 @@ export class SyncManager {
 					selections = new Map(Object.entries(choices));
 				}
 				const candidate = resolveMasterConflicts(mergeResult, selections);
-				assertMasterReferences(candidate);
+				await this.db.validateRemoteState(candidate, remoteState || {}, local);
 				return candidate;
 			};
 			const choices = await approveMasterConflict(conflicts, mergeResult.conflictDetails, validateChoices);
 			if (!choices) throw new MasterConflictError(conflicts, true);
 			if (!isSessionValid()) throw new Error('認証がロックまたは変更されました。解除後に設定を確認し直してください。');
 			if (canonicalJsonStringify(sharedMasterConfig(await this.db.getMasterConfig())) !== canonicalJsonStringify(sharedLocal)) throw new MasterConflictError(conflicts, false, 'local_changed');
-			config = validateChoices(choices);
+			config = await validateChoices(choices);
 		}
-		assertMasterReferences(config);
+		await this.db.validateRemoteState(config, remoteState || {}, local);
 		if (!isSessionValid()) throw new Error('認証がロックまたは変更されました。解除後に設定を確認し直してください。');
 		let accepted = remote;
 		if (canonicalJsonStringify(config) !== canonicalJsonStringify(remote)) {
 			const response = await this.sendRequest('update_master', { master_config: config, base_version: canonicalJsonStringify(remote) });
 			if (response.master_conflict) throw new Error('設定マスタが別端末で更新されました。手元の変更を保持しています。手動差分同期で再取得してください。');
 			accepted = response.master_config || config;
+			if (response.snapshot) remoteState = { ...remoteState, snapshot: response.snapshot };
 		}
-		const committed = await this.db.commitMasterSync(local, accepted, { isSessionValid });
+		const committed = await this.db.commitMasterSync(local, accepted, { isSessionValid, remoteState });
 		this.masterConflictPaths = [];
 		if (canonicalJsonStringify(sharedMasterConfig(committed)) !== canonicalJsonStringify(sharedLocal)) {
 			for (const listener of this._masterListeners) Promise.resolve().then(() => listener()).catch(error => console.warn('Master view refresh failed:', error.message));
@@ -268,41 +274,56 @@ export class SyncManager {
 		if (this.isSyncing) return { status: 'already_syncing' };
 		this.isSyncing = true; this.lastError = null;
 		try { return await this.pushPending(options); }
-		catch (error) { this.lastError = error.message; throw error; }
+		catch (error) {
+			if (error instanceof MasterConflictError) return this.masterConflictOutcome(error, 0, 0, (await this.db.getUnsyncedTransactions()).length);
+			this.lastError = error.message; throw error;
+		}
 		finally { this.isSyncing = false; }
 	}
 
+	sessionGuard() {
+		const privateKey = this.privateKey, encryptionKey = this.db.encryptionKey;
+		return () => Boolean(privateKey) && this.privateKey === privateKey && this.db.encryptionKey === encryptionKey;
+	}
+
+	assertSession(isSessionValid) {
+		if (!isSessionValid()) throw new Error('認証がロックまたは変更されました。解除後に同期し直してください。');
+	}
+
 	async pushPending({ keepalive = false } = {}) {
+		const isSessionValid = this.sessionGuard();
 		await this.flushPendingImport();
 		const unsynced = await this.db.getUnsyncedTransactions();
 		if (!unsynced?.length) return { status: 'up_to_date', synced_count: 0 };
+		const remoteMaster = await this.sendRequest('fetch_master', {}, { keepalive });
+		await this.syncSharedMaster(remoteMaster.master_config);
+		this.assertSession(isSessionValid);
 		const snapshot = await this.db.getSnapshot();
-		const retroactive = unsynced.filter(tx => tx.previous_target_month || (snapshot?.last_closed_month && tx.target_month <= snapshot.last_closed_month));
+		const retroactive = unsynced.filter(tx => (tx.is_deleted === true && tx.target_month === undefined) || tx.previous_target_month || (snapshot?.last_closed_month && tx.target_month <= snapshot.last_closed_month));
 		const ids = new Set(retroactive.map(tx => tx.id));
 		const pending = unsynced.filter(tx => !ids.has(tx.id));
 		let response = null, count = 0;
 		for (const transaction of retroactive) {
 			response = await this.sendRequest('retroactive_update', { transaction, ...(transaction.previous_target_month ? { previous_target_month: transaction.previous_target_month } : {}) }, { keepalive });
-			if (response.conflict && response.transaction) await this.db.mergeRemoteTransactions([response.transaction]);
-			else count += await this.db.markTransactionsSynced([transaction.id], [transaction]);
-			if (response.snapshot) await this.db.saveSnapshot(response.snapshot);
+			const committed = await this.db.commitSyncResponse([transaction], { ...response, accepted_ids: response.conflict ? [] : [transaction.id] }, { isSessionValid });
+			count += committed.synced_count;
 		}
 		if (pending.length) {
 			response = await this.sendRequest('push_diff', { transactions: pending }, { keepalive });
-			if (response.conflicts?.length) await this.db.mergeRemoteTransactions(response.conflicts);
-			count += await this.db.markTransactionsSynced(response.accepted_ids || pending.map(tx => tx.id), pending);
-			if (response.snapshot) await this.db.saveSnapshot(response.snapshot);
+			const committed = await this.db.commitSyncResponse(pending, { ...response, accepted_ids: response.accepted_ids || pending.map(tx => tx.id) }, { isSessionValid });
+			count += committed.synced_count;
 		}
 		this.lastSyncedAt = new Date().toISOString();
 		return { status: 'synced', synced_count: count, response };
 	}
 
-	async downloadTransactions() {
+	async downloadTransactions(approveMasterConflict = null) {
 		await this.flushPendingImport();
 		const response = await this.sendRequest('fetch_state', {});
-		const count = await this.db.mergeRemoteTransactions([...(response.archived_transactions || []), ...(response.pending_diffs || [])]);
-		if (response.snapshot) await this.db.saveSnapshot(response.snapshot);
-		if (response.archive_months) await this.db.setSetting('downloaded_archive_months', response.archive_months);
+		const before = new Map((await this.db.getTransactions({ includeDeleted: true })).map(tx => [tx.id, canonicalJsonStringify(tx)]));
+		await this.syncSharedMaster(response.master_config, approveMasterConflict, { remoteState: response });
+		let count = 0;
+		for (const tx of await this.db.getTransactions({ includeDeleted: true })) if (before.get(tx.id) !== canonicalJsonStringify(tx)) count++;
 		return { response, count };
 	}
 
@@ -313,10 +334,9 @@ export class SyncManager {
 		let syncedCount = 0, downloadedCount = 0;
 		let pendingCount = 0;
 		try {
-			const first = await this.downloadTransactions();
+			const first = await this.downloadTransactions(approveMasterConflict);
 			downloadedCount += first.count;
 			pendingCount = (await this.db.getUnsyncedTransactions()).length;
-			await this.syncSharedMaster(first.response.master_config, approveMasterConflict);
 			const closed = (await this.db.getSnapshot())?.last_closed_month;
 			const pending = await this.db.getUnsyncedTransactions();
 			const affectedMonths = tx => [tx.target_month, tx.previous_target_month, ...(first.response.archived_transactions || []).filter(remote => remote.id === tx.id).map(remote => remote.target_month)].filter(month => month && closed && month <= closed);
@@ -331,11 +351,11 @@ export class SyncManager {
 			stage = '送信';
 			const uploaded = await this.pushPending();
 			syncedCount = uploaded.synced_count;
+			pendingCount = (await this.db.getUnsyncedTransactions()).length;
 			stage = '再受信';
-			const last = await this.downloadTransactions();
+			const last = await this.downloadTransactions(approveMasterConflict);
 			downloadedCount += last.count;
 			pendingCount = (await this.db.getUnsyncedTransactions()).length;
-			await this.syncSharedMaster(last.response.master_config, approveMasterConflict);
 			this.lastSyncedAt = new Date().toISOString();
 			return { status: 'synced', synced_count: uploaded.synced_count, downloaded_count: first.count + last.count, pending_count: (await this.db.getUnsyncedTransactions()).length };
 		} catch (error) {
@@ -351,14 +371,15 @@ export class SyncManager {
 	async closeMonth(targetMonth, { approvedPlanned = [] } = {}) {
 		if (this.isSyncing) throw new Error('Another sync operation is in progress');
 		this.isSyncing = true; this.lastError = null;
+		const isSessionValid = this.sessionGuard();
 		try {
 			await this.pushPending();
+			this.assertSession(isSessionValid);
 			const response = await this.sendRequest('close_month', {
 				target_month: targetMonth,
 				approved_planned: approvedPlanned.map(tx => ({ id: tx.id, version: transactionContentVersion(tx) }))
 			});
-			if (response.archived_transactions) await this.db.mergeRemoteTransactions(response.archived_transactions);
-			if (response.snapshot) await this.db.saveSnapshot(response.snapshot);
+			await this.db.commitSyncResponse([], response, { isSessionValid });
 			this.lastSyncedAt = new Date().toISOString(); return response;
 		} catch (error) { this.lastError = error.message; throw error; }
 		finally { this.isSyncing = false; }
@@ -367,31 +388,40 @@ export class SyncManager {
 	/**
 	 * Send retroactive update for a past closed month
 	 */
-	async sendRetroactiveUpdate(transaction) {
+	async sendRetroactiveUpdate(transaction, { expectedTransaction = undefined } = {}) {
 		if (this.isSyncing) {
 			throw new Error('Another sync operation is in progress');
 		}
 		this.isSyncing = true;
 		this.lastError = null;
+		const isSessionValid = this.sessionGuard();
 
 		try {
+			const requested = structuredClone(transaction);
+			const original = await this.db.getTransaction(requested.id) || null;
+			const expected = expectedTransaction === undefined ? original : structuredClone(expectedTransaction);
+			if (canonicalJsonStringify(expected) !== canonicalJsonStringify(original)) throw new Error('明細が変更されました。再確認してください。');
+			const alreadySaved = original && canonicalJsonStringify(requested) === canonicalJsonStringify(original);
 			await this.flushPendingImport();
-			// First save locally
-			const submitted = await this.db.putTransaction(transaction);
+			this.assertSession(isSessionValid);
+			let submitted;
+			if (alreadySaved) {
+				const current = await this.db.getTransaction(requested.id) || null;
+				if (canonicalJsonStringify(current) !== canonicalJsonStringify(original)) throw new Error('明細が変更されました。再確認してください。');
+				submitted = current;
+			} else {
+				submitted = await this.db.putTransaction(requested, { expectedTransactions: expected ? [expected] : [] });
+			}
+			const remoteMaster = await this.sendRequest('fetch_master', {});
+			await this.syncSharedMaster(remoteMaster.master_config);
+			this.assertSession(isSessionValid);
 
 			const response = await this.sendRequest('retroactive_update', {
 				transaction: submitted,
 				...(submitted.previous_target_month ? { previous_target_month: submitted.previous_target_month } : {})
 			});
 
-			// Mark transaction as synced
-			if (response.conflict && response.transaction) await this.db.mergeRemoteTransactions([response.transaction]);
-			else await this.db.markTransactionsSynced([submitted.id], [submitted]);
-
-			// Update local snapshot with newly cascaded snapshot from server
-			if (response.snapshot) {
-				await this.db.saveSnapshot(response.snapshot);
-			}
+			await this.db.commitSyncResponse([submitted], { ...response, accepted_ids: response.conflict ? [] : [submitted.id] }, { isSessionValid });
 
 			this.lastSyncedAt = new Date().toISOString();
 			return response;
@@ -415,14 +445,7 @@ export class SyncManager {
 		try {
 			await this.flushPendingImport();
 			pendingCount = (await this.db.getUnsyncedTransactions()).length;
-			const response = await this.sendRequest('fetch_state', {});
-			if (response.master_config) {
-				await this.syncSharedMaster(response.master_config);
-			}
-			if (response.snapshot) {
-				await this.db.saveSnapshot(response.snapshot);
-			}
-			await this.db.mergeRemoteTransactions([...(response.archived_transactions || []), ...(response.pending_diffs || [])]);
+			const { response } = await this.downloadTransactions();
 			return response;
 		} catch (error) {
 			if (error instanceof MasterConflictError) return this.masterConflictOutcome(error, 0, 0, pendingCount);

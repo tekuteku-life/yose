@@ -46,18 +46,18 @@ export class MasterController {
 		});
 
 		document.getElementById('btn-add-account')?.addEventListener('click', () => {
-			this.openMasterModal('account', null);
+			this.openMasterModal('account', null).catch(error => alert(`設定を開けませんでした: ${error.message}`));
 		});
 
 		document.getElementById('btn-add-category')?.addEventListener('click', () => {
-			this.openMasterModal('category', null);
+			this.openMasterModal('category', null).catch(error => alert(`設定を開けませんでした: ${error.message}`));
 		});
 
 		document.getElementById('btn-add-recurring')?.addEventListener('click', () => {
-			this.openMasterModal('recurring', null);
+			this.openMasterModal('recurring', null).catch(error => alert(`設定を開けませんでした: ${error.message}`));
 		});
 
-		document.getElementById('btn-add-holiday')?.addEventListener('click', async () => {
+		this.bindMasterAction('btn-add-holiday', async () => {
 			const input = document.getElementById('input-new-holiday');
 			const val = input?.value;
 			if (!val) {
@@ -65,11 +65,12 @@ export class MasterController {
 				return;
 			}
 			const config = await this.db.getMasterConfig();
+			const expectedConfig = structuredClone(config);
 			config.holidays = config.holidays || [];
 			if (!config.holidays.includes(val)) {
 				config.holidays.push(val);
 				config.holidays.sort();
-				await this.saveMasterConfigAndSync(config);
+				await this.saveMasterConfigAndSync(config, expectedConfig);
 				if (input) input.value = '';
 			} else {
 				alert('指定された日付は既に祝日に登録されています');
@@ -77,14 +78,15 @@ export class MasterController {
 		});
 
 		// Preset Japanese Holidays Import
-		document.getElementById('btn-import-holidays-preset')?.addEventListener('click', async () => {
+		this.bindMasterAction('btn-import-holidays-preset', async () => {
 			const config = await this.db.getMasterConfig();
+			const expectedConfig = structuredClone(config);
 			config.holidays = config.holidays || [];
 			const beforeCount = config.holidays.length;
 			const set = new Set([...config.holidays, ...JAPANESE_HOLIDAYS_PRESET]);
 			config.holidays = Array.from(set).sort();
 			const addedCount = config.holidays.length - beforeCount;
-			await this.saveMasterConfigAndSync(config);
+			await this.saveMasterConfigAndSync(config, expectedConfig);
 			alert(`公式祝日プリセットから ${addedCount} 件の祝日を登録しました（合計: ${config.holidays.length} 件）`);
 		});
 
@@ -118,7 +120,7 @@ export class MasterController {
 		});
 
 		// Confirm Holiday Import from Textarea
-		document.getElementById('btn-confirm-import-holidays')?.addEventListener('click', async () => {
+		this.bindMasterAction('btn-confirm-import-holidays', async () => {
 			const txt = document.getElementById('txt-holiday-import-input');
 			const raw = txt?.value || '';
 			const parsed = parseHolidayTextOrCsv(raw);
@@ -127,22 +129,58 @@ export class MasterController {
 				return;
 			}
 			const config = await this.db.getMasterConfig();
+			const expectedConfig = structuredClone(config);
 			config.holidays = config.holidays || [];
 			const beforeCount = config.holidays.length;
 			const set = new Set([...config.holidays, ...parsed]);
 			config.holidays = Array.from(set).sort();
 			const addedCount = config.holidays.length - beforeCount;
-			await this.saveMasterConfigAndSync(config);
+			await this.saveMasterConfigAndSync(config, expectedConfig);
 			document.getElementById('modal-holiday-import')?.classList.remove('active');
 			if (txt) txt.value = '';
 			alert(`${parsed.length} 件の日付から新規に ${addedCount} 件の祝日を登録しました（合計: ${config.holidays.length} 件）`);
 		});
 	}
 
-	async saveMasterConfigAndSync(config) {
-		await this.db.saveMasterConfig(config);
+	async saveMasterConfigAndSync(config, expectedConfig = null) {
+		const saved = await this.db.saveMasterConfig(config, { expectedConfig });
 		await this.coordinator.refreshAllViews();
 		void this.syncManager.queueMasterSync();
+		return saved;
+	}
+
+	async mutateMasterConfigAndSync(mutator) {
+		await this.db.mutateMasterConfig(mutator);
+		await this.coordinator.refreshAllViews();
+		void this.syncManager.queueMasterSync();
+	}
+
+	bindMasterAction(buttonId, handler) {
+		const button = document.getElementById(buttonId);
+		let busy = false;
+		button?.addEventListener('click', async () => {
+			if (busy) return;
+			busy = true;
+			button.disabled = true;
+			try { await handler(); }
+			catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
+			finally { busy = false; button.disabled = false; }
+		});
+	}
+
+	bindMasterSubmit(formId, handler) {
+		const form = document.getElementById(formId);
+		let busy = false;
+		form?.addEventListener('submit', async event => {
+			event.preventDefault();
+			if (busy) return;
+			busy = true;
+			const button = /** @type {HTMLButtonElement} */ (form.querySelector('button[type="submit"]'));
+			if (button) button.disabled = true;
+			try { await handler(event); }
+			catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
+			finally { busy = false; if (button) button.disabled = false; }
+		});
 	}
 
 	async renderMasterManagement() {
@@ -186,20 +224,19 @@ export class MasterController {
 			accList.querySelectorAll('.btn-edit-account').forEach(btn => {
 				btn.addEventListener('click', () => {
 					const acc = accounts.find(a => a.id === btn.dataset.id);
-					if (acc) this.openMasterModal('account', acc);
+					if (acc) this.openMasterModal('account', acc).catch(error => alert(`設定を開けませんでした: ${error.message}`));
 				});
 			});
 
 			accList.querySelectorAll('.btn-archive-account').forEach(btn => {
 				btn.addEventListener('click', async () => {
-					const acc = accounts.find(a => a.id === btn.dataset.id);
-					if (acc) {
+					try { await this.mutateMasterConfigAndSync(current => {
+						const acc = current.accounts.find(a => a.id === btn.dataset.id);
+						if (!acc) throw new Error('口座が変更されました。一覧を更新してください。');
 						acc.is_archived = !acc.is_archived;
-						if (acc.type === 'insurance') {
-							syncInsuranceRecurringRule(config, acc);
-						}
-						await this.saveMasterConfigAndSync(config);
-					}
+						if (acc.type === 'insurance') syncInsuranceRecurringRule(current, acc);
+						return current;
+					}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
 				});
 			});
 		}
@@ -239,24 +276,25 @@ export class MasterController {
 			catList.querySelectorAll('.btn-edit-cat').forEach(btn => {
 				btn.addEventListener('click', () => {
 					const cat = categories.find(c => c.id === btn.dataset.id);
-					if (cat) this.openMasterModal('category', cat);
+					if (cat) this.openMasterModal('category', cat).catch(error => alert(`設定を開けませんでした: ${error.message}`));
 				});
 			});
 
 			catList.querySelectorAll('.btn-archive-cat').forEach(btn => {
 				btn.addEventListener('click', async () => {
-					const cat = categories.find(c => c.id === btn.dataset.id);
-					if (cat) {
+					try { await this.mutateMasterConfigAndSync(current => {
+						const cat = current.categories.find(c => c.id === btn.dataset.id);
+						if (!cat) throw new Error('費目が変更されました。一覧を更新してください。');
 						cat.is_archived = !cat.is_archived;
-						await this.saveMasterConfigAndSync(config);
-					}
+						return current;
+					}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
 				});
 			});
 
 			catList.querySelectorAll('.btn-add-subcat').forEach(btn => {
 				btn.addEventListener('click', () => {
 					const cat = categories.find(c => c.id === btn.dataset.id);
-					if (cat) this.openMasterModal('subcategory', null, cat);
+					if (cat) this.openMasterModal('subcategory', null, cat).catch(error => alert(`設定を開けませんでした: ${error.message}`));
 				});
 			});
 
@@ -264,18 +302,18 @@ export class MasterController {
 				btn.addEventListener('click', () => {
 					const cat = categories.find(c => c.id === btn.dataset.catId);
 					const sub = cat?.subcategories?.find(s => s.id === btn.dataset.subId);
-					if (cat && sub) this.openMasterModal('subcategory', sub, cat);
+					if (cat && sub) this.openMasterModal('subcategory', sub, cat).catch(error => alert(`設定を開けませんでした: ${error.message}`));
 				});
 			});
 
 			catList.querySelectorAll('.btn-archive-subcat').forEach(btn => {
 				btn.addEventListener('click', async () => {
-					const cat = categories.find(c => c.id === btn.dataset.catId);
-					const sub = cat?.subcategories?.find(s => s.id === btn.dataset.subId);
-					if (sub) {
+					try { await this.mutateMasterConfigAndSync(current => {
+						const sub = current.categories.find(c => c.id === btn.dataset.catId)?.subcategories?.find(s => s.id === btn.dataset.subId);
+						if (!sub) throw new Error('中項目が変更されました。一覧を更新してください。');
 						sub.is_archived = !sub.is_archived;
-						await this.saveMasterConfigAndSync(config);
-					}
+						return current;
+					}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
 				});
 			});
 		}
@@ -310,25 +348,28 @@ export class MasterController {
 			recList.querySelectorAll('.btn-edit-recurring').forEach(btn => {
 				btn.addEventListener('click', () => {
 					const rule = rules.find(r => r.id === btn.dataset.id);
-					if (rule) this.openMasterModal('recurring', rule);
+					if (rule) this.openMasterModal('recurring', rule).catch(error => alert(`設定を開けませんでした: ${error.message}`));
 				});
 			});
 
 			recList.querySelectorAll('.btn-toggle-recurring').forEach(btn => {
 				btn.addEventListener('click', async () => {
-					const rule = rules.find(r => r.id === btn.dataset.id);
-					if (rule) {
+					try { await this.mutateMasterConfigAndSync(current => {
+						const rule = current.recurring_rules.find(r => r.id === btn.dataset.id);
+						if (!rule) throw new Error('ルールが変更されました。一覧を更新してください。');
 						rule.is_active = !rule.is_active;
-						await this.saveMasterConfigAndSync(config);
-					}
+						return current;
+					}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
 				});
 			});
 
 			recList.querySelectorAll('.btn-delete-recurring').forEach(btn => {
 				btn.addEventListener('click', async () => {
 					if (confirm('この定期予定ルールを削除しますか？')) {
-						config.recurring_rules = config.recurring_rules.filter(r => r.id !== btn.dataset.id);
-						await this.saveMasterConfigAndSync(config);
+						try { await this.mutateMasterConfigAndSync(current => {
+							current.recurring_rules = current.recurring_rules.filter(r => r.id !== btn.dataset.id);
+							return current;
+						}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
 					}
 				});
 			});
@@ -367,8 +408,10 @@ export class MasterController {
 				holList.querySelectorAll('.btn-del-holiday').forEach(btn => {
 					btn.addEventListener('click', async () => {
 						const dt = btn.dataset.date;
-						config.holidays = config.holidays.filter(h => h !== dt);
-						await this.saveMasterConfigAndSync(config);
+						try { await this.mutateMasterConfigAndSync(current => {
+							current.holidays = current.holidays.filter(h => h !== dt);
+							return current;
+						}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
 					});
 				});
 			}
@@ -382,6 +425,7 @@ export class MasterController {
 		if (!modal || !title || !body) return;
 
 		const config = await this.db.getMasterConfig();
+		const expectedConfig = structuredClone(config);
 		if (parentItem) parentItem = config.categories.find(category => category.id === parentItem.id) || parentItem;
 		if (item) {
 			const collection = type === 'account' ? config.accounts : type === 'category' ? config.categories : type === 'recurring' ? config.recurring_rules : parentItem?.subcategories;
@@ -391,8 +435,8 @@ export class MasterController {
 		if (type === 'account') {
 			const isNew = !item;
 			title.textContent = isNew ? '🏦 新規口座の追加' : `🏦 口座の編集: ${item.name}`;
-			const activeExpenseCats = (config.categories || []).filter(c => !c.is_archived && (!c.type || c.type === 'expense'));
-			const activePayAccounts = (config.accounts || []).filter(a => !a.is_archived && a.id !== item?.id && !['loan', 'receivable', 'prepaid'].includes(a.type));
+			const activeExpenseCats = (config.categories || []).filter(c => c.id === item?.premium_category_id || (!c.is_archived && (!c.type || c.type === 'expense')));
+			const activePayAccounts = (config.accounts || []).filter(a => a.id === item?.premium_pay_account_id || (!a.is_archived && a.id !== item?.id && !['loan', 'receivable', 'prepaid'].includes(a.type)));
 
 			body.innerHTML = `
 				<form id="form-master-account">
@@ -452,8 +496,8 @@ export class MasterController {
 									<option value="">設定なし (自動振替オフ)</option>
 									${(() => {
 										const currentDebitId = item?.debit_account_id || item?.settlement_account_id || '';
-										const eligible = (config.accounts || []).filter(a => !a.is_archived && a.id !== item?.id && ['bank', 'cash', 'asset'].includes(a.type));
-										return eligible.map(a => `<option value="${escapeHtml(a.id)}" ${currentDebitId === a.id ? 'selected' : ''}>${escapeHtml(a.name)} (${escapeHtml(a.type)})</option>`).join('');
+										const eligible = (config.accounts || []).filter(a => a.id === currentDebitId || (!a.is_archived && a.id !== item?.id && ['bank', 'cash', 'asset'].includes(a.type)));
+										return eligible.map(a => `<option value="${escapeHtml(a.id)}" ${currentDebitId === a.id ? 'selected' : ''}>${escapeHtml(a.name)}${a.is_archived ? '（アーカイブ済み）' : ''} (${escapeHtml(a.type)})</option>`).join('');
 									})()}
 								</select>
 							</div>
@@ -486,22 +530,34 @@ export class MasterController {
 								<label class="form-label" for="m-acc-premium-pay-account">保険料の引落元口座</label>
 								<select id="m-acc-premium-pay-account" class="form-control">
 									<option value="">設定なし (定期ルール未生成)</option>
-									${activePayAccounts.map(a => `<option value="${escapeHtml(a.id)}" ${item?.premium_pay_account_id === a.id ? 'selected' : ''}>${escapeHtml(a.name)} (${escapeHtml(a.type)})</option>`).join('')}
+									${activePayAccounts.map(a => `<option value="${escapeHtml(a.id)}" ${item?.premium_pay_account_id === a.id ? 'selected' : ''}>${escapeHtml(a.name)}${a.is_archived ? '（アーカイブ済み）' : ''} (${escapeHtml(a.type)})</option>`).join('')}
 								</select>
 							</div>
 							<div class="form-group">
 								<label class="form-label" for="m-acc-premium-cat">保険料の計上費目</label>
 								<select id="m-acc-premium-cat" class="form-control">
-									${activeExpenseCats.map(c => `<option value="${escapeHtml(c.id)}" ${item?.premium_category_id === c.id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('')}
+									${activeExpenseCats.map(c => `<option value="${escapeHtml(c.id)}" ${item?.premium_category_id === c.id ? 'selected' : ''}>${escapeHtml(c.name)}${c.is_archived ? '（アーカイブ済み）' : ''}</option>`).join('')}
 								</select>
 							</div>
 						</div>
+						<div class="form-group"><label class="form-label" for="m-acc-premium-sub">保険料の計上中項目</label><select id="m-acc-premium-sub" class="form-control"></select></div>
 					</div>
 					<div style="display: flex; gap: 8px; margin-top: 16px;">
 						<button type="submit" class="btn btn-primary btn-block">保存する</button>
 					</div>
 				</form>
 			`;
+
+
+			const updatePremiumChildren = (preserve = null) => {
+				const category = config.categories?.find(candidate => candidate.id === document.getElementById('m-acc-premium-cat').value);
+				const children = (category?.subcategories || []).filter(child => !child.is_archived || child.id === preserve);
+				const select = document.getElementById('m-acc-premium-sub');
+				select.innerHTML = '<option value="">中項目の指定はなしである</option>' + children.map(child => `<option value="${escapeHtml(child.id)}">${escapeHtml(child.name)}${child.is_archived ? '（アーカイブ済み）' : ''}</option>`).join('');
+				select.value = preserve || '';
+			};
+			updatePremiumChildren(item?.premium_subcategory_id);
+			document.getElementById('m-acc-premium-cat').addEventListener('change', () => updatePremiumChildren());
 
 			document.getElementById('m-acc-type')?.addEventListener('change', (e) => {
 				const ccFields = document.getElementById('m-acc-cc-fields');
@@ -510,7 +566,7 @@ export class MasterController {
 				if (insFields) insFields.style.display = e.target.value === 'insurance' ? 'block' : 'none';
 			});
 
-			document.getElementById('form-master-account')?.addEventListener('submit', async (e) => {
+			this.bindMasterSubmit('form-master-account', async (e) => {
 				e.preventDefault();
 				const id = document.getElementById('m-acc-id')?.value.trim() || item?.id || ('acc_' + Date.now().toString(36));
 				const name = document.getElementById('m-acc-name').value.trim();
@@ -532,6 +588,7 @@ export class MasterController {
 				const premiumDay = Number(document.getElementById('m-acc-premium-day')?.value) || 27;
 				const premiumPayAccId = document.getElementById('m-acc-premium-pay-account')?.value || null;
 				const premiumCatId = document.getElementById('m-acc-premium-cat')?.value || null;
+				const premiumSubId = document.getElementById('m-acc-premium-sub')?.value || null;
 
 				const isAsset = !['credit_card', 'loan'].includes(accType);
 
@@ -557,6 +614,7 @@ export class MasterController {
 						premium_day: accType === 'insurance' ? premiumDay : null,
 						premium_pay_account_id: accType === 'insurance' ? premiumPayAccId : null,
 						premium_category_id: accType === 'insurance' ? premiumCatId : null,
+						premium_subcategory_id: accType === 'insurance' ? premiumSubId : null,
 						sort_order: config.accounts.length + 1,
 						is_archived: false
 					};
@@ -578,13 +636,14 @@ export class MasterController {
 					existingAcc.premium_day = accType === 'insurance' ? premiumDay : null;
 					existingAcc.premium_pay_account_id = accType === 'insurance' ? premiumPayAccId : null;
 					existingAcc.premium_category_id = accType === 'insurance' ? premiumCatId : null;
+					existingAcc.premium_subcategory_id = accType === 'insurance' ? premiumSubId : null;
 					targetAccount = existingAcc;
 				}
 
 				syncInsuranceRecurringRule(config, targetAccount);
 
+				await this.saveMasterConfigAndSync(config, expectedConfig);
 				modal.classList.remove('active');
-				await this.saveMasterConfigAndSync(config);
 			});
 
 		} else if (type === 'category') {
@@ -613,7 +672,7 @@ export class MasterController {
 				</form>
 			`;
 
-			document.getElementById('form-master-category')?.addEventListener('submit', async (e) => {
+			this.bindMasterSubmit('form-master-category', async (e) => {
 				e.preventDefault();
 				const id = document.getElementById('m-cat-id')?.value.trim() || item?.id || ('cat_' + Date.now().toString(36));
 				const name = document.getElementById('m-cat-name').value.trim();
@@ -636,8 +695,8 @@ export class MasterController {
 					existingCat.type = catType;
 				}
 
+				await this.saveMasterConfigAndSync(config, expectedConfig);
 				modal.classList.remove('active');
-				await this.saveMasterConfigAndSync(config);
 			});
 
 		} else if (type === 'subcategory') {
@@ -659,7 +718,7 @@ export class MasterController {
 				</form>
 			`;
 
-			document.getElementById('form-master-subcategory')?.addEventListener('submit', async (e) => {
+			this.bindMasterSubmit('form-master-subcategory', async (e) => {
 				e.preventDefault();
 				const id = document.getElementById('m-sub-id')?.value.trim() || item?.id || ('sub_' + Date.now().toString(36));
 				const name = document.getElementById('m-sub-name').value.trim();
@@ -686,120 +745,83 @@ export class MasterController {
 					}
 				}
 
+				await this.saveMasterConfigAndSync(config, expectedConfig);
 				modal.classList.remove('active');
-				await this.saveMasterConfigAndSync(config);
 			});
 
 		} else if (type === 'recurring') {
 			const isNew = !item;
 			title.textContent = isNew ? '📅 新規定期ルールの追加' : `📅 定期ルールの編集: ${item.name}`;
-
-			const activeAccounts = (config.accounts || []).filter(a => !a.is_archived);
-			const activeCats = (config.categories || []).filter(c => !c.is_archived);
-
+			const options = (items, current, preserve = true) => items.filter(candidate => !candidate.is_archived || (preserve && candidate.id === current)).map(candidate => `<option value="${escapeHtml(candidate.id)}" ${candidate.id === current ? 'selected' : ''}>${escapeHtml(candidate.name)}${candidate.is_archived ? '（アーカイブ済み）' : ''}</option>`).join('');
 			body.innerHTML = `
 				<form id="form-master-recurring">
-					<div class="form-group">
-						<label class="form-label" for="m-rec-id">ルールID</label>
-						<input type="text" id="m-rec-id" class="form-control" value="${escapeHtml(item?.id || 'rec_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''} required>
-					</div>
-					<div class="form-group">
-						<label class="form-label" for="m-rec-name">ルール名</label>
-						<input type="text" id="m-rec-name" class="form-control" value="${escapeHtml(item?.name || '')}" placeholder="例: 家賃" required>
+					<div class="form-group"><label class="form-label" for="m-rec-id">ルールID</label><input id="m-rec-id" class="form-control" value="${escapeHtml(item?.id || 'rec_' + Date.now().toString(36))}" ${isNew ? '' : 'readonly'} required></div>
+					<div class="form-group"><label class="form-label" for="m-rec-name">ルール名</label><input id="m-rec-name" class="form-control" value="${escapeHtml(item?.name || '')}" required></div>
+					<div class="form-row">
+						<div class="form-group"><label class="form-label" for="m-rec-type">取引種別</label><select id="m-rec-type" class="form-control"><option value="expense">支出</option><option value="income">収入</option><option value="transfer">振替</option></select></div>
+						<div class="form-group"><label class="form-label" for="m-rec-amount">想定金額 (円)</label><input type="number" id="m-rec-amount" class="form-control" value="${escapeHtml(item?.amount ?? '')}" required min="0" step="1"></div>
 					</div>
 					<div class="form-row">
-						<div class="form-group">
-							<label class="form-label" for="m-rec-type">取引種別</label>
-							<select id="m-rec-type" class="form-control">
-								<option value="expense" ${item?.type === 'expense' ? 'selected' : ''}>支出</option>
-								<option value="income" ${item?.type === 'income' ? 'selected' : ''}>収入</option>
-								<option value="transfer" ${item?.type === 'transfer' ? 'selected' : ''}>振替</option>
-							</select>
-						</div>
-						<div class="form-group">
-							<label class="form-label" for="m-rec-amount">想定金額 (円)</label>
-							<input type="number" id="m-rec-amount" class="form-control" value="${escapeHtml(item?.amount || '')}" required min="0" step="1">
-						</div>
+						<div class="form-group"><label class="form-label" for="m-rec-account">決済口座</label><select id="m-rec-account" class="form-control" required>${options(config.accounts || [], item?.account_id)}</select></div>
+						<div class="form-group" id="m-rec-to-group"><label class="form-label" for="m-rec-to-account">振替先口座</label><select id="m-rec-to-account" class="form-control"><option value="">振替先の指定が必要である</option>${options(config.accounts || [], item?.to_account_id)}</select></div>
+					</div>
+					<div id="m-rec-classification">
+						<div class="form-row"><div class="form-group"><label class="form-label" for="m-rec-cat">計上費目</label><select id="m-rec-cat" class="form-control"></select></div><div class="form-group"><label class="form-label" for="m-rec-sub">計上中項目</label><select id="m-rec-sub" class="form-control"></select></div></div>
+						<div class="form-row"><div class="form-group"><label class="form-label" for="m-rec-actual-cat">実態費目</label><select id="m-rec-actual-cat" class="form-control"></select></div><div class="form-group"><label class="form-label" for="m-rec-actual-sub">実態中項目</label><select id="m-rec-actual-sub" class="form-control"></select></div></div>
 					</div>
 					<div class="form-row">
-						<div class="form-group">
-							<label class="form-label" for="m-rec-account">決済口座</label>
-							<select id="m-rec-account" class="form-control" required>
-								${activeAccounts.map(a => `<option value="${escapeHtml(a.id)}" ${item?.account_id === a.id ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
-							</select>
-						</div>
-						<div class="form-group">
-							<label class="form-label" for="m-rec-cat">大項目</label>
-							<select id="m-rec-cat" class="form-control">
-								${activeCats.map(c => `<option value="${escapeHtml(c.id)}" ${item?.category_id === c.id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('')}
-							</select>
-						</div>
+						<div class="form-group"><label class="form-label" for="m-rec-day">発生日 (毎月何日: 1-31)</label><input type="number" id="m-rec-day" class="form-control" min="1" max="31" value="${escapeHtml(item?.day_of_month || 25)}" required></div>
+						<div class="form-group"><label class="form-label" for="m-rec-holiday">休日補正ルール</label><select id="m-rec-holiday" class="form-control"><option value="none">補正なし</option><option value="before">前営業日へ前倒し</option><option value="after">翌営業日へ後ろ倒し</option></select></div>
 					</div>
-					<div class="form-row">
-						<div class="form-group">
-							<label class="form-label" for="m-rec-day">発生日 (毎月何日: 1-31)</label>
-							<input type="number" id="m-rec-day" class="form-control" min="1" max="31" value="${escapeHtml(item?.day_of_month || 25)}" required>
-						</div>
-						<div class="form-group">
-							<label class="form-label" for="m-rec-holiday">休日補正ルール</label>
-							<select id="m-rec-holiday" class="form-control">
-								<option value="none" ${item?.holiday_adjustment === 'none' ? 'selected' : ''}>補正なし (none)</option>
-								<option value="before" ${item?.holiday_adjustment === 'before' ? 'selected' : ''}>前営業日へ前倒し (before)</option>
-								<option value="after" ${item?.holiday_adjustment === 'after' ? 'selected' : ''}>翌営業日へ後ろ倒し (after)</option>
-							</select>
-						</div>
-					</div>
-					<div style="display: flex; gap: 8px; margin-top: 16px;">
-						<button type="submit" class="btn btn-primary btn-block">保存する</button>
-					</div>
-				</form>
-			`;
-
-			document.getElementById('form-master-recurring')?.addEventListener('submit', async (e) => {
-				e.preventDefault();
-				const id = document.getElementById('m-rec-id')?.value.trim() || item?.id || ('rec_' + Date.now().toString(36));
-				const name = document.getElementById('m-rec-name').value.trim();
-				const recType = document.getElementById('m-rec-type').value;
-				const amount = Number(document.getElementById('m-rec-amount').value) || 0;
-				const accId = document.getElementById('m-rec-account').value;
-				const catId = document.getElementById('m-rec-cat').value;
-				const day = Number(document.getElementById('m-rec-day').value) || 25;
-				const holidayAdj = document.getElementById('m-rec-holiday').value;
-
-				config.recurring_rules = config.recurring_rules || [];
-				const existingRule = item ? config.recurring_rules.find(r => r.id === item.id) : null;
-				if (!existingRule) {
-					config.recurring_rules.push({
-						id,
-						name,
-						is_active: true,
-						start_date: formatDate(new Date()).slice(0, 7) + '-01',
-						end_date: null,
-						frequency: 'interval_months',
-						interval_months: 1,
-						day_of_month: day,
-						holiday_adjustment: holidayAdj,
-						amortize_months: 1,
-						type: recType,
-						amount,
-						account_id: accId,
-						to_account_id: null,
-						category_id: catId,
-						subcategory_id: null
-					});
-				} else {
-					existingRule.id = existingRule.id || id;
-					existingRule.name = name;
-					existingRule.type = recType;
-					existingRule.amount = amount;
-					existingRule.account_id = accId;
-					existingRule.category_id = catId;
-					existingRule.day_of_month = day;
-					existingRule.holiday_adjustment = holidayAdj;
+					<button type="submit" class="btn btn-primary btn-block">保存する</button>
+				</form>`;
+			const get = id => /** @type {HTMLInputElement & HTMLSelectElement} */ (document.getElementById(id));
+			get('m-rec-type').value = item?.type || 'expense';
+			get('m-rec-holiday').value = item?.holiday_adjustment || 'none';
+			const updateChildren = (prefix, current = null, preserve = false) => {
+				const category = config.categories.find(candidate => candidate.id === get(`${prefix}-cat`).value);
+				get(`${prefix}-sub`).innerHTML = '<option value="">中項目の指定はなしである</option>' + options(category?.subcategories || [], current, preserve);
+				get(`${prefix}-sub`).value = current || '';
+			};
+			const updateClassifications = (preserve = false) => {
+				const recType = get('m-rec-type').value;
+				const transfer = recType === 'transfer';
+				get('m-rec-to-group').hidden = !transfer;
+				get('m-rec-to-account').required = transfer;
+				get('m-rec-classification').hidden = transfer;
+				for (const [prefix, categoryId, childId] of [
+					['m-rec', item?.category_id, item?.subcategory_id],
+					['m-rec-actual', item?.actual_category_id || item?.category_id, item?.actual_subcategory_id !== undefined ? item.actual_subcategory_id : (item?.actual_category_id || item?.category_id) === item?.category_id ? item?.subcategory_id : null]
+				]) {
+					const categories = (config.categories || []).filter(candidate => (candidate.type || 'expense') === recType);
+					get(`${prefix}-cat`).innerHTML = options(categories, preserve ? categoryId : null, preserve);
+					get(`${prefix}-cat`).required = !transfer;
+					updateChildren(prefix, preserve ? childId : null, preserve);
 				}
-
+			};
+			get('m-rec-type').addEventListener('change', () => updateClassifications());
+			get('m-rec-cat').addEventListener('change', () => updateChildren('m-rec'));
+			get('m-rec-actual-cat').addEventListener('change', () => updateChildren('m-rec-actual'));
+			updateClassifications(true);
+			this.bindMasterSubmit('form-master-recurring', async () => {
+				const recType = get('m-rec-type').value;
+				const id = get('m-rec-id').value.trim();
+				const next = {
+					id, name: get('m-rec-name').value.trim(), type: recType,
+					amount: Number(get('m-rec-amount').value), account_id: get('m-rec-account').value,
+					to_account_id: recType === 'transfer' ? get('m-rec-to-account').value : null,
+					category_id: recType === 'transfer' ? null : get('m-rec-cat').value,
+					subcategory_id: recType === 'transfer' ? null : get('m-rec-sub').value || null,
+					actual_category_id: recType === 'transfer' ? null : get('m-rec-actual-cat').value,
+					actual_subcategory_id: recType === 'transfer' ? null : get('m-rec-actual-sub').value || null,
+					day_of_month: Number(get('m-rec-day').value), holiday_adjustment: get('m-rec-holiday').value
+				};
+				if (recType === 'transfer' && (!next.to_account_id || next.to_account_id === next.account_id)) throw new Error('振替元とは異なる振替先口座を選択してください。');
+				config.recurring_rules ||= [];
+				if (item) Object.assign(config.recurring_rules.find(rule => rule.id === item.id), next);
+				else config.recurring_rules.push({ is_active: true, start_date: formatDate(new Date()).slice(0, 7) + '-01', end_date: null, frequency: 'interval_months', interval_months: 1, amortize_months: 1, ...next });
+				await this.saveMasterConfigAndSync(config, expectedConfig);
 				modal.classList.remove('active');
-				await this.saveMasterConfigAndSync(config);
 			});
 		}
 

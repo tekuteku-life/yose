@@ -2,6 +2,7 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { SyncManager } from '../../js/sync.js';
 import { YoseDB } from '../../js/db.js';
+import { transaction } from '../helpers/ui_fixture.js';
 import { generateEd25519KeyPair } from '../../js/crypto.js';
 
 describe('js/sync.js - Unit Tests', () => {
@@ -151,8 +152,8 @@ describe('js/sync.js - Unit Tests', () => {
 
 		it('pushes unsynced transactions, marks them synced, and saves snapshot', async () => {
 			await db.putTransactions([
-				{ id: 'tx_sync_1', target_month: '2026-10', amount: 1500, is_deleted: false },
-				{ id: 'tx_sync_2', target_month: '2026-10', amount: 2500, is_deleted: false }
+				transaction('tx_sync_1', { target_month: '2026-10', amount: 1500, is_deleted: false }),
+				transaction('tx_sync_2', { target_month: '2026-10', amount: 2500, is_deleted: false })
 			]);
 
 			const mockSnapshot = {
@@ -244,6 +245,7 @@ describe('js/sync.js - Unit Tests', () => {
 			});
 
 			const retroTx = {
+				...transaction('tx_retro'),
 				id: 'tx_retro',
 				target_month: '2026-09',
 				amount: 2000,
@@ -265,9 +267,9 @@ describe('js/sync.js - Unit Tests', () => {
 				ok: true,
 				text: async () => JSON.stringify({
 					success: true,
-					master_config: { schema_version: 2, accounts: [{ id: 'acc_remote' }] },
+					master_config: { schema_version: 2, accounts: [{ id: 'acc_remote', type: 'cash' }] },
 					snapshot: { schema_version: 2, last_closed_month: '2026-09', account_balances: {} },
-					pending_diffs: [{ id: 'tx_remote_1', target_month: '2026-10', amount: 500, is_deleted: false }]
+					pending_diffs: [transaction('tx_remote_1', { target_month: '2026-10', amount: 500, is_deleted: false , account_id: 'acc_remote', category_id: null, actual_category_id: null })]
 				})
 			});
 
@@ -341,6 +343,7 @@ describe('js/sync.js - Unit Tests', () => {
 			sync.attachEventListeners();
 			// Add an unsynced transaction so syncPendingDiffs tries to sendRequest
 			await db.putTransactions([{
+				...transaction('tx_fail_ev'),
 				id: 'tx_fail_ev',
 				amount: 500,
 				type: 'expense',
@@ -393,13 +396,14 @@ describe('js/sync.js - Unit Tests', () => {
 
 			// retroactiveUpdate error path
 			await assert.rejects(
-				async () => sync.sendRetroactiveUpdate({ id: 'tx_fail', target_month: '2026-09' }),
+				async () => sync.sendRetroactiveUpdate(transaction('tx_fail', { target_month: '2026-09' })),
 				/Network timeout/
 			);
 			assert.equal(sync.lastError, 'Network timeout');
 
 			// syncPendingDiffs error path (lines 148-149)
 			await db.putTransactions([{
+				...transaction('tx_throw'),
 				id: 'tx_throw',
 				amount: 1000,
 				type: 'expense',

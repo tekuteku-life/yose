@@ -12,6 +12,17 @@ import {
 	generateUUID
 } from './date_utils.js';
 
+// An omitted child inherits only within the same parent; explicit empty values stay empty.
+function actualChild(categoryId, subcategoryId, actualCategoryId, actualSubcategoryId) {
+	return actualSubcategoryId !== undefined ? actualSubcategoryId : (actualCategoryId || categoryId) === categoryId ? (subcategoryId ?? null) : null;
+}
+
+
+function scheduledId(prefix, ownerId, period) {
+	const owner = encodeURIComponent(ownerId);
+	return `${prefix}_${owner.length}_${owner}_${period}`;
+}
+
 /**
  * Tax Calculation Helper
  * @param {number} baseAmount - Tax excluded amount
@@ -102,7 +113,7 @@ export function generateRecurringTransactions(
 
 		const nowIso = new Date().toISOString();
 		const tx = {
-			id: generateUUID('tx_rec'),
+			id: scheduledId('tx_rec', rule.id, targetMonth),
 			group_id: `grp_rec_${rule.id}_${targetMonth}`,
 			date: adjustedDateStr,
 			target_month: targetMonth,
@@ -115,7 +126,7 @@ export function generateRecurringTransactions(
 			category_id: rule.category_id || null,
 			subcategory_id: rule.subcategory_id || null,
 			actual_category_id: rule.actual_category_id || rule.category_id || null,
-			actual_subcategory_id: rule.actual_subcategory_id || rule.subcategory_id || null,
+			actual_subcategory_id: actualChild(rule.category_id, rule.subcategory_id, rule.actual_category_id, rule.actual_subcategory_id),
 			recurring_rule_id: rule.id,
 			amortization_meta: null,
 			memo: rule.memo || rule.name || '定期支出',
@@ -216,7 +227,7 @@ export function createPrepaidAmortizationTransactions({
 			category_id: categoryId,
 			subcategory_id: subcategoryId,
 			actual_category_id: actualCategoryId || categoryId,
-			actual_subcategory_id: actualSubcategoryId || subcategoryId,
+			actual_subcategory_id: actualChild(categoryId, subcategoryId, actualCategoryId, actualSubcategoryId),
 			recurring_rule_id: null,
 			amortization_meta: {
 				is_payment_record: false,
@@ -279,7 +290,7 @@ export function createAdvancePaymentTransactions({
 			category_id: categoryId,
 			subcategory_id: subcategoryId,
 			actual_category_id: actualCategoryId || categoryId,
-			actual_subcategory_id: actualSubcategoryId || subcategoryId,
+			actual_subcategory_id: actualChild(categoryId, subcategoryId, actualCategoryId, actualSubcategoryId),
 			recurring_rule_id: null,
 			amortization_meta: null,
 			memo: memo ? `[自己負担] ${memo}` : '[自己負担]',
@@ -376,13 +387,14 @@ export function createPointPaymentTransactions({
 	categoryId = 'cat_daily',
 	subcategoryId = null,
 	actualCategoryId = null,
-	actualSubcategoryId = null,
+	actualSubcategoryId = undefined,
 	taxMeta = null,
 	memo = '',
 	tags = []
 }) {
 	const total = Math.round(Number(totalAmount) || 0);
 	const point = Math.round(Number(pointAmount ?? pointUsed) || 0);
+	if (point < 0 || point > total) throw new Error('ポイント利用額は0以上、購入総額以下にしてください。');
 	const selfAmount = Math.max(0, total - point);
 	const targetMonth = date.slice(0, 7);
 	const nowIso = new Date().toISOString();
@@ -405,7 +417,7 @@ export function createPointPaymentTransactions({
 			category_id: categoryId,
 			subcategory_id: subcategoryId,
 			actual_category_id: actualCategoryId || categoryId,
-			actual_subcategory_id: actualSubcategoryId || subcategoryId,
+			actual_subcategory_id: actualChild(categoryId, subcategoryId, actualCategoryId, actualSubcategoryId),
 			recurring_rule_id: null,
 			amortization_meta: null,
 			memo: memo ? `${memo} (自己負担分)` : 'ポイント併用購入 (決済分)',
@@ -430,7 +442,7 @@ export function createPointPaymentTransactions({
 			category_id: categoryId,
 			subcategory_id: subcategoryId,
 			actual_category_id: actualCategoryId || categoryId,
-			actual_subcategory_id: actualSubcategoryId || subcategoryId,
+			actual_subcategory_id: actualChild(categoryId, subcategoryId, actualCategoryId, actualSubcategoryId),
 			recurring_rule_id: null,
 			amortization_meta: null,
 			memo: memo ? `${memo} (ポイント利用分)` : 'ポイント利用分',
@@ -460,7 +472,7 @@ export function createPointPaymentTransactions({
 		category_id: categoryId,
 		subcategory_id: subcategoryId,
 		actual_category_id: actualCategoryId || categoryId,
-		actual_subcategory_id: actualSubcategoryId || subcategoryId,
+		actual_subcategory_id: actualChild(categoryId, subcategoryId, actualCategoryId, actualSubcategoryId),
 		recurring_rule_id: null,
 		amortization_meta: null,
 		memo: memo ? `${memo} (購入全額)` : 'ポイント併用購入 (全額)',
@@ -511,7 +523,6 @@ export function createPointPaymentTransactions({
  * @param {string} params.debitDate - YYYY-MM-DD
  * @param {string} params.billingCycle - YYYY-MM
  * @param {string} [params.todayStr] - YYYY-MM-DD
- * @returns {object} Transaction
  */
 export function createCreditCardSettlementTransaction({
 	payingAccountId,
@@ -525,8 +536,8 @@ export function createCreditCardSettlementTransaction({
 	const numAmount = Math.round(Number(amount) || 0);
 
 	return {
-		id: generateUUID('tx_cc_settle'),
-		group_id: generateUUID('grp_cc_settle'),
+		id: scheduledId('tx_cc_settle', creditCardId, billingCycle),
+		group_id: scheduledId('grp_cc_settle', creditCardId, billingCycle),
 		date: debitDate,
 		target_month: debitDate.slice(0, 7),
 		status: 'confirmed',

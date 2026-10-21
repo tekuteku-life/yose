@@ -1,3 +1,4 @@
+import { transactionFixture } from '../helpers/data_fixture.js';
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { YoseDB } from '../../js/db.js';
@@ -232,14 +233,14 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 			assert.equal(db.isEncrypted(), true);
 
 			// Save transaction
-			const tx = {
+			const tx = transactionFixture({
 				id: 'tx_enc_1',
 				target_month: '2026-10',
 				date: '2026-10-17',
 				amount: 15000,
 				type: 'expense',
 				memo: 'Secret transaction'
-			};
+			});
 			await db.saveTransaction(tx);
 
 			// Fetch transaction with key active -> transparently decrypted
@@ -400,10 +401,10 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 			db.setEncryptionKey(dmk);
 
 			await db.putTransactions([
-				{ id: 'tx_oct_1', target_month: '2026-10', date: '2026-10-01', amount: 1000, type: 'expense', sync_status: 'synced', is_deleted: false },
-				{ id: 'tx_oct_2', target_month: '2026-10', date: '2026-10-02', amount: 2000, type: 'expense', sync_status: 'unsynced', is_deleted: false },
-				{ id: 'tx_nov_1', target_month: '2026-11', date: '2026-11-01', amount: 3000, type: 'expense', sync_status: 'unsynced', is_deleted: false },
-				{ id: 'tx_del_1', target_month: '2026-10', date: '2026-10-05', amount: 4000, type: 'expense', sync_status: 'unsynced', is_deleted: true }
+				transactionFixture({ id: 'tx_oct_1', target_month: '2026-10', date: '2026-10-01', amount: 1000, type: 'expense', sync_status: 'synced', is_deleted: false }),
+				transactionFixture({ id: 'tx_oct_2', target_month: '2026-10', date: '2026-10-02', amount: 2000, type: 'expense', sync_status: 'unsynced', is_deleted: false }),
+				transactionFixture({ id: 'tx_nov_1', target_month: '2026-11', date: '2026-11-01', amount: 3000, type: 'expense', sync_status: 'unsynced', is_deleted: false }),
+				transactionFixture({ id: 'tx_del_1', target_month: '2026-10', date: '2026-10-05', amount: 4000, type: 'expense', sync_status: 'unsynced', is_deleted: true })
 			]);
 
 			const octTxs = await db.getTransactions({ target_month: '2026-10' });
@@ -441,15 +442,18 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 		});
 
 		it('getUnsettledAdvancePayments returns unsettled advance transfers (to acc_receivable) and legacy advance_payment records', async () => {
-			await db.putTransactions([
-				{ id: 'adv_1', type: 'advance_payment', amount: 5000, settlement_status: 'unsettled', memo: '立替A', is_deleted: false, date: '2026-10-01', target_month: '2026-10' },
-				{ id: 'adv_2', type: 'advance_payment', amount: 3000, settlement_status: 'settled', memo: '立替B (回収済)', is_deleted: false, date: '2026-10-02', target_month: '2026-10' },
-				{ id: 'adv_3', type: 'advance_payment', amount: 4000, settlement_status: 'unsettled', memo: '立替C (削除)', is_deleted: true, date: '2026-10-03', target_month: '2026-10' },
-				{ id: 'tx_adv_loan_1', type: 'transfer', account_id: 'acc_wallet', to_account_id: 'acc_receivable', amount: 8500, memo: '[立替貸付] 飲み会立替', is_deleted: false, date: '2026-10-05', target_month: '2026-10' },
-				{ id: 'tx_adv_loan_settled', type: 'transfer', account_id: 'acc_wallet', to_account_id: 'acc_receivable', amount: 6000, settlement_status: 'settled', memo: '[立替貸付] 精算済', is_deleted: false, date: '2026-10-06', target_month: '2026-10' },
-				{ id: 'tx_normal_transfer', type: 'transfer', account_id: 'acc_bank_main', to_account_id: 'acc_wallet', amount: 10000, is_deleted: false, date: '2026-10-04', target_month: '2026-10' },
-				{ id: 'tx_normal', type: 'expense', amount: 1000, is_deleted: false, date: '2026-10-04', target_month: '2026-10' }
-			]);
+			const records = [
+				transactionFixture({ id: 'adv_1', type: 'advance_payment', amount: 5000, settlement_status: 'unsettled', memo: '立替A', is_deleted: false, date: '2026-10-01', target_month: '2026-10' }),
+				transactionFixture({ id: 'adv_2', type: 'advance_payment', amount: 3000, settlement_status: 'settled', memo: '立替B (回収済)', is_deleted: false, date: '2026-10-02', target_month: '2026-10' }),
+				transactionFixture({ id: 'adv_3', type: 'advance_payment', amount: 4000, settlement_status: 'unsettled', memo: '立替C (削除)', is_deleted: true, date: '2026-10-03', target_month: '2026-10' }),
+				transactionFixture({ id: 'tx_adv_loan_1', type: 'transfer', account_id: 'acc_wallet', to_account_id: 'acc_receivable', amount: 8500, memo: '[立替貸付] 飲み会立替', is_deleted: false, date: '2026-10-05', target_month: '2026-10' }),
+				transactionFixture({ id: 'tx_adv_loan_settled', type: 'transfer', account_id: 'acc_wallet', to_account_id: 'acc_receivable', amount: 6000, settlement_status: 'settled', memo: '[立替貸付] 精算済', is_deleted: false, date: '2026-10-06', target_month: '2026-10' }),
+				transactionFixture({ id: 'tx_normal_transfer', type: 'transfer', account_id: 'acc_bank_main', to_account_id: 'acc_wallet', amount: 10000, is_deleted: false, date: '2026-10-04', target_month: '2026-10' }),
+				transactionFixture({ id: 'tx_normal', type: 'expense', amount: 1000, is_deleted: false, date: '2026-10-04', target_month: '2026-10' })
+			];
+			// The unsupported legacy type is pre-existing history; new writes reject it.
+			await db.putAllRaw('transactions', records.filter(record => record.type === 'advance_payment'));
+			await db.putTransactions(records.filter(record => record.type !== 'advance_payment'));
 
 			const unsettled = await db.getUnsettledAdvancePayments();
 			assert.equal(unsettled.length, 2);
@@ -458,9 +462,9 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 
 		it('getUniqueTags returns sorted unique tags list', async () => {
 			await db.putTransactions([
-				{ id: 't1', type: 'expense', amount: 100, tags: ['スーパー', '食料品'], is_deleted: false, date: '2026-10-01', target_month: '2026-10' },
-				{ id: 't2', type: 'expense', amount: 200, tags: ['食料品', 'ディナー'], is_deleted: false, date: '2026-10-02', target_month: '2026-10' },
-				{ id: 't3', type: 'expense', amount: 300, tags: ['日用品'], is_deleted: true, date: '2026-10-03', target_month: '2026-10' }
+				transactionFixture({ id: 't1', type: 'expense', amount: 100, tags: ['スーパー', '食料品'], is_deleted: false, date: '2026-10-01', target_month: '2026-10' }),
+				transactionFixture({ id: 't2', type: 'expense', amount: 200, tags: ['食料品', 'ディナー'], is_deleted: false, date: '2026-10-02', target_month: '2026-10' }),
+				transactionFixture({ id: 't3', type: 'expense', amount: 300, tags: ['日用品'], is_deleted: true, date: '2026-10-03', target_month: '2026-10' })
 			]);
 
 			const tags = await db.getUniqueTags();
@@ -468,10 +472,14 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 		});
 
 		it('getMemoHistory returns memo mapping with category and subcategory', async () => {
+			await db.mutateMasterConfig(config => {
+				config.categories.find(category => category.id === 'cat_food').subcategories.push({ id: 'sub_snack', name: '菓子' });
+				config.categories.push({ id: 'cat_transport', name: '交通', type: 'expense', subcategories: [{ id: 'sub_gas', name: '燃料' }] });
+			});
 			await db.putTransactions([
-				{ id: 'm1', memo: 'セブンイレブン', category_id: 'cat_food', subcategory_id: 'sub_groceries', date: '2026-10-01', is_deleted: false, target_month: '2026-10' },
-				{ id: 'm2', memo: 'セブンイレブン', category_id: 'cat_food', subcategory_id: 'sub_snack', date: '2026-10-10', is_deleted: false, target_month: '2026-10' },
-				{ id: 'm3', memo: 'ガソリンスタンド', category_id: 'cat_transport', subcategory_id: 'sub_gas', date: '2026-10-05', is_deleted: false, target_month: '2026-10' }
+				transactionFixture({ id: 'm1', memo: 'セブンイレブン', category_id: 'cat_food', subcategory_id: 'sub_groceries', date: '2026-10-01', is_deleted: false, target_month: '2026-10' }),
+				transactionFixture({ id: 'm2', memo: 'セブンイレブン', category_id: 'cat_food', subcategory_id: 'sub_snack', date: '2026-10-10', is_deleted: false, target_month: '2026-10' }),
+				transactionFixture({ id: 'm3', memo: 'ガソリンスタンド', category_id: 'cat_transport', subcategory_id: 'sub_gas', date: '2026-10-05', is_deleted: false, target_month: '2026-10' })
 			]);
 
 			const history = await db.getMemoHistory();
@@ -495,9 +503,9 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 
 			// Add card expenses in period 2026-09-16 to 2026-10-15 (cycle 2026-10)
 			await db.putTransactions([
-				{ id: 'c_tx_1', type: 'expense', account_id: 'acc_card_a', amount: 30000, date: '2026-09-20', target_month: '2026-09', is_deleted: false },
-				{ id: 'c_tx_2', type: 'expense', account_id: 'acc_card_a', amount: 25000, date: '2026-10-05', target_month: '2026-10', is_deleted: false },
-				{ id: 'c_tx_3', type: 'expense', account_id: 'acc_card_a', amount: 10000, date: '2026-10-20', target_month: '2026-10', is_deleted: false } // next cycle
+				transactionFixture({ id: 'c_tx_1', type: 'expense', account_id: 'acc_card_a', amount: 30000, date: '2026-09-20', target_month: '2026-09', is_deleted: false }),
+				transactionFixture({ id: 'c_tx_2', type: 'expense', account_id: 'acc_card_a', amount: 25000, date: '2026-10-05', target_month: '2026-10', is_deleted: false }),
+				transactionFixture({ id: 'c_tx_3', type: 'expense', account_id: 'acc_card_a', amount: 10000, date: '2026-10-20', target_month: '2026-10', is_deleted: false }) // next cycle
 			]);
 
 			// Process settlements on debit day 2026-11-10
@@ -520,10 +528,10 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 		it('updateInstallmentGroup cascades updates across all records in group', async () => {
 			const groupId = 'grp_inst_test_1';
 			await db.putTransactions([
-				{ id: 'pay_1', group_id: groupId, type: 'transfer', amount: 12000, memo: '年額契約', tags: ['前払'], is_deleted: false, amortization_meta: { is_payment_record: true, total_amount: 12000, amortize_months: 3 } },
-				{ id: 'amort_1', group_id: groupId, type: 'expense', amount: 4000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次償却1', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 0 } },
-				{ id: 'amort_2', group_id: groupId, type: 'expense', amount: 4000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次償却2', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 1 } },
-				{ id: 'amort_3', group_id: groupId, type: 'expense', amount: 4000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次償却3', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 2 } }
+				transactionFixture({ id: 'pay_1', group_id: groupId, type: 'transfer', amount: 12000, memo: '年額契約', tags: ['前払'], is_deleted: false, amortization_meta: { is_payment_record: true, total_amount: 12000, amortize_months: 3 } }),
+				transactionFixture({ id: 'amort_1', group_id: groupId, type: 'expense', amount: 4000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次償却1', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 0 } }),
+				transactionFixture({ id: 'amort_2', group_id: groupId, type: 'expense', amount: 4000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次償却2', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 1 } }),
+				transactionFixture({ id: 'amort_3', group_id: groupId, type: 'expense', amount: 4000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次償却3', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 2 } })
 			]);
 
 			// Update category to housing, memo, tags, and new total amount 15000 (15000 / 3 = 5000 each)
@@ -571,9 +579,9 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 		it('updateInstallmentGroup handles amount in updates and updates without amountAdjustment', async () => {
 			const groupId = 'grp_inst_test_2';
 			await db.putTransactions([
-				{ id: 'pay_2', group_id: groupId, type: 'transfer', amount: 30000, memo: '一括', tags: ['前払'], is_deleted: false, amortization_meta: { is_payment_record: true, total_amount: 30000, amortize_months: 2 } },
-				{ id: 'amort_2_1', group_id: groupId, type: 'expense', amount: 15000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次1', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 0 } },
-				{ id: 'amort_2_2', group_id: groupId, type: 'expense', amount: 15000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次2', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 1 } }
+				transactionFixture({ id: 'pay_2', group_id: groupId, type: 'transfer', amount: 30000, memo: '一括', tags: ['前払'], is_deleted: false, amortization_meta: { is_payment_record: true, total_amount: 30000, amortize_months: 2 } }),
+				transactionFixture({ id: 'amort_2_1', group_id: groupId, type: 'expense', amount: 15000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次1', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 0 } }),
+				transactionFixture({ id: 'amort_2_2', group_id: groupId, type: 'expense', amount: 15000, category_id: 'cat_food', subcategory_id: 'sub_groceries', memo: '月次2', tags: ['前払'], is_deleted: false, amortization_meta: { month_index: 1 } })
 			]);
 
 			const count = await db.updateInstallmentGroup(groupId, { amount: 36000, memo: '新メモ' });
@@ -598,16 +606,19 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 			assert.equal(await db.updateInstallmentGroup(''), 0);
 			assert.equal(await db.updateInstallmentGroup('non_existent_group'), 0);
 
-			await db.putTransaction({ id: 'del_1', group_id: 'grp_all_deleted', is_deleted: true });
+			await db.putTransaction(transactionFixture({ id: 'del_1', group_id: 'grp_all_deleted', is_deleted: true }));
 			assert.equal(await db.updateInstallmentGroup('grp_all_deleted'), 0);
 		});
 
 		it('updateInstallmentGroup allocates remainder to first month and updates actual categories', async () => {
+			await db.mutateMasterConfig(config => {
+				config.categories.push({ id: 'act_cat_1', name: '実態費目', type: 'expense', subcategories: [{ id: 'act_sub_1', name: '実態内訳' }] });
+			});
 			const groupId = 'grp_inst_test_3';
 			await db.putTransactions([
-				{ id: 'amort_3_1', group_id: groupId, type: 'expense', amount: 3000, target_month: '2026-01', is_deleted: false },
-				{ id: 'amort_3_2', group_id: groupId, type: 'expense', amount: 3000, target_month: '2026-02', is_deleted: false },
-				{ id: 'amort_3_3', group_id: groupId, type: 'expense', amount: 3000, target_month: '2026-03', is_deleted: false }
+				transactionFixture({ id: 'amort_3_1', group_id: groupId, type: 'expense', amount: 3000, target_month: '2026-01', is_deleted: false }),
+				transactionFixture({ id: 'amort_3_2', group_id: groupId, type: 'expense', amount: 3000, target_month: '2026-02', is_deleted: false }),
+				transactionFixture({ id: 'amort_3_3', group_id: groupId, type: 'expense', amount: 3000, target_month: '2026-03', is_deleted: false })
 			]);
 
 			const count = await db.updateInstallmentGroup(groupId, {
@@ -628,8 +639,8 @@ describe('js/db.js & Master Management - Unit Tests', () => {
 		it('getTransactionsByGroupId retrieves transactions belonging to groupId', async () => {
 			const groupId = 'grp_query_test';
 			await db.putTransactions([
-				{ id: 'q1', group_id: groupId, type: 'expense', amount: 1000, date: '2026-10-01', target_month: '2026-10', is_deleted: false },
-				{ id: 'q2', group_id: groupId, type: 'expense', amount: 2000, date: '2026-10-02', target_month: '2026-10', is_deleted: false }
+				transactionFixture({ id: 'q1', group_id: groupId, type: 'expense', amount: 1000, date: '2026-10-01', target_month: '2026-10', is_deleted: false }),
+				transactionFixture({ id: 'q2', group_id: groupId, type: 'expense', amount: 2000, date: '2026-10-02', target_month: '2026-10', is_deleted: false })
 			]);
 			const res = await db.getTransactionsByGroupId(groupId);
 			assert.equal(res.length, 2);

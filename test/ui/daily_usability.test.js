@@ -102,7 +102,7 @@ describe('Daily usability improvements', { timeout: 120000 }, () => {
 		await waitForDialog(d, '受信');
 		assert.deepEqual((await records(d)).map(tx => tx.id).sort(), ['local_upload', 'remote_download']);
 		const actions = d.requests.filter(r => r.url === gasUrl).map(r => JSON.parse(r.body).action);
-		assert.deepEqual(actions, ['fetch_state', 'push_diff', 'fetch_state']);
+		assert.deepEqual(actions, ['fetch_state', 'fetch_master', 'push_diff', 'fetch_state']);
 	});
 
 	it('refuses to close unknown amounts and does not confirm them locally on network failure', async () => {
@@ -143,10 +143,11 @@ describe('Daily usability improvements', { timeout: 120000 }, () => {
 		const d = fixture.driver;
 		await d.evaluate(`(async () => {
 			const db = window.__yose_app.db; const config = await db.getMasterConfig();
-			config.accounts = [{ id: 'acc_wallet', name: '現金', type: 'cash', is_asset: true, initial_balance: 1000 }]; await db.saveMasterConfig(config);
+			for (const account of config.accounts) account.initial_balance = account.id === 'acc_wallet' ? 1000 : 0;
+			await db.saveMasterConfig(config);
 			await db.saveSnapshot({ schema_version: 2, last_closed_month: '2026-09', account_balances: { acc_wallet: 1000 }, monthly_summaries: { '2025-12': { closing_balances: { acc_wallet: 800 } }, '2026-07': { closing_balances: { acc_wallet: 900 } }, '2026-09': { closing_balances: { acc_wallet: 1000 } } } });
 		})()`);
-		await seed(d, [transaction('asset_exp', { date: '2026-10-05', amount: 100 }), transaction('asset_inc', { date: '2026-10-15', type: 'income', amount: 200 }), transaction('asset_plan', { amount: 500, status: 'planned' })]);
+		await seed(d, [transaction('asset_exp', { date: '2026-10-05', amount: 100 }), transaction('asset_inc', { date: '2026-10-15', type: 'income', amount: 200, category_id: 'cat_income_main', actual_category_id: 'cat_income_main' }), transaction('asset_plan', { amount: 500, status: 'planned' })]);
 		await d.click('.tab-btn[data-analytics-target="assets"]');
 		for (const mode of ['month', 'year', 'range', 'all']) {
 			await d.select('#select-asset-period', mode);

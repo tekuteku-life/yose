@@ -1,3 +1,4 @@
+import { transactionFixture } from '../helpers/data_fixture.js';
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { YoseDB, DEFAULT_MASTER_CONFIG, DEFAULT_SUMMARY_SNAPSHOT } from '../../js/db.js';
@@ -55,7 +56,7 @@ describe('js/db.js - Unit Tests', () => {
 
 	describe('Transactions CRUD and Filtering', () => {
 		it('creates, reads, updates, and soft-deletes a transaction', async () => {
-			const tx = {
+			const tx = transactionFixture({
 				id: 'tx_test_1',
 				group_id: 'grp_1',
 				date: '2026-10-16',
@@ -67,7 +68,7 @@ describe('js/db.js - Unit Tests', () => {
 				memo: 'ランチ',
 				tags: ['食事'],
 				is_deleted: false
-			};
+			});
 
 			// Create
 			const saved = await db.putTransaction(tx);
@@ -112,7 +113,7 @@ describe('js/db.js - Unit Tests', () => {
 
 		it('filters transactions by month, status, group, type, and account', async () => {
 			const txs = [
-				{
+				transactionFixture({
 					id: 'tx_oct_1',
 					group_id: 'grp_A',
 					date: '2026-10-01',
@@ -122,8 +123,8 @@ describe('js/db.js - Unit Tests', () => {
 					amount: 1000,
 					account_id: 'acc_wallet',
 					is_deleted: false
-				},
-				{
+				}),
+				transactionFixture({
 					id: 'tx_oct_2',
 					group_id: 'grp_A',
 					date: '2026-10-02',
@@ -133,8 +134,8 @@ describe('js/db.js - Unit Tests', () => {
 					amount: 2000,
 					account_id: 'acc_card_a',
 					is_deleted: false
-				},
-				{
+				}),
+				transactionFixture({
 					id: 'tx_nov_1',
 					group_id: 'grp_B',
 					date: '2026-11-01',
@@ -145,7 +146,7 @@ describe('js/db.js - Unit Tests', () => {
 					account_id: 'acc_bank_main',
 					to_account_id: 'acc_card_a',
 					is_deleted: false
-				}
+				})
 			];
 
 			await db.putTransactions(txs);
@@ -173,8 +174,8 @@ describe('js/db.js - Unit Tests', () => {
 
 		it('tracks unsynced transactions and marks them synced', async () => {
 			await db.putTransactions([
-				{ id: 'tx_s1', target_month: '2026-10', amount: 100, is_deleted: false },
-				{ id: 'tx_s2', target_month: '2026-10', amount: 200, is_deleted: false }
+				transactionFixture({ id: 'tx_s1', target_month: '2026-10', amount: 100, is_deleted: false }),
+				transactionFixture({ id: 'tx_s2', target_month: '2026-10', amount: 200, is_deleted: false })
 			]);
 
 			const unsyncedBefore = await db.getUnsyncedTransactions();
@@ -218,12 +219,12 @@ describe('js/db.js - Unit Tests', () => {
 
 	describe('Backup Export and Import', () => {
 		it('exports complete database to JSON backup', async () => {
-			await db.putTransaction({
+			await db.putTransaction(transactionFixture({
 				id: 'tx_backup_1',
 				target_month: '2026-10',
 				amount: 1500,
 				is_deleted: false
-			});
+			}));
 
 			const backup = await db.exportFullData();
 			assert.equal(backup.schema_version, 2);
@@ -268,35 +269,35 @@ describe('js/db.js - Unit Tests', () => {
 
 		it('performs non-destructive deduplicated JSON import (OR merge) with stats (Requirement 3.15)', async () => {
 			// 1. Setup local state
-			await db.putTransaction({
+			await db.putTransaction(transactionFixture({
 				id: 'tx_local_older',
 				target_month: '2026-10',
 				amount: 1000,
 				updated_at: '2026-10-01T12:00:00Z',
 				is_deleted: false
-			});
-			await db.putTransaction({
+			}));
+			await db.putTransaction(transactionFixture({
 				id: 'tx_local_newer',
 				target_month: '2026-10',
 				amount: 2000,
 				updated_at: '2026-10-15T12:00:00Z',
 				is_deleted: false
-			});
-			await db.putTransaction({
+			}));
+			await db.putTransaction(transactionFixture({
 				id: 'tx_local_exclusive',
 				target_month: '2026-10',
 				amount: 9999,
 				updated_at: '2026-10-10T12:00:00Z',
 				is_deleted: false
-			});
+			}));
 
 			const initialConfig = await db.getMasterConfig();
 			initialConfig.accounts = [
-				{ id: 'acc_wallet', name: '財布', is_archived: false }
+				{ id: 'acc_wallet', name: '財布', type: 'cash', is_archived: false }
 			];
 			initialConfig.categories = [
 				{
-					id: 'cat_food',
+					id: 'cat_food', type: 'expense',
 					name: '食費',
 					subcategories: [
 						{ id: 'sub_groceries', name: '食材' },
@@ -304,9 +305,10 @@ describe('js/db.js - Unit Tests', () => {
 					]
 				}
 			];
+			initialConfig.categories.push({ id: 'cat_housing', name: '住居', type: 'expense', subcategories: [] });
 			initialConfig.holidays = ['2026-01-01', '2026-05-03'];
 			initialConfig.recurring_rules = [
-				{ id: 'rec_local', name: 'ローカル定期' }
+				{ id: 'rec_local', name: 'ローカル定期', type: 'expense', amount: 100, account_id: 'acc_wallet', category_id: 'cat_food' }
 			];
 			initialConfig.annual_budgets = {
 				'2026': {
@@ -318,6 +320,7 @@ describe('js/db.js - Unit Tests', () => {
 					}
 				}
 			};
+			await db.saveSnapshot({ schema_version: 2, last_closed_month: null, account_balances: {}, monthly_summaries: {} });
 			await db.saveMasterConfig(initialConfig);
 
 			// 2. Prepare imported JSON
@@ -327,12 +330,12 @@ describe('js/db.js - Unit Tests', () => {
 				master_config: {
 					schema_version: 2,
 					accounts: [
-						{ id: 'acc_wallet', name: '財布' }, // existing
-						{ id: 'acc_nisa', name: 'つみたてNISA', is_asset: true } // new
+						{ id: 'acc_wallet', name: '財布', type: 'cash' }, // existing
+						{ id: 'acc_nisa', name: 'つみたてNISA', type: 'investment', is_asset: true } // new
 					],
 					categories: [
 						{
-							id: 'cat_food',
+							id: 'cat_food', type: 'expense',
 							name: '食費',
 							subcategories: [
 								{ id: 'sub_groceries', name: '食材' }, // existing
@@ -340,14 +343,14 @@ describe('js/db.js - Unit Tests', () => {
 							]
 						},
 						{
-							id: 'cat_hobby',
+							id: 'cat_hobby', type: 'expense',
 							name: '趣味・娯楽',
 							subcategories: [{ id: 'sub_games', name: 'ゲーム' }]
 						} // new
 					],
 					recurring_rules: [
-						{ id: 'rec_local', name: 'ローカル定期' }, // existing
-						{ id: 'rec_sub', name: 'サブスク' } // new
+						{ id: 'rec_local', name: 'ローカル定期', type: 'expense', amount: 100, account_id: 'acc_wallet', category_id: 'cat_food' }, // existing
+						{ id: 'rec_sub', name: 'サブスク', type: 'expense', amount: 100, account_id: 'acc_wallet', category_id: 'cat_food' } // new
 					],
 					holidays: ['2026-01-01', '2026-05-04', '2026-11-23'], // 2026-05-04 and 11-23 are new
 					annual_budgets: {
@@ -377,11 +380,11 @@ describe('js/db.js - Unit Tests', () => {
 				},
 				transactions: [
 					// Newer version of tx_local_older -> Should update
-					{ id: 'tx_local_older', target_month: '2026-10', amount: 1500, updated_at: '2026-10-05T12:00:00Z', is_deleted: false },
+					transactionFixture({ id: 'tx_local_older', target_month: '2026-10', amount: 1500, updated_at: '2026-10-05T12:00:00Z', is_deleted: false }),
 					// Older version of tx_local_newer -> Should skip/retain local
-					{ id: 'tx_local_newer', target_month: '2026-10', amount: 100, updated_at: '2026-10-10T12:00:00Z', is_deleted: false },
+					transactionFixture({ id: 'tx_local_newer', target_month: '2026-10', amount: 100, updated_at: '2026-10-10T12:00:00Z', is_deleted: false }),
 					// Completely new transaction -> Should add
-					{ id: 'tx_imported_new', target_month: '2026-10', amount: 3333, updated_at: '2026-10-16T12:00:00Z', is_deleted: false }
+					transactionFixture({ id: 'tx_imported_new', target_month: '2026-10', amount: 3333, updated_at: '2026-10-16T12:00:00Z', is_deleted: false })
 				]
 			};
 
@@ -494,8 +497,9 @@ describe('js/db.js - Unit Tests', () => {
 				]
 			}`);
 
-			const result = await db.importFullData(maliciousPayload);
-			assert.equal(result.success, true);
+			const before = await Promise.all(['transactions', 'master_config', 'summary_snapshot'].map(store => db.getAllRaw(store)));
+			await assert.rejects(db.importFullData(maliciousPayload), /Invalid|不正|整合/);
+			assert.deepEqual(await Promise.all(['transactions', 'master_config', 'summary_snapshot'].map(store => db.getAllRaw(store))), before);
 			assert.equal(Object.prototype.polluted, undefined);
 			assert.equal(({}).polluted, undefined);
 
@@ -543,14 +547,14 @@ describe('js/db.js - Unit Tests', () => {
 			assert.equal(updatedSnap.last_closed_month, '2026-10');
 
 			// Transactions
-			const tx = {
+			const tx = transactionFixture({
 				id: 'tx_idb_1',
 				date: '2026-10-16',
 				target_month: '2026-10',
 				amount: 3000,
 				type: 'expense',
 				is_deleted: false
-			};
+			});
 			await idbDb.putTransaction(tx);
 			const fetchedTx = await idbDb.getTransaction('tx_idb_1');
 			assert.equal(fetchedTx.amount, 3000);
@@ -577,7 +581,7 @@ describe('js/db.js - Unit Tests', () => {
 			assert.equal(sVal, 'dark');
 
 			// Locked getTransactions throw
-			await idbDb.putTransaction({
+			await idbDb.putRaw('transactions', {
 				id: 'tx_enc_fake',
 				encrypted: true,
 				iv: 'dummy',
@@ -664,6 +668,7 @@ describe('js/db.js - Unit Tests', () => {
 			assert.equal(sparseSnap.last_closed_month, '2026-09');
 
 			// 3. YoseDB.saveAnnualBudget when existing master_config lacks annual_budgets property
+			await db.saveSnapshot({ schema_version: 2, last_closed_month: null, account_balances: {}, monthly_summaries: {} });
 			await db.saveMasterConfig({ schema_version: 2, accounts: [], categories: [] });
 			const savedBudget = await db.saveAnnualBudget('2027', { expense_budget: 2000000 });
 			assert.equal(savedBudget.expense_budget, 2000000);
@@ -722,12 +727,12 @@ describe('js/db.js - Unit Tests', () => {
 	describe('Various JSON Export and Auto-Detect Import (Requirement 3.26)', () => {
 		it('exports individual datasets with standard metadata and pretty print format', async () => {
 			await db.init();
-			await db.putTransaction({
+			await db.putTransaction(transactionFixture({
 				id: 'tx_export_test_1',
 				target_month: '2026-10',
 				amount: 5000,
 				is_deleted: false
-			});
+			}));
 			await db.saveAnnualBudget('2026', {
 				expense_budget: 2500000,
 				savings_target_amount: 800000,
@@ -790,7 +795,7 @@ describe('js/db.js - Unit Tests', () => {
 				export_type: 'transactions',
 				exported_at: new Date().toISOString(),
 				transactions: [
-					{ id: 'tx_auto_1', target_month: '2026-10', amount: 1200, is_deleted: false, updated_at: '2026-10-18T10:00:00Z' }
+					transactionFixture({ id: 'tx_auto_1', target_month: '2026-10', amount: 1200, is_deleted: false, updated_at: '2026-10-18T10:00:00Z' })
 				]
 			};
 			const resTx = await db.importFullData(txPayload);
@@ -802,7 +807,7 @@ describe('js/db.js - Unit Tests', () => {
 
 			// 2. Raw array transactions import (auto-wrap)
 			const rawTxs = [
-				{ id: 'tx_raw_auto_2', target_month: '2026-10', amount: 3400, is_deleted: false, updated_at: '2026-10-18T11:00:00Z' }
+				transactionFixture({ id: 'tx_raw_auto_2', target_month: '2026-10', amount: 3400, is_deleted: false, updated_at: '2026-10-18T11:00:00Z' })
 			];
 			const resRaw = await db.importFullData(rawTxs);
 			assert.equal(resRaw.success, true);
@@ -816,8 +821,8 @@ describe('js/db.js - Unit Tests', () => {
 				schema_version: 2,
 				export_type: 'master_config',
 				master_config: {
-					accounts: [{ id: 'acc_auto_bank', name: '自動判別銀行', is_archived: false }],
-					categories: [{ id: 'cat_auto_special', name: '特別費', subcategories: [] }]
+					accounts: [{ id: 'acc_auto_bank', name: '自動判別銀行', type: 'bank', is_archived: false }],
+					categories: [{ id: 'cat_auto_special', name: '特別費', type: 'expense', subcategories: [] }]
 				}
 			};
 			const resMaster = await db.importFullData(masterPayload);
@@ -882,29 +887,22 @@ describe('js/db.js - Unit Tests', () => {
 		it('handles defensive edge cases and security protections during import', async () => {
 			await db.init();
 
-			// Prototype pollution rejection in standalone budgets
-			const maliciousBudget = {
-				schema_version: 2,
-				export_type: 'annual_budgets',
-				annual_budgets: {
-					'__proto__': { expense_budget: 999999 },
-					'constructor': { expense_budget: 999999 },
-					'2030': {
-						expense_budget: 1000000,
-						category_budgets: {
-							'__proto__': 888888,
-							'cat_valid': 200000
-						}
-					}
+			// A valid budget reference isolates unsafe-key rejection from unrelated reference errors.
+			await db.mutateMasterConfig(config => { config.categories.push({ id: 'cat_valid', name: '正常費目', type: 'expense', subcategories: [] }); });
+			const maliciousBudget = JSON.parse(`{
+				"schema_version": 2,
+				"export_type": "annual_budgets",
+				"annual_budgets": {
+					"__proto__": { "expense_budget": 999999 },
+					"constructor": { "expense_budget": 999999 },
+					"2030": { "expense_budget": 1000000, "category_budgets": { "__proto__": 888888, "cat_valid": 200000 } }
 				}
-			};
-			const resSec = await db.importFullData(maliciousBudget);
-			assert.equal(resSec.success, true);
+			}`);
+			const before = await Promise.all(['transactions', 'master_config', 'summary_snapshot'].map(store => db.getAllRaw(store)));
+			await assert.rejects(db.importFullData(maliciousBudget), /不正|unsafe|Invalid|整合/i);
+			assert.deepEqual(await Promise.all(['transactions', 'master_config', 'summary_snapshot'].map(store => db.getAllRaw(store))), before);
 			assert.equal(Object.prototype.hasOwnProperty.call(Object.prototype, 'expense_budget'), false);
-			const b2030 = await db.getAnnualBudget('2030');
-			assert.equal(b2030.expense_budget, 1000000);
-			assert.equal(b2030.category_budgets.cat_valid, 200000);
-			assert.equal(Object.prototype.hasOwnProperty.call(b2030.category_budgets, '__proto__'), false);
+			assert.equal((await db.getAnnualBudget('2030')).expense_budget, 0);
 
 			// Invalid schema version and malformed payload rejection
 			await assert.rejects(async () => {

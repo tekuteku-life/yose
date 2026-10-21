@@ -43,7 +43,7 @@ const report = [];
 // 1. Validate JavaScript (.js)
 const jsFiles = [...TARGET_INDIVIDUAL_FILES.filter(f => f.endsWith('.js'))];
 for (const dir of ['js', 'test', 'scripts']) {
-	jsFiles.push(...collectFiles(dir, ['.js']));
+	jsFiles.push(...collectFiles(dir, ['.js', '.mjs']));
 }
 
 for (const file of Array.from(new Set(jsFiles)).filter(f => fs.existsSync(f))) {

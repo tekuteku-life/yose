@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { useBrowser, seed, transaction, records, cashflow, settings, submit, waitForDialog, value } from '../helpers/ui_fixture.js';
+import { useBrowser, seedLegacy, transaction, records, cashflow, settings, submit, waitForDialog, value } from '../helpers/ui_fixture.js';
 
 async function nativeKey(d, selector, key) {
 	await d.evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
@@ -14,14 +14,15 @@ async function prepare(d, overrides = {}) {
 	await d.evaluate(`(async () => {
 		const db = window.__yose_app.db;
 		const config = await db.getMasterConfig();
+		config.recurring_rules = [];
 		config.categories = [
-			{ id: 'cat_food', name: '食費', subcategories: [{ id: 'sub_a', name: '通常' }, { id: 'sub_b', name: '別分類' }] },
-			{ id: 'cat_other', name: 'その他', subcategories: [{ id: 'sub_c', name: '通常' }] },
-			{ id: 'cat_old', name: '旧費目', is_archived: true, subcategories: [{ id: 'sub_old', name: '旧中項目', is_archived: true }] }
+			{ id: 'cat_food', name: '食費', type: 'expense', subcategories: [{ id: 'sub_a', name: '通常' }, { id: 'sub_b', name: '別分類' }] },
+			{ id: 'cat_other', name: 'その他', type: 'expense', subcategories: [{ id: 'sub_c', name: '通常' }] },
+			{ id: 'cat_old', name: '旧費目', type: 'expense', is_archived: true, subcategories: [{ id: 'sub_old', name: '旧中項目', is_archived: true }] }
 		];
 		await db.saveMasterConfig(config);
 	})()`);
-	await seed(d, [transaction('edit_same', overrides)]);
+	await seedLegacy(d, [transaction('edit_same', overrides)]);
 	await cashflow(d);
 	await d.click('#month-tx-list [data-id="edit_same"]');
 	await d.waitFor('document.getElementById("modal-edit-tx").classList.contains("active") && document.getElementById("edit-tx-id").value === "edit_same"');
