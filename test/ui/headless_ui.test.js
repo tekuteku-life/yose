@@ -155,6 +155,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 		assert.equal(await driver.evaluate('document.getElementById("input-memo").value'), '');
 
 		// Verify #recent-tx-list reflects the new transaction (Category > Subcategory, Memo, Tag, Amount)
+		await driver.waitFor('document.getElementById("recent-tx-list").textContent.includes("スーパー買い出し")');
 		const recentHtml = await driver.textContent('#recent-tx-list');
 		assert.ok(recentHtml.includes('食費'));
 		assert.ok(recentHtml.includes('スーパー買い出し'));
@@ -167,6 +168,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 		await driver.fill('#input-memo', '中項目なしテスト');
 		await driver.click('#btn-save-tx');
 
+		await driver.waitFor('document.getElementById("recent-tx-list").textContent.includes("中項目なしテスト")');
 		const recentAfterEmptySub = await driver.textContent('#recent-tx-list');
 		assert.ok(recentAfterEmptySub.includes('中項目なしテスト'));
 		assert.ok(!recentAfterEmptySub.includes('undefined'));
@@ -190,6 +192,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 		await new Promise(r => setTimeout(r, 100));
 
 		// 1) Verify in Settings #master-categories-list
+		await driver.waitFor('document.getElementById("master-categories-list").textContent.includes("ペット費") && document.getElementById("budget-categories-list-container").textContent.includes("ペット費")');
 		const masterCatListText = await driver.textContent('#master-categories-list');
 		assert.ok(masterCatListText.includes('ペット費'), 'Added category should appear in #master-categories-list');
 
@@ -289,6 +292,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 		assert.ok(recentText.includes('ペット費 > キャットフード'), 'Recent list should display ペット費 > キャットフード');
 
 		await driver.click('.tab-btn[data-analytics-target="cashflow"]');
+		await driver.waitFor('document.getElementById("month-tx-list").textContent.includes("ペット費 > キャットフード")');
 		const monthListText = await driver.textContent('#month-tx-list');
 		assert.ok(monthListText.includes('ペット費 > キャットフード'), 'Monthly transaction list should display ペット費 > キャットフード');
 	});
@@ -337,6 +341,7 @@ describe('Headless Chrome Comprehensive UI Test Suite', () => {
 		assert.ok(parentTxId, 'Parent prepaid payment record should exist');
 
 		await driver.click(`.tx-item[data-id="${parentTxId}"]`);
+		await driver.waitFor('document.getElementById("modal-edit-tx").classList.contains("active")');
 		assert.equal(await driver.isVisible('#modal-edit-tx'), true);
 		assert.equal(await driver.evaluate('document.getElementById("edit-tx-amount").value'), '12000');
 

@@ -218,9 +218,11 @@ describe('System Test - Yoseatsume Kakeibo End-to-End Complete Scenario', () => 
 		const rentTx = (await db.getTransactions({ target_month: '2026-10' }))
 			.find(t => t.recurring_rule_id === 'rec_rent');
 		rentTx.status = 'confirmed';
+		rentTx.sync_status = 'unsynced';
+		rentTx.updated_at = new Date().toISOString();
 		await db.putTransaction(rentTx);
 
-		const closeRes = await syncManager.closeMonth('2026-10');
+		const closeRes = await syncManager.closeMonth('2026-10', { approvedPlanned: (await db.getTransactions({ target_month: '2026-10' })).filter(tx => tx.status === 'planned') });
 		assert.equal(closeRes.success, true);
 		assert.equal(closeRes.snapshot.last_closed_month, '2026-10');
 
@@ -234,6 +236,7 @@ describe('System Test - Yoseatsume Kakeibo End-to-End Complete Scenario', () => 
 		// -------------------------------------------------------------
 		// User edits an expense in the closed month (e.g. October) by adding 2,000 yen
 		const retroTx = {
+			reclose_approved_months: ['2026-10'],
 			id: 'tx_retro_bonus_tax',
 			target_month: '2026-10',
 			date: '2026-10-20',

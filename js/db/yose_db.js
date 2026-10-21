@@ -115,6 +115,36 @@ export class YoseDB extends StorageEngine {
 		return await this.getTransactions({ sync_status: 'unsynced', includeDeleted: true });
 	}
 
+	async mergeRemoteTransactions(records) {
+		BackupMerger.validateImportData({ transactions: records }, 'transactions');
+		let count = 0;
+		for (const remote of records) {
+			if (!remote.id) throw new Error('Remote transaction ID is missing');
+			while (true) {
+				const raw = await this.getRaw('transactions', remote.id);
+				const local = await this.decryptRecord(raw);
+				const localTime = Date.parse(local?.updated_at || '') || 0;
+				const remoteTime = Date.parse(remote.updated_at || '') || 0;
+				if (local && (localTime > remoteTime || (localTime === remoteTime && local.sync_status === 'unsynced'))) break;
+				const candidate = { ...remote, sync_status: 'synced' };
+				delete candidate.previous_target_month; delete candidate.reclose_approved_months;
+				if (canonicalJsonStringify(local) === canonicalJsonStringify(candidate)) break;
+				const encrypted = await this.encryptRecord(candidate, { id: candidate.id, target_month: candidate.target_month, date: candidate.date, sync_status: 'synced', is_deleted: Boolean(candidate.is_deleted) });
+				if (await this.compareAndPutRaw('transactions', candidate.id, raw, encrypted)) { count++; break; }
+			}
+		}
+		return count;
+	}
+
+	async approveTransactionReclose(submitted, months) {
+		const raw = await this.getRaw('transactions', submitted.id);
+		const current = await this.decryptRecord(raw);
+		if (canonicalJsonStringify(current) !== canonicalJsonStringify(submitted)) return false;
+		const approved = { ...current, reclose_approved_months: months };
+		const encrypted = await this.encryptRecord(approved, { id: approved.id, target_month: approved.target_month, date: approved.date, sync_status: approved.sync_status, is_deleted: Boolean(approved.is_deleted) });
+		return this.compareAndPutRaw('transactions', approved.id, raw, encrypted);
+	}
+
 	async markTransactionsSynced(ids, submittedTransactions = null) {
 		if (!Array.isArray(ids) || ids.length === 0) return 0;
 		const submitted = submittedTransactions ? new Map(submittedTransactions.map(tx => [tx.id, tx])) : null;
@@ -126,6 +156,7 @@ export class YoseDB extends StorageEngine {
 			if (submitted && canonicalJsonStringify(tx) !== canonicalJsonStringify(submitted.get(id))) continue;
 			const acknowledged = { ...tx, sync_status: 'synced' };
 			delete acknowledged.previous_target_month;
+			delete acknowledged.reclose_approved_months;
 			const replacement = await this.encryptRecord(acknowledged, {
 				id: tx.id,
 				target_month: tx.target_month,
@@ -536,6 +567,10 @@ export class YoseDB extends StorageEngine {
 		if (editedTransaction) {
 			const target = updatedTxs.find(t => t.id === editedTransaction.id);
 			if (target) Object.assign(target, editedTransaction);
+		}
+		for (const record of updatedTxs) {
+			if (newTotal !== undefined && newTotal > 0) record.amount_pending = false;
+			if (updates.reclose_approved_months) record.reclose_approved_months = updates.reclose_approved_months;
 		}
 		await this.putTransactions(updatedTxs);
 		return updatedTxs.length;

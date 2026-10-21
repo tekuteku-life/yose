@@ -61,12 +61,15 @@ export class SyncStatusController {
 	async handleManualSync() {
 		try {
 			await this.coordinator.authController.ensureKeyUnlocked();
-			const res = await this.syncManager.syncPendingDiffs();
-			if (res.status === 'up_to_date') {
-				alert('同期対象の未同期データはありません（すべて最新です）');
-			} else {
-				alert(`差分同期完了: ${res.synced_count} 件のデータを同期しました`);
-			}
+			const res = await this.syncManager.syncBidirectional({ approveReclose: async (changes, months) => {
+				if (changes.some(tx => !tx.is_deleted && tx.target_month <= months.at(-1) && (tx.amount_pending || tx.status !== 'confirmed'))) {
+					alert('締め済み月の変更には金額入力済みの確定明細が必要です。'); return false;
+				}
+				return confirm(`${months.join('、')} は別端末でも月締め済みです。未同期の変更を反映して再月締めしますか？\n取消時は手元の未同期変更を保持します。`);
+			} });
+			if (res.status === 'already_syncing') alert('同期処理中です。完了をお待ちください。');
+			else if (res.status === 'approval_required') alert(`再月締めは未実行です。手元の変更は未同期として保持しています。受信 ${res.downloaded_count} 件 / 未同期 ${res.pending_count} 件`);
+			else alert(`差分同期完了: 送信 ${res.synced_count} 件 / 受信 ${res.downloaded_count} 件 / 未同期 ${res.pending_count} 件`);
 		} catch (err) {
 			alert(`同期に失敗しました: ${err.message}`);
 		} finally {

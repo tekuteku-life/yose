@@ -172,11 +172,21 @@ export class TransactionEditController {
 		const paymentTx = groupTxs.find(t => t.amortization_meta?.is_payment_record);
 		const amortTxs = groupTxs.filter(t => t.type === 'expense' && t.amortization_meta && !t.amortization_meta.is_payment_record);
 		const cascade = paymentTx && amortTxs.length > 0 && groupTxs.length > 1 && confirm('この取引は前払分割計上の一部です。\n関連する明細の費目・メモ・タグと、変更された金額を連動更新しますか？\n（キャンセル: この明細のみ修正）');
+		const amountChanged = editAmount !== tx.amount;
+		const amountPending = Boolean(tx.amount_pending && !(amountChanged && editAmount > 0));
+		const ownChanges = { id, date: editDate, target_month: editDate.slice(0, 7), status: editStatus, amount_pending: amountPending, ...movement };
+		const prospective = (cascade ? groupTxs : [tx]).map(record => ({
+			...record,
+			...(cascade && amountChanged ? { amount_pending: false } : {}),
+			...(record.id === id ? ownChanges : {})
+		}));
+		const approved = await this.coordinator.approveClosedChanges(prospective, cascade ? groupTxs : [tx]);
+		if (approved === null) return;
 		let changedTxs;
 
 		if (cascade) {
 			/** @type {Record<string, any>} */
-			const updates = { memo: editMemo, tags: editTags };
+			const updates = { memo: editMemo, tags: editTags, reclose_approved_months: approved };
 			if (editAmount !== tx.amount) {
 				updates.total_amount = tx.amortization_meta?.is_payment_record ? editAmount : editAmount * amortTxs.length;
 			}
@@ -189,6 +199,7 @@ export class TransactionEditController {
 				});
 			}
 			await this.db.updateInstallmentGroup(tx.group_id, updates, null, {
+				amount_pending: amountPending,
 				id,
 				date: editDate,
 				target_month: editDate.slice(0, 7),
@@ -202,6 +213,8 @@ export class TransactionEditController {
 			changedTxs = await this.db.getTransactionsByGroupId(tx.group_id);
 		} else {
 			Object.assign(tx, {
+				amount_pending: amountPending,
+				reclose_approved_months: approved,
 				...movement,
 				date: editDate,
 				target_month: editDate.slice(0, 7),
@@ -244,7 +257,10 @@ export class TransactionEditController {
 	async handleEditDelete(id) {
 		const tx = await this.db.getTransaction(id);
 		if (!tx) return;
+		const approved = await this.coordinator.approveClosedChanges([{ ...tx, is_deleted: true }], [tx]);
+		if (approved === null) return;
 		tx.is_deleted = true;
+		tx.reclose_approved_months = approved;
 		tx.updated_at = new Date().toISOString();
 		tx.sync_status = 'unsynced';
 		await this.db.putTransaction(tx);
@@ -257,8 +273,8 @@ export class TransactionEditController {
 
 		if (isPastClosed && this.syncManager?.gasUrl && this.syncManager?.privateKey) {
 			try {
-				await this.syncManager.sendRetroactiveUpdate(tx);
-				alert('過去締め月の明細を削除し、スナップショットを再計算しました');
+				const response = await this.syncManager.sendRetroactiveUpdate(tx);
+				alert(response.conflict ? '別端末の新しい変更を反映したため、削除は行いませんでした。' : '過去締め月の明細を削除し、スナップショットを再計算しました');
 			} catch (err) {
 				alert(`遡及削除エラー: ${err.message}`);
 			}

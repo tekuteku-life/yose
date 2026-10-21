@@ -5,6 +5,54 @@
 
 import { formatDate, getLastDayOfMonth } from './date_utils.js';
 
+/** 確認できる月末残高と確定明細から資産推移を作る。未取得の過去日を補完しない。 */
+export function buildAssetHistory(snapshot = {}, transactions = [], accounts = [], options = {}) {
+	const today = options.today || formatDate(new Date());
+	const mode = options.mode || 'month';
+	const month = options.month || today.slice(0, 7);
+	const monthEnd = value => {
+		const date = new Date(`${value}-01T00:00:00Z`); date.setUTCMonth(date.getUTCMonth() + 1, 0);
+		return date.toISOString().slice(0, 10);
+	};
+	const histories = { ...(snapshot.monthly_summaries || {}) };
+	if (snapshot.last_closed_month && !histories[snapshot.last_closed_month]?.closing_balances) histories[snapshot.last_closed_month] = { closing_balances: snapshot.account_balances || {} };
+	const anchors = Object.keys(histories).filter(key => histories[key]?.closing_balances).sort();
+	const knownTransactions = transactions.filter(tx => !tx.is_deleted && tx.status === 'confirmed' && !tx.amount_pending);
+	const earliest = [...anchors.map(key => monthEnd(key)), ...knownTransactions.filter(tx => !snapshot.last_closed_month || tx.target_month > snapshot.last_closed_month).map(tx => tx.date)].sort()[0] || today;
+	let start = mode === 'month' ? month + '-01' : mode === 'year' ? `${options.year || today.slice(0, 4)}-01-01` : mode === 'range' ? options.start : earliest;
+	let end = mode === 'month' ? monthEnd(month) : mode === 'year' ? `${options.year || today.slice(0, 4)}-12-31` : mode === 'range' ? options.end : today;
+	const valid = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') && Number.isFinite(Date.parse(value)) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
+	if (!valid(start) || !valid(end) || start > end) throw new Error('期間の開始日・終了日を確認してください。');
+	end = end < today ? end : today;
+	const dates = new Set();
+	const days = (Date.parse(end) - Date.parse(start)) / 86400000;
+	if (mode === 'month' || (mode === 'range' && days <= 62)) {
+		for (let date = new Date(start + 'T00:00:00Z'); date.toISOString().slice(0, 10) <= end; date.setUTCDate(date.getUTCDate() + 1)) dates.add(date.toISOString().slice(0, 10));
+	} else {
+		if (mode === 'range') dates.add(start);
+		for (let date = new Date(start.slice(0, 7) + '-01T00:00:00Z'); date.toISOString().slice(0, 10) <= end; date.setUTCMonth(date.getUTCMonth() + 1)) {
+			const last = monthEnd(date.toISOString().slice(0, 7));
+			if (last >= start && last <= end) dates.add(last);
+		}
+		if (end >= start) dates.add(end);
+	}
+	let missing = false;
+	const points = [];
+	for (const date of [...dates].sort()) {
+		const target = date.slice(0, 7);
+		const exact = date === monthEnd(target) && histories[target]?.closing_balances;
+		if (!exact && snapshot.last_closed_month && target <= snapshot.last_closed_month && !options.archiveMonths?.includes(target)) { missing = true; continue; }
+		const anchor = anchors.filter(key => monthEnd(key) <= date).at(-1);
+		const balances = exact ? { ...exact } : anchor ? { ...histories[anchor].closing_balances } : Object.fromEntries(accounts.map(account => [account.id, Number(account.initial_balance) || 0]));
+		if (!exact) for (const tx of knownTransactions) {
+			if (tx.date <= date && (!anchor || tx.target_month > anchor)) applyTxToBalances(balances, tx.type, tx.account_id, tx.to_account_id, Number(tx.amount) || 0);
+		}
+		const totals = calculateTotalAssetSummary(balances, accounts);
+		points.push({ date, net_assets: totals.net_assets, liquid_assets: totals.liquid_assets, investment_assets: totals.investment_assets, liabilities: totals.liabilities });
+	}
+	return { mode, points, notice: missing ? '日別明細を取得できていない過去期間は、確認できる月末残高のみ表示している。手動同期で履歴を取得できる。' : points.length ? '' : '表示できる確定履歴はない。' };
+}
+
 /**
  * Calculate balances and summaries from snapshot and transactions
  * @param {Record<string, any>} snapshot - summary_snapshot.json

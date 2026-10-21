@@ -164,7 +164,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 
 4. **月締め処理と遡及修正**
-* 月締め実行時、対象月の未確定（`planned`）レコードがあれば確認ダイアログを出して `confirmed` に揃えた上でGASへ送信する。
+* 月締め実行時、対象月の未確定（`planned`）レコードがあれば確認ダイアログを出し、承認した集合・版をGASへ送信する。GASで一致検証後に確定・保存し、成功後にローカルへ反映する。金額未入力は締めない（3.43.7）。
 * GASは対象月の明細を `/archives/YYYY-MM.json` に書き出し、`summary_snapshot.json` を更新してPWAへ返却する（来月以降の `planned` レコードや分割償却レコードは `pending_diffs.json` およびローカルDBに残す）。
 * 締め終わった過去月のデータを後から追加・修正・論理削除（`is_deleted: true`）した場合は、GASが該当月のアーカイブファイルを再マージし、その月から最新締め月までのスナップショットを連鎖的に再計算する。
 
@@ -202,7 +202,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 2. **編集可能項目**
    * 取引種別（支出/収入/口座振替）、日付、金額（税抜電卓連携可）、決済口座、振替先口座、計上費目・中項目、実態費目・中項目、メモ、タグ、ステータス（確定 `confirmed` / 予定 `planned`）。
 3. **過去締め月データの遡及更新連携**
-   * 修正した取引の計上月（`target_month`）がすでに月締め済み（`target_month <= last_closed_month`）である場合、保存時に自動的に `retroactive_update` アクションとしてGASへ送信し、アーカイブの更新とスナップショットの連鎖再計算を実行する。
+   * 修正した取引の計上月（`target_month`）がすでに月締め済み（`target_month <= last_closed_month`）である場合、保存前の再締め確認で承認後、`retroactive_update` アクションとしてGASへ送信し、アーカイブの更新とスナップショットの連鎖再計算を実行する。
    * 未締めの当月または未来月のデータである場合は、ローカルDB更新後に通常差分同期（`push_diff`）を行う。
 4. **削除操作**
    * モーダル内または明細行から削除（論理削除 `is_deleted: true`）が可能。過去締め月データの場合は同様に遡及再計算をトリガーする。
@@ -716,6 +716,47 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 ---
 
+### 3.43 パスキー互換性・日常操作・双方向同期の改善
+
+本節は2026年10月21日の追加要望による変更であり、競合する旧記述に優先する。パスキーのPIN併用は利用者が選択済みである。
+
+1. **PRFを使用しないパスキーとPIN**
+   * 登録・認証は通常のWebAuthnで行い、PRF拡張、認証器種別・transport・hintsの限定を送らない。ユーザー操作を起点とし、ランダムなuser handleをデータ領域ごとに保存して再登録にも使用する。
+   * WebAuthn公開鍵・アルゴリズム・credential ID・user handle・RP ID・originを保存する。clientDataのtype・単回challenge・origin、RP ID hash、UP/UV、署名、返却IDを検証する。GAS通信のEd25519鍵とは分離する。
+   * パスキー認証後もDBの復号はPINで行う。PIN単独の解除・復旧も可能である。credential ID・署名値を暗号鍵へ転用せず、DMK・秘密鍵の平文/Base64永続化を禁止する。
+   * 旧PRFのvault・共有bundle・解除UI・暗号ヘルパーを廃止する。既存PINパッケージを復号してデータを読めることを確認してから旧保存値を削除し、パスキーは公開鍵付きで再登録する。誤PIN・取消では鍵を生成・変更しない。パスキー単独の端末間DB復旧を保証しない。
+   * 設定の鍵管理詳細を開いた状態は再描画でも保持し、非同期の初期描画・同期更新が登録操作中のコントロールを隠さない。
+2. **更新・戻る・離脱確認**
+   * 初期化後の更新・タブ終了・別ページへの離脱にはbeforeunloadでブラウザ標準確認を要求する。文言や表示可否はブラウザの制約に従う。beforeunloadでは鍵を消去せず、取消後も入力と暗号セッションを保持する。鍵参照は実際のpagehideで消去し、BFCache復帰時も再認証する。
+   * 戻る操作には同一URLの履歴ガードと確認を設け、取消時は履歴位置と入力を保持し、承認時のみ元の履歴へ戻る。アプリ自身が実行する更新は二重確認を避ける。
+3. **金額未入力の予定登録**
+   * 空欄と明示的な0・不正値を区別する。通常の支出・収入・振替、立替（両額空欄）、回収、前払総額、ポイント購入総額が未入力の場合、確認承認後に0円の予定として保存し、`amount_pending: true` を付ける。取消時は保存・入力消去を行わない。
+   * 特殊モードの構造・関連ID・前払日程を維持し、未入力から作成した明細はすべて予定とする。立替は自己負担・立替の予定を作成し、回収額未入力では元の立替を精算済みにしない。ポイント総額未入力かつ利用額ありの場合は矛盾として拒否する。
+   * 一覧には「金額未入力」を表示する。編集で有効な金額を入力したときに未入力フラグを解除する。前払の連動金額更新では再計算された親子全件を解除し、メモのみの編集と単独編集の他明細では保持する。未入力予定の月締めは確認承認でも拒否する。未入力の立替元のワンクリック精算も拒否する。
+4. **資産推移の期間指定**
+   * 資産タブに月・年・期間指定・すべての選択を設ける。月は日別、年は月末、期間指定は開始日・終了日を含む残高、すべては記録開始から本日までの月末残高を表示する。未来の確定取引と予定は実績へ含めない。
+   * 履歴スナップショットの月末残高を基点とし、基点後の確定明細だけを加算する。期間開始前の残高を引き継ぎ、振替・負債・投資口座を反映する。履歴のない過去日を0円で補完せず、取得できる月末残高のみ表示し、その制約を表示する。開始日が終了日より後の場合はエラーとし、前の表示を維持する。
+   * 既存の資産構成・口座別残高表を維持し、独立した折りたたみ可能な資産推移カードを追加する。
+   * 月表示の前後移動は1か月、年表示の前後移動は1年とし、期間指定の開始・終了日は独立して保持する。資産の期間と収支の集計粒度を混同せず、資産タブでは資産の表示期間だけで移動幅を判定する。
+5. **横スワイプによるタブ移動**
+   * 表示順（入力・収支・予算・資産・設定）に隣接移動し、両端で循環しない。1本指の横優勢・閾値以上の操作だけを受け付け、縦スクロールを妨げない。
+   * 入力欄、選択欄、ボタン、リンク、チャート、横スクロール領域、モーダル、画面端のブラウザ操作から開始したスワイプは除外する。取消・複数指では遷移しない。タブクリックと同じ表示更新経路を使用する。
+6. **手動の双方向同期**
+   * 手動同期は単一の排他区間で取得・マージ・アップロード・再取得を実行する。GASのfetch_stateへ全月のアーカイブ明細と取得済み月一覧を追加し、締め済み明細・削除も別端末へ反映する。0件のローカル差分でもダウンロードする。
+   * 同一IDはupdated_atが新しい版を採用し、同時刻ではローカル未同期版を優先する。取得待機中や暗号化待機中の再編集はDB内比較・置換で保護する。サーバーも古い送信で新しい版を上書きしない。別IDの変更と削除は双方を保持する。同期結果は送信件数・受信件数・残る未同期件数を区別する。
+   * 再締め承認の付与も、確認対象の全内容と一致する版だけへDB内比較・置換で行う。確認待機中・承認保存用暗号化中に変わった明細へ承認を流用せず、最新版を未同期として保持して再確認を求める。直接の遡及送信もサーバーの競合版を同じマージ処理へ渡し、拒否された版を同期済みにしない。
+   * マスタの明示送受信は既存の設定操作を維持する。明細の手動同期では端末固有の表示設定・認証情報をリモートマスタで上書きしない。スナップショットは取得後に更新する。通信失敗時は保存済みのローカル変更と未同期状態を保持し、処理段階を通知する。
+7. **未確定のある月締め**
+   * 対象月の予定件数を表示して確定・締めの承認を求め、取消時はDB・GASを変更しない。金額未入力は先に補完するよう通知する。通常の予定はサーバーで確認付きの確定・アーカイブ保存を行い、成功後にローカルへ反映する。通信失敗でローカルだけ確定しない。
+   * 承認した予定のIDと、ローカル同期状態等を除いた全内容の正規化文字列を `approved_planned` に渡す。GASの排他区間で現在の予定集合・各版と完全一致するか検証し、追加・変更・削除があれば書き込み前に拒否して再取得・再確認を要求する。GASも金額未入力を拒否する。既存月の再締めは当月以降の残高を連鎖再計算し、last_closed_monthを古い月へ戻さない。
+8. **締め済み明細変更と再締め確認**
+   * 編集・削除・新規登録で締め済み月へ影響する場合、保存前に対象月を表示して「変更を保存して再月締め」を確認する。取消時は変更全体を中止し、編集内容を保持する。前払連動では影響する全締め月をまとめて確認する。
+   * 承認後の既存retroactive_updateによるアーカイブ更新と後続残高再計算を再締め処理として使用する。古い月へ通常のclose_monthを重ねない。通信失敗では承認済みのローカル変更を未同期として保持し、手動・自動再試行で反映する。
+   * 承認した締め月の集合をローカル明細の `reclose_approved_months` として保持する。GASも移動元・移動先・実在する同IDの全締め月に対する承認を検査する。差分送信が締め済み月へ到達した場合も書き込み前に拒否する。別端末の締めを後から取得した場合、未承認のローカル変更は未同期のまま保持し、手動同期で再締め確認を求める。ここで取消しても既存の未同期変更は破棄しない。通常の保存前取消とは異なる。締め済み月への定期予定生成は、予定を保存できないため説明して拒否し、DBを変更しない。
+   * 締め済み月に新たに保存する有効明細は金額入力済み・確定のみとする。未入力・予定のままの登録や編集は説明して拒否し、通常月締めの検査を迂回させない。削除は未入力予定でも承認後に可能である。
+
+---
+
 ## 4. 同期トリガー・通信・セキュリティ要件
 
 ### 4.1 ローカルからGoogle Driveへの同期トリガー
@@ -724,7 +765,8 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 1. **アプリ非表示・バックグラウンド移行時 (`visibilitychange`)**: 未同期データがある場合、`fetch(..., { keepalive: true })` で非同期送信する。
 2. **オンライン復帰時 (`online`)**: オフライン環境で入力された未同期データを自動送信する。
-3. **手動同期ボタン押下時および月締め実行時**: 即座に同期を実行する。
+3. **手動同期ボタン押下時**: 取得・マージ・アップロード・再取得の双方向同期を実行する。
+4. **月締め実行時**: 未同期明細を先行送信し、予定の集合・版承認を検証して月締めを実行する。
 
 ### 4.2 CORS回避プロトコル
 
@@ -740,8 +782,8 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
   * **データベースマスタ鍵 (DMK: Database Master Key)**: `crypto.getRandomValues(new Uint8Array(32))` による256ビットの高エントロピー対称暗号鍵。
 * **WebAuthn（生体認証／Passkey）連携**:
   * ブラウザの `navigator.credentials.create()` を用いて端末の生体認証（Touch ID, Face ID, Windows Hello, 指紋センサー等）を登録。
-  * DMKおよびEd25519秘密鍵は、WebAuthn認証資格情報にバインドされて保護される。
-  * さらにバックアップ・復旧手段として、ユーザー指定のPINコード（`PBKDF2` 100,000回ストレッチング ＋ `AES-GCM-256`）による多重暗号化ラップ（`wrapped_keys_pin`）を保持する。
+  * パスキーは通常WebAuthnによる認証に使用し、DMKおよびEd25519秘密鍵はPINで暗号化して保護する。
+  * DB復号および復旧手段として、ユーザー指定のPINコード（`PBKDF2` 100,000回ストレッチング ＋ `AES-GCM-256`）による多重暗号化ラップ（`wrapped_keys_pin`）を保持する。
 
 2. **データ全体のAES-GCM-256暗号化（At-Rest暗号化）**
 * ローカルストレージ（IndexedDB）に格納されるすべての機微データ：
@@ -753,7 +795,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 
 3. **起動時画面遷移（WebAuthn認証 → メモリ復号 → アプリ本編表示）**
 * ページ読み込み時は、全画面の「セキュリティロック画面（Auth Screen）」を最前面に表示し、家計データやナビゲーションは一切レンダリングしない。
-* 利用者が「生体認証で解除 (WebAuthn)」を実行（またはPIN入力）すると、認証成功によりメモリ上にDMKがアンラップ展開される。
+* 利用者が「生体認証で解除 (WebAuthn)」を実行（またはPIN入力）すると、パスキーによる認証後もPINを入力し、PIN復号成功時にメモリ上へDMKを展開する。
 * DMKを用いてIndexedDBからデータをメモリ上に復号・ロードし、ロック画面を解除してアプリ本編（入力・集計・設定画面）へ遷移する。
 * ページ更新（F5）やタブクローズ時は、メモリ上のDMKおよびEd25519平文秘密鍵は完全に破棄され、ゼロトラストの安全状態（自動ロック）に復帰する。
 
@@ -773,27 +815,13 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
 * **署名検証**: `{ action, timestamp, payload }` をEd25519署名し、GAS側でタイムスタンプ乖離（±5分以内）と署名の有効性を検証。
 * **排他制御**: GASの `doPost(e)` 処理全体を `LockService.getScriptLock().waitLock(30000)` で排他制御し、`finally` で確実に解放する。
 
-### 4.4 決定論的User IDによるWebAuthn・Passkey（1Password等）上書き・更新およびPRF拡張暗号化鍵管理設計
+### 4.4 通常WebAuthnとPINによる鍵管理
 
-1. **背景と課題（無限増殖・上書き不可および平文保存の根本解消）**
-   * FIDO2 / WebAuthn仕様および1Password等のパスキーマネージャでは、同一ドメインにおけるアカウント資格情報を `(rp.id, user.id)` のタプルによって一意に識別・インデックスする。
-   * 従来実装では資格情報生成（`registerWebAuthnCredential`）の呼び出しごとにランダムな16バイト（`getRandomValues(new Uint8Array(16))`）を `user.id` として割り当てていたため、パスキーマネージャが新規アカウントと誤認し、再登録のたびに新規パスキーエントリが無限に累積する課題が生じていた。
-   * また、IndexedDBの `security_keys` ストアに保存される `webauthn_vault`（DMKおよびEd25519秘密鍵の格納オブジェクト）が平文（Base64エンコードのみ）で保存されていた場合、ブラウザの開発者ツール（DevTools）から誰でも簡単にDMKを取り出せてしまい、At-Rest暗号化の境界が損なわれる重大な脆弱性リスクが存在した。
+登録・認証と暗号鍵保護を分離する。PRF拡張と旧vault保存は廃止し、詳細は3.43.1に定義する。登録したWebAuthn公開鍵で署名・challenge・origin・RP ID・UP/UVを検証した後も、DMKとGAS署名鍵の復号にはPINを必要とする。PIN変更・Ed25519鍵再生成はPIN暗号化パッケージを更新し、秘密情報をWebAuthn保存値へ複製しない。
 
-2. **決定論的・永続的User ID (`user.id`) の導入**
-   * 同一アプリ（同一インストール・ドメイン）において、常に固定・決定論的なUser ID（固定バイト列 `new TextEncoder().encode('yose_passkey_user_v1')` またはIndexedDB `security_keys` に永続化された `webauthn_user_id`）を `nav.credentials.create()` の `user.id` として提供する。
-   * これにより、1PasswordやiCloudキーチェーン、Googleパスワードマネージャー等の主要パスキー管理ツールが同一ユーザーであることを正確に検知し、再登録時に**「既存のよせあつめ家計簿パスキーを上書き・更新しますか？」という更新ダイアログを確実に提示**させる。
+user handleはデータ領域ごとの乱数を一度だけ生成・保存し、再登録で再利用する。パスキーマネージャの保存・更新ダイアログはブラウザと提供元が決定し、特定UIの表示を保証しない。
 
-3. **WebAuthn PRF（Pseudo-Random Function）拡張によるVaultの暗号化保護**
-   * `webauthn_vault` の平文保存を根本解決するため、WebAuthnの **PRF拡張（`extensions: { prf: ... }`）** を採用する。
-   * パスキー登録・認証時、パスキー固有の32バイトシークレット出力を取得し、Web Crypto APIにより `AES-GCM-256` 鍵としてインポートする。
-   * メモリ上の `dmk`（DB暗号化鍵）および `privateKey`（Ed25519秘密鍵）をこのPRF由来AES鍵で暗号化し、暗号文・IV・ソルトのみを `webauthn_vault` に保存する。
-   * これにより、DevToolsや物理ダンプから `security_keys` を閲覧されても暗号化鍵は一切漏洩せず、ゼロトラストなセキュリティ境界が完全に保証される。PRF非対応環境ではWebAuthnによる平文保存を行わず、安全なPIN保護への誘導を行う。
-
-4. **ゼロトラストDMK・秘密鍵同期ライフサイクル（PIN変更・鍵再生成・平文復帰の廃止）**
-   * **PIN変更（`#btn-save-pin`）**: 現在メモリ上の `this.db.encryptionKey` (DMK) と `this.authController.privateKey` の双方を取得し、`encryptMasterKeysWithPin` で `master_keys_package` をアトミックに再暗号化更新する。WebAuthn登録済みの場合は `webauthn_vault` も同時更新する。
-   * **Ed25519鍵ペア再生成（`#btn-generate-key`）**: 新規Ed25519鍵ペアの生成後、即座にメモリ上のDMKと新秘密鍵をセットにして `master_keys_package`（および `webauthn_vault`）を再ラップ更新し、リロード時の先祖返り・鍵消失を根絶する。
-   * **平文復帰機能の廃止**: ゼロトラストAt-Rest暗号化設計において、DB全体がDMKで暗号化されているため、秘密鍵だけ平文に戻してもDB自体の整合性が維持できず破綻する。危険かつ設計矛盾であった「PIN保護解除（平文に戻す）」操作を完全に廃止し、明確な「PIN変更」機能へと統一する。
+根拠は[W3C WebAuthn登録・認証検証手順](https://www.w3.org/TR/webauthn-3/#sctn-rp-operations)および[PRF拡張の用途](https://www.w3.org/TR/webauthn-3/#prf-extension)である。
 
 ### 4.5 設定画面におけるセキュリティ・鍵管理操作の明確なグルーピングと視覚的分離
 
@@ -808,7 +836,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
        * 日常操作: `[🔒 今すぐ再ロック]`, `[🔓 PINでロック解除]`
        * ※ 全データゼロトラスト暗号化（DMK保護）を維持するため、平文復帰ボタンは完全排除。
      * **② 👆 WebAuthn・Passkey連携管理 (WebAuthn / Passkey - 1Password等)**:
-       * 状態表示（設定済 / 未登録）および1Password上書き更新・PRF拡張暗号化に関する案内文
+       * 状態表示（設定済 / 未登録）および通常WebAuthn・PIN併用に関する案内文
        * アクションボタン: `[👆 WebAuthn (Passkey) を上書き・再登録]`
        * 連携解除ボタン: `[🗑️ WebAuthn登録を解除]`
      * **③ ☁️ GAS登録用 Ed25519 公開鍵管理 (GAS Public Key)**:
@@ -831,7 +859,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
      * コンポーネント間連携の調停（イベント通知 ➔ 画面全体の更新 `refreshAllViews()` や特定モーダルの展開）。
      * **テーマ管理と起動時相殺調停**: テーマ設定（`system` / `light` / `dark`）の一元管理と即時適用（`applyTheme`）、およびアプリ起動・データ更新時におけるクレジットカード自動引き落とし相殺処理（`checkCreditCardAutoSettlement`）の呼び出し調停。
    * **認証・セキュリティゲート (`js/ui/auth_controller.js`) - `AuthController`**:
-     * 起動時ロック画面（`#auth-screen`）、WebAuthn PRF暗号化/PIN認証ゲートの制御、DMK＆秘密鍵アトミック再ラップ、アクティブセッション破棄。
+     * 起動時ロック画面（`#auth-screen`）、通常WebAuthn・PIN認証ゲートの制御、DMK＆秘密鍵アトミック再ラップ、アクティブセッション破棄。
    * **取引入力制御 (`js/ui/tx_input_controller.js`) - `TransactionInputController`**:
      * 取引入力フォーム（通常・ポイント・定期・前払・立替の5モード）、動的フィールド切替、取引種別（`#input-type` 支出/収入）に応じた大項目費目の動的フィルタリング。
      * **タグチップUI**: 過去履歴サジェスト（`<datalist>`）、確定タグのチップバッジ化、`×` ボタン・Backspaceによる削除。
@@ -857,7 +885,7 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
      * マスタ管理タブ、口座・大項目・中項目・定期ルール・祝日の各一覧描画、追加・編集モーダル。
      * **クレジットカード引き落とし設定**: 口座編集モーダルでの締め日（`closing_day`）、引き落とし日（`debit_day`）、引き落とし月オフセット（`debit_month_offset`）、引き落とし元口座（`debit_account_id`）の入力・保存UI。
    * **設定・環境管理 (`js/ui/settings_controller.js`) - `SettingsController`**:
-     * 設定タブ（`#tab-settings`）、GAS接続設定、3分割鍵管理サブカード（PIN変更/WebAuthn PRF暗号化/GAS公開鍵）、年間予算スケーラブルUI・自動試算反映。
+     * 設定タブ（`#tab-settings`）、GAS接続設定、3分割鍵管理サブカード（PIN変更/通常WebAuthn認証/GAS公開鍵）、年間予算スケーラブルUI・自動試算反映。
      * **テーマ設定UI**: `system`（OS追従）/ `light` / `dark` の選択コントロールおよび即時切り替え。
      * バックアップJSONエクスポート／インポート（堅牢なJSONパース）。
    * **同期・ネットワーク状態監視 (`js/ui/sync_status_controller.js`) - `SyncStatusController`**:
@@ -962,45 +990,11 @@ flowchart TD
 5. **PWA Service Worker (`sw.js`) キャッシュ整合性更新**
    * `CACHE_NAME` を `'yose-cache-v1.3.0'` に更新し、`js/db/*.js`（4ファイル）および `js/logic/*.js`（4ファイル）の計8モジュールを `ASSETS_TO_CACHE` に追加することで、オフライン起動時のモジュール解決を100%保証する。
 
-### 4.8 マルチデバイス環境における同一Passkey共有アーキテクチャ（PRF自己暗号化＆Ed25519自己署名バンドル）
-* **背景・課題**:
-  * 従来の実装では、`webauthn_vault` が各ブラウザ固有の IndexedDB `security_keys` ストアにのみ保存されていたため、マルチデバイス環境（PCとスマートフォン等）ではデバイスごとに個別のパスキーを登録するか、毎回PINとバックアップ復元を組み合わせる必要があった。
-  * ユーザー要望として「最初に1つパスキーを作ったら、他のデバイスでも（1Password / iCloudキーチェーン / Googleパスワードマネージャー等の同期パスキー機能を通じて）同じパスキーをそのまま使いたい。ただし、セキュリティを犠牲にするなら今のままでよい」という要件が挙げられた。
-* **ゼロトラストを1ミリも犠牲にしない暗号学的解決策（PRF Self-Encryption + Ed25519 Self-Signature）**:
-  1. **WebAuthn PRF 拡張によるハードウェア/パスキー束縛鍵 (`prfKeyRaw`) の導出**:
-     * パスキー登録・認証時に WebAuthn Level 3 `prf` 拡張（`extensions: { prf: { eval: { first: DEFAULT_WEBAUTHN_PRF_SALT } } }`）を実行し、パスキー内部の秘密鍵から決定論的な256-bit疑似乱数出力（`prfKeyRaw`）を取得する。
-     * 1PasswordやiCloudキーチェーン等で同期された同一パスキーは、同一RP ID（ドメイン）上で認証された際にのみ、どのデバイスでも全く同一の `prfKeyRaw`（32 bytes）を出力する。一方、攻撃者が `master_config`（JSONやGAS上のシート）を盗み見ても、正規ユーザーの生体認証とパスキー秘密鍵がなければ `prfKeyRaw` は絶対に得られない（総当たり耐性 $2^{256}$）。
-  2. **AES-GCM-256 自己暗号化ボールト (`vault`) の生成**:
-     * `prfKeyRaw` を HKDF-SHA256 に通して AES-GCM-256 鍵を導出し、ランダムな 96-bit IV を用いて `{ dmkRaw, privateKeyPkcs8 }`（DB暗号化マスター鍵とGAS通信用Ed25519秘密鍵）を認証付き暗号化する。
-     * **フォールバック禁止（フェイルセーフ原則）**: 認証器が PRF 拡張に非対応（`prfKeyRaw === null`）の場合は、平文や弱暗号でのバンドル出力を一切行わず、`synced_passkey_bundle` の生成をスキップする（「セキュリティを犠牲にするなら今のままでいい」という原則の厳格な遵守）。
-  3. **Ed25519 自己署名（Self-Signature）による改ざん・すり替え完全防止**:
-     * 暗号化された `vault`、`credentialId`、`publicKeyBase64`、`updated_at` を含む正規化JSON（`canonicalJsonStringify`）に対し、自身の Ed25519 秘密鍵（`privateKey`）で電子署名 `signature` を付与し、`master_config.synced_passkey_bundle` として保存する。
-     * これにより、万が一クラウド上の `master_config` が改ざんされたり、攻撃者の別パスキーにすり替えられたりしても、インポート・ロック解除時に公開鍵 `publicKeyBase64` による Ed25519 署名検証と AES-GCM 認証タグ検証の二重ゲートで即座に検知・拒絶される。
-  4. **他デバイス（Device B）でのシームレスなパスキー引き継ぎ・ロック解除フロー**:
-     * Device A でパスキー登録後、マスタ同期またはJSONエクスポートを行うと、`master_config.synced_passkey_bundle` が共有される。
-     * Device B でマスタJSONインポート（または初回セットアップ画面の「🔑 同期済みパスキー（バンドル）で復元・ロック解除」）を実行すると、ブラウザが同期パスキーを呼び出して WebAuthn PRF 認証を行い、署名検証＆復号に成功した瞬間に Device B のローカル `security_keys`（`webauthn_vault`）へ安全にプロビジョニングされ、同一の DMK と Ed25519 鍵ペアで即座に利用可能となる。
-  5. **1Password等のパスワードマネージャー（サードパーティPasskeyプロバイダ）選択互換性の保証**:
-     * **ユーザージェスチャ駆動（自動発火の廃止）**: ページロード直後の `setTimeout` による自動 `navigator.credentials.get()` 呼び出しは、ユーザージェスチャ（クリック操作）を伴わないため 1Password 等のブラウザ拡張機能にフックされず、OS標準のデバイスキー（Windows Hello / Touch ID 等）ダイアログへ強制フォールバックする原因となる。そのため、ロック画面でのパスキー認証は必ずユーザーの「🔑 パスキー（生体認証）でロック解除」ボタン押下（ユーザージェスチャ）を起点として実行する。
-     * **Discoverable Passkey（Resident Key）モードおよびマルチトランスポート対応**: `authenticateWithWebAuthn` において、`allowCredentials` にトランスポート指定のない単一IDを固定指定すると、ローカルデバイスキー以外の認証器（1Password内の同期パスキー等）がブラウザ側でフィルタ除外される場合がある。そのため、通常ログイン時は `allowDiscoverable: true`（`allowCredentials` 制約を設けない Discoverable Credential 要求、または全トランスポート `['internal', 'hybrid', 'usb', 'ble', 'nfc']` の明示）により、1Password・iCloudキーチェーン・Googleパスワードマネージャー・デバイスキーのすべてが選択肢として確実に提示されるようにする。また `registerWebAuthnCredential` においても `authenticatorAttachment` を制限せず（クロスプラットフォーム＆プラットフォーム双方を許容）、`residentKey: 'preferred'` を指定する。
+### 4.8 旧PRF共有バンドルからの移行
 
-```mermaid
-sequenceDiagram
-    participant DevA as "Device A (初回作成)"
-    participant Auth as "Synced Passkey (1Password / iCloud / Google)"
-    participant Sync as "master_config (GAS / Backup JSON)"
-    participant DevB as "Device B (2台目端末)"
+PRFによる鍵共有・パスキー単独のDB復旧は廃止する。既存データはPINで復号し、同じDMK・Ed25519鍵・暗号化明細を維持する。復号成功の確認前に旧保存値を消去しない。旧credential IDだけでは公開鍵検証できないため、通常WebAuthnとして再登録する。取消時もPINで利用を継続できる。
 
-    DevA->>Auth: "1. WebAuthn 登録/認証 + PRF eval(salt)"
-    Auth-->>DevA: "2. credentialId + prfKeyRaw (256-bit)"
-    DevA->>DevA: "3. HKDF + AES-GCM-256 で {dmkRaw, privateKeyPkcs8} を暗号化 (vault)"
-    DevA->>DevA: "4. Ed25519 秘密鍵で {credentialId, vault, publicKeyBase64, updated_at} に自己署名"
-    DevA->>Sync: "5. master_config.synced_passkey_bundle として保存・同期"
-    Sync-->>DevB: "6. master_config 取得 / JSONインポート"
-    DevB->>DevB: "7. Ed25519 自己署名を publicKeyBase64 で検証"
-    DevB->>Auth: "8. credentialId 指定で WebAuthn 認証 + PRF eval(salt)"
-    Auth-->>DevB: "9. 同一の prfKeyRaw (256-bit) を出力"
-    DevB->>DevB: "10. AES-GCM-256 で vault を復号し DMK & Ed25519秘密鍵をメモリ展開・ローカル保存"
-```
+1Password等によるパスキー自体の同期と、アプリの暗号鍵・DB復旧は別の機能である。別端末は自身のPIN保護された鍵を設定し、GASの署名鍵登録とデータ同期を行う。アプリはパスキー内部秘密鍵をエクスポートせず、認証情報・暗号鍵をマスタ同期へ含めない。
 
 ---
 
@@ -1798,13 +1792,13 @@ flowchart TD
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |
-| **4.4** | 決定論的User IDによるPasskey上書き・更新（1Password等重複防止） | `js/crypto.js`, `js/app.js`, `index.html` | - | `security_keys` (`webauthn_vault`) | `test/unit/crypto.test.js` |
+| **4.4** | 永続user handleによる通常Passkey登録とPIN保護 | `js/webauthn.js`, `js/ui/auth_controller.js`, `js/ui/settings_controller.js`, `index.html` | - | `security_keys` (`webauthn_credential`, `webauthn_user_id`, `master_keys_package`) | `test/unit/passkey_standard.test.js`, `test/ui/daily_usability.test.js` |
 | **4.5** | 設定画面におけるセキュリティ・鍵管理操作の明確なグルーピングと視覚的分離 | `js/app.js`, `index.html` | - | `security_keys` | `test/unit/crypto.test.js` |
 | **4.6** | モジュラーUIアーキテクチャ（AppCoordinator調停者 & 9コンポーネントコントローラー分割） | `js/app.js`, `js/ui/*.js`, `sw.js` | - | - | `test/system/e2e_scenario.test.js`, `npm test` |
 | **4.7** | コアエンジン・モジュラーアーキテクチャ（`js/db/` ストレージ層 & `js/logic/` 計算エンジン分割） | `js/db.js`, `js/db/*.js`, `js/logic.js`, `js/logic/*.js`, `sw.js` | - | - | `test/unit/db.test.js`, `test/unit/logic.test.js`, `test/unit/master_management.test.js` |
-| **4.8** | マルチデバイス環境における同一Passkey共有（PRF自己暗号化＆Ed25519自己署名バンドル） | `js/crypto.js`, `js/ui/auth_controller.js`, `js/ui/settings_controller.js`, `js/db/backup_merger.js`, `index.html` | `gas/Code.gs` (`update_master`) | `master_config` (`synced_passkey_bundle`) | `test/unit/crypto.test.js`, `test/unit/db.test.js` |
+| **4.8** | 旧PRF共有バンドルからPIN併用方式への移行 | `js/ui/auth_controller.js`, `js/db/backup_merger.js` | - | 旧vault・bundleを復号確認後に削除する | `test/ui/daily_usability_edges.test.js`, `test/unit/db.test.js` |
 
 ### 8.2 設計整合性および仕様乖離監査結果
 1. **仕様乖離の有無**: 要件定義（第1章〜第5章）と設計図・開発注意点（第6章〜第7章）の間で用語、データスキーマ、フローの乖離がないことを確認済み。
 2. **アカウント体系**: 口座タイプ（`cash`, `bank`, `credit_card`, `loan`, `receivable`, `prepaid`, `point`, `investment`, `insurance`, `asset`）がUI・DB初期マスタ・ロジック・設計図で完全に合致し、ローン負債および満期・定期出費連動型の保険口座が統合されている。
-3. **セキュリティモデル**: WebAuthn生体認証（PRF自己暗号化＆Ed25519自己署名によるマルチデバイスPasskey共有を含む）、全データAES-GCM暗号化（At-Rest）、Ed25519署名、タイムスタンプ検証、LockService排他制御、40,000字チャンク化がコードベースと設計書で1対1に対応している。
+3. **セキュリティモデル**: 通常WebAuthn認証とPIN併用、全データAES-GCM暗号化（At-Rest）、Ed25519署名、タイムスタンプ検証、LockService排他制御、40,000字チャンク化がコードベースと設計書で1対1に対応している。

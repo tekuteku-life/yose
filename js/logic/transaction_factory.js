@@ -245,6 +245,7 @@ export function createPrepaidAmortizationTransactions({
  * 2. Advance transfer from paying account to acc_receivable
  */
 export function createAdvancePaymentTransactions({
+	includeEmpty = false,
 	date,
 	payingAccountId,
 	selfAmount = 0,
@@ -263,7 +264,7 @@ export function createAdvancePaymentTransactions({
 	const records = [];
 
 	// Self expense
-	if (selfAmount > 0) {
+	if (selfAmount > 0 || includeEmpty) {
 		records.push({
 			id: generateUUID('tx_adv_self'),
 			group_id: groupId,
@@ -291,7 +292,7 @@ export function createAdvancePaymentTransactions({
 	}
 
 	// Advance loan to receivable
-	if (advanceAmount > 0) {
+	if (advanceAmount > 0 || includeEmpty) {
 		records.push({
 			id: generateUUID('tx_adv_loan'),
 			group_id: groupId,

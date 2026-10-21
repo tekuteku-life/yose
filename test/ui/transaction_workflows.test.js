@@ -63,17 +63,18 @@ describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 	}
 
 	for (const [mode, field, message] of [
-		['normal', '#input-amount', '金額を入力'],
-		['advance', '#input-self-amount', '自己負担額または立替額'],
-		['repay', '#input-repay-amount', '回収額'],
-		['prepaid', '#input-prepaid-total', '一括支払総額'],
-		['point', '#input-point-total', '購入総額']
+		['normal', '#input-amount', '金額未入力'],
+		['advance', '#input-self-amount', '金額未入力'],
+		['repay', '#input-repay-amount', '金額未入力'],
+		['prepaid', '#input-prepaid-total', '金額未入力'],
+		['point', '#input-point-total', '金額未入力']
 	]) {
-		it(`rejects empty amounts in ${mode} mode without saving or clearing the memo`, async () => {
+		it(`preserves input when unknown amount registration in ${mode} is cancelled`, async () => {
 			const d = fixture.driver;
 			await d.click(`.mode-tab-btn[data-mode="${mode}"]`);
 			await d.fill(field, '');
 			await d.fill('#input-memo', '未保存メモ');
+			await d.setConfirm(false);
 			await d.click('#btn-save-tx');
 			await waitForDialog(d, message);
 			assert.equal((await records(d)).length, 0);
@@ -110,6 +111,7 @@ describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 			assert.equal(txs[0].related_tx_id, txs[1].id);
 			assert.equal(txs[1].related_tx_id, txs[0].id);
 			assert.ok(txs.every(t => t.is_point_split === true));
+			await d.waitFor('document.querySelectorAll("#recent-tx-list .badge-point").length === 2');
 			assert.equal(await d.evaluate('document.querySelectorAll("#recent-tx-list .badge-point").length'), 2);
 			if (pointAccount) {
 				assert.equal(txs.reduce((s, t) => s + t.amount, 0), 1200);

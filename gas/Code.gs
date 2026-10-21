@@ -308,10 +308,6 @@ function loadJsonFile(fileName, defaultContent = {}) {
 		const sheetName = safeSheetName(fileName);
 		let sheet = (typeof ss.getSheetByName === 'function') ? ss.getSheetByName(sheetName) : null;
 		if (!sheet) {
-			if (typeof ss.insertSheet === 'function') {
-				sheet = ss.insertSheet(sheetName);
-				saveJsonToSheet(sheet, defaultContent);
-			}
 			return defaultContent;
 		}
 		return loadJsonFromSheet(sheet, defaultContent);
@@ -544,192 +540,134 @@ function handleAction(action, payload) {
 	}
 }
 
-function handleFetchState() {
-	const master = loadJsonFile('master_config.json', { schema_version: 2 });
-	const snapshot = loadJsonFile('summary_snapshot.json', {
-		schema_version: 2,
-		last_closed_month: null,
-		account_balances: {},
-		external_assets: [],
-		monthly_summaries: {}
-	});
-	const pending = loadJsonFile('pending_diffs.json', { schema_version: 2, transactions: [] });
+function readArchives() {
+	return getStorageSpreadsheet().getSheets().map(sheet => sheet.getName()).filter(name => /^arch_\d{4}-\d{2}$/.test(name)).sort().map(name => ({ month: name.slice(5), ...loadJsonFile(`archives/${name.slice(5)}.json`, { transactions: [] }) }));
+}
 
+function transactionContentVersion(transaction) {
+	const content = { ...transaction };
+	delete content.sync_status; delete content.previous_target_month; delete content.reclose_approved_months;
+	return canonicalJsonStringify(content);
+}
+
+function storedTransaction(transaction) {
+	const stored = { ...transaction };
+	delete stored.previous_target_month; delete stored.reclose_approved_months;
+	return stored;
+}
+
+function newerTransaction(a, b) {
+	return (Date.parse(a.updated_at || '') || 0) > (Date.parse(b.updated_at || '') || 0);
+}
+
+function handleFetchState() {
+	const archives = readArchives();
 	return {
 		success: true,
-		master_config: master,
-		snapshot: snapshot,
-		pending_diffs: pending.transactions || []
+		master_config: loadJsonFile('master_config.json', { schema_version: 2 }),
+		snapshot: loadJsonFile('summary_snapshot.json', { schema_version: 2, last_closed_month: null, account_balances: {}, monthly_summaries: {} }),
+		pending_diffs: loadJsonFile('pending_diffs.json', { transactions: [] }).transactions || [],
+		archived_transactions: archives.flatMap(archive => archive.transactions || []),
+		archive_months: archives.map(archive => archive.month)
 	};
 }
 
 function handleUpdateMaster(payload) {
-	if (!payload || !payload.master_config) {
-		return { success: false, error: 'Missing master_config in payload' };
-	}
+	if (!payload || !payload.master_config) return { success: false, error: 'Missing master_config in payload' };
 	saveJsonFile('master_config.json', payload.master_config);
 	return { success: true };
 }
 
 function handlePushDiff(payload) {
-	if (!payload || !Array.isArray(payload.transactions)) {
-		return { success: false, error: 'Missing or invalid transactions in payload' };
+	if (!payload || !Array.isArray(payload.transactions)) return { success: false, error: 'Missing or invalid transactions in payload' };
+	const pending = loadJsonFile('pending_diffs.json', { transactions: [] });
+	const snapshot = loadJsonFile('summary_snapshot.json', {});
+	const archives = readArchives();
+	const all = [...(pending.transactions || []), ...archives.flatMap(archive => archive.transactions || [])];
+	const map = new Map((pending.transactions || []).map(tx => [tx.id, tx]));
+	const accepted = [], conflicts = [];
+	for (const tx of payload.transactions) {
+		const current = all.filter(item => item.id === tx.id).sort((a, b) => (Date.parse(b.updated_at || '') || 0) - (Date.parse(a.updated_at || '') || 0))[0];
+		if (current && newerTransaction(current, tx)) { conflicts.push(current); continue; }
+		if ((snapshot.last_closed_month && tx.target_month <= snapshot.last_closed_month) || archives.some(archive => archive.transactions.some(item => item.id === tx.id))) {
+			return { success: false, error: '再月締めの確認が必要です。手動同期で最新状態を取得してください。' };
+		}
+		map.set(tx.id, storedTransaction(tx)); accepted.push(tx.id);
 	}
-	const incoming = payload.transactions;
-	const pending = loadJsonFile('pending_diffs.json', { schema_version: 2, transactions: [] });
-	const currentTxs = pending.transactions || [];
-
-	const txMap = new Map();
-	for (const tx of currentTxs) {
-		txMap.set(tx.id, tx);
-	}
-
-	for (const tx of incoming) {
-		txMap.set(tx.id, tx);
-	}
-
-	pending.transactions = Array.from(txMap.values());
-	pending.exported_at = new Date().toISOString();
+	pending.transactions = Array.from(map.values()); pending.exported_at = new Date().toISOString();
 	saveJsonFile('pending_diffs.json', pending);
-
-	const snapshot = loadJsonFile('summary_snapshot.json');
-	return {
-		success: true,
-		updated_count: incoming.length,
-		snapshot: snapshot
-	};
+	return { success: true, updated_count: accepted.length, accepted_ids: accepted, conflicts, snapshot };
 }
 
 function handleCloseMonth(payload) {
-	const targetMonth = payload.target_month;
-	if (!targetMonth) {
-		return { success: false, error: 'Missing target_month' };
+	const targetMonth = payload?.target_month;
+	if (!targetMonth) return { success: false, error: 'Missing target_month' };
+	const pending = loadJsonFile('pending_diffs.json', { transactions: [] });
+	const snapshot = loadJsonFile('summary_snapshot.json', { account_balances: {}, monthly_summaries: {} });
+	const existing = loadJsonFile(`archives/${targetMonth}.json`, { transactions: [] });
+	const targets = (pending.transactions || []).filter(tx => tx.target_month === targetMonth);
+	const map = new Map((existing.transactions || []).map(tx => [tx.id, tx]));
+	for (const tx of targets) map.set(tx.id, tx);
+	const records = Array.from(map.values());
+	if (records.some(tx => !tx.is_deleted && tx.amount_pending)) return { success: false, error: '金額未入力の予定があります。金額を入力してから月締めしてください。' };
+	const planned = records.filter(tx => !tx.is_deleted && tx.status === 'planned');
+	const approvals = payload.approved_planned || [];
+	if (planned.length !== approvals.length || planned.some(tx => !approvals.some(approval => approval.id === tx.id && approval.version === transactionContentVersion(tx)))) {
+		return { success: false, error: '未確定の予定が変更されています。再取得して内容を確認してください。' };
 	}
-
-	const pending = loadJsonFile('pending_diffs.json', { schema_version: 2, transactions: [] });
-	const snapshot = loadJsonFile('summary_snapshot.json', {
-		schema_version: 2,
-		last_closed_month: null,
-		account_balances: {},
-		monthly_summaries: {}
-	});
-
-	const allTxs = pending.transactions || [];
-	const targetMonthTxs = [];
-	const remainingTxs = [];
-
-	for (const tx of allTxs) {
-		if (tx.target_month === targetMonth) {
-			// Ensure transaction is confirmed when closing
-			tx.status = 'confirmed';
-			targetMonthTxs.push(tx);
-		} else {
-			remainingTxs.push(tx);
-		}
-	}
-
-	// Load existing archive if present to guard against overwrite
-	const archiveFileName = `archives/${targetMonth}.json`;
-	const existingArchive = loadJsonFile(archiveFileName, null);
-	let finalArchiveTxs = targetMonthTxs;
-
-	if (existingArchive && Array.isArray(existingArchive.transactions) && existingArchive.transactions.length > 0) {
-		if (targetMonthTxs.length === 0) {
-			// Month already closed and pending has no new items: return existing state safely
-			return {
-				success: true,
-				snapshot: snapshot,
-				archived_count: existingArchive.transactions.length
-			};
-		}
-		const txMap = new Map();
-		for (const t of existingArchive.transactions) {
-			txMap.set(t.id, t);
-		}
-		for (const t of targetMonthTxs) {
-			txMap.set(t.id, t);
-		}
-		finalArchiveTxs = Array.from(txMap.values());
-	}
-
-	// Save to /archives/YYYY-MM.json
-	const archiveData = {
-		schema_version: 2,
-		exported_at: new Date().toISOString(),
-		transactions: finalArchiveTxs
-	};
-	saveJsonFile(archiveFileName, archiveData);
-
-	// Update pending_diffs.json (remove archived transactions)
-	pending.transactions = remainingTxs;
-	pending.exported_at = new Date().toISOString();
+	const closedRecords = records.map(tx => ({ ...tx, status: 'confirmed' }));
+	saveJsonFile(`archives/${targetMonth}.json`, { schema_version: 2, exported_at: new Date().toISOString(), transactions: closedRecords });
+	pending.transactions = (pending.transactions || []).filter(tx => tx.target_month !== targetMonth);
 	saveJsonFile('pending_diffs.json', pending);
-
-	// Recalculate monthly summary and update snapshot closing balances
-	let startingBalances = { ...(snapshot.account_balances || {}) };
-	if (Object.keys(startingBalances).length === 0) {
-		const master = loadJsonFile('master_config.json', { accounts: [] });
-		for (const acc of (master.accounts || [])) {
-			startingBalances[acc.id] = acc.initial_balance || 0;
-		}
+	const earlier = Object.keys(snapshot.monthly_summaries || {}).filter(month => month < targetMonth).sort().at(-1);
+	let starting = earlier ? snapshot.monthly_summaries[earlier].closing_balances : snapshot.account_balances;
+	if (!starting || Object.keys(starting).length === 0) {
+		starting = {};
+		for (const account of loadJsonFile('master_config.json', { accounts: [] }).accounts || []) starting[account.id] = account.initial_balance || 0;
 	}
-	const monthSummary = computeMonthlySummary(finalArchiveTxs, startingBalances);
-
 	if (!snapshot.monthly_summaries) snapshot.monthly_summaries = {};
-	snapshot.monthly_summaries[targetMonth] = monthSummary;
-	snapshot.account_balances = { ...monthSummary.closing_balances };
-	snapshot.last_closed_month = targetMonth;
-	snapshot.calculated_at = new Date().toISOString();
-
-	saveJsonFile('summary_snapshot.json', snapshot);
-
-	return {
-		success: true,
-		snapshot: snapshot,
-		archived_count: targetMonthTxs.length
-	};
+	snapshot.monthly_summaries[targetMonth] = computeMonthlySummary(closedRecords, starting);
+	if (snapshot.last_closed_month && targetMonth <= snapshot.last_closed_month) {
+		recalculateArchiveCascade(snapshot);
+	} else {
+		snapshot.last_closed_month = targetMonth;
+		snapshot.account_balances = snapshot.monthly_summaries[targetMonth].closing_balances;
+		snapshot.calculated_at = new Date().toISOString(); saveJsonFile('summary_snapshot.json', snapshot);
+	}
+	return { success: true, snapshot: loadJsonFile('summary_snapshot.json'), archived_count: closedRecords.length, archived_transactions: closedRecords };
 }
 
 function handleRetroactiveUpdate(payload) {
-	const tx = payload.transaction;
-	if (!tx || !tx.id || !/^\d{4}-\d{2}$/.test(tx.target_month || '')) {
-		return { success: false, error: 'Missing transaction or target_month' };
-	}
+	const tx = payload?.transaction;
+	if (!tx?.id || !/^\d{4}-\d{2}$/.test(tx.target_month || '')) return { success: false, error: 'Missing transaction or target_month' };
 	const snapshot = loadJsonFile('summary_snapshot.json', { monthly_summaries: {}, account_balances: {} });
-	const targetMonth = tx.target_month;
-	const isClosed = snapshot.last_closed_month && targetMonth <= snapshot.last_closed_month;
-	const storedTx = { ...tx };
-	delete storedTx.previous_target_month;
-
-	// A prior response may have been lost. Deduplicate the ID across all archives, not only the supplied source month.
-	const spreadsheet = getStorageSpreadsheet();
-	const archiveMonths = spreadsheet.getSheets().map(sheet => sheet.getName()).filter(name => /^arch_\d{4}-\d{2}$/.test(name)).map(name => name.slice(5));
-	let archivesChanged = false;
-	for (const month of archiveMonths) {
-		if (isClosed && month === targetMonth) continue;
-		const archive = loadJsonFile(`archives/${month}.json`, { transactions: [] });
-		const remaining = (archive.transactions || []).filter(item => item.id !== tx.id);
-		if (remaining.length !== (archive.transactions || []).length) {
-			archive.transactions = remaining;
-			saveJsonFile(`archives/${month}.json`, archive);
-			archivesChanged = true;
-		}
+	const archives = readArchives();
+	const pending = loadJsonFile('pending_diffs.json', { transactions: [] });
+	const all = [...archives.flatMap(archive => archive.transactions || []), ...(pending.transactions || [])];
+	const newer = all.filter(item => item.id === tx.id && newerTransaction(item, tx)).sort((a, b) => (Date.parse(b.updated_at || '') || 0) - (Date.parse(a.updated_at || '') || 0))[0];
+	if (newer) return { success: true, conflict: true, transaction: newer, snapshot };
+	const isClosed = snapshot.last_closed_month && tx.target_month <= snapshot.last_closed_month;
+	const required = new Set(archives.filter(archive => archive.transactions.some(item => item.id === tx.id)).map(archive => archive.month));
+	for (const month of [tx.target_month, tx.previous_target_month, payload.previous_target_month]) if (month && snapshot.last_closed_month && month <= snapshot.last_closed_month) required.add(month);
+	if ([...required].some(month => !tx.reclose_approved_months?.includes(month))) return { success: false, error: '再月締めの確認が必要です。手動同期で対象月を確認してください。' };
+	if (isClosed && !tx.is_deleted && (tx.amount_pending || tx.status !== 'confirmed')) return { success: false, error: '締め済み月には金額入力済みの確定明細が必要です。' };
+	let changed = false;
+	for (const archive of archives) {
+		if (isClosed && archive.month === tx.target_month) continue;
+		const remaining = archive.transactions.filter(item => item.id !== tx.id);
+		if (remaining.length !== archive.transactions.length) { archive.transactions = remaining; saveJsonFile(`archives/${archive.month}.json`, archive); changed = true; }
 	}
-	const pending = loadJsonFile('pending_diffs.json', { schema_version: 2, transactions: [] });
 	pending.transactions = (pending.transactions || []).filter(item => item.id !== tx.id);
 	if (isClosed) {
-		const archive = loadJsonFile(`archives/${targetMonth}.json`, { schema_version: 2, transactions: [] });
-		archive.transactions = [...(archive.transactions || []).filter(item => item.id !== tx.id), storedTx];
-		archive.exported_at = new Date().toISOString();
-		saveJsonFile(`archives/${targetMonth}.json`, archive);
+		const archive = loadJsonFile(`archives/${tx.target_month}.json`, { transactions: [] });
+		archive.transactions = [...archive.transactions.filter(item => item.id !== tx.id), storedTransaction(tx)];
+		saveJsonFile(`archives/${tx.target_month}.json`, archive);
 		snapshot.monthly_summaries = snapshot.monthly_summaries || {};
-		if (!snapshot.monthly_summaries[targetMonth]) snapshot.monthly_summaries[targetMonth] = {};
-		archivesChanged = true;
-	} else {
-		pending.transactions.push(storedTx);
-	}
+		if (!snapshot.monthly_summaries[tx.target_month]) snapshot.monthly_summaries[tx.target_month] = {};
+		changed = true;
+	} else pending.transactions.push(storedTransaction(tx));
 	saveJsonFile('pending_diffs.json', pending);
-	if (archivesChanged) recalculateArchiveCascade(snapshot);
+	if (changed) recalculateArchiveCascade(snapshot);
 	return { success: true, snapshot: loadJsonFile('summary_snapshot.json') };
 }
 

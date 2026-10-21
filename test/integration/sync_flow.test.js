@@ -188,6 +188,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 
 		// Retroactively modify September: add an extra expense of 30,000 to September
 		const retroTx = {
+			reclose_approved_months: ['2026-09'],
 			id: 'tx_sep_extra_bill',
 			target_month: '2026-09',
 			date: '2026-09-28',
@@ -215,7 +216,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 			const snapshot = { schema_version: 2, last_closed_month: '2026-09', account_balances: { acc_bank_main: 999700 }, monthly_summaries: { '2026-09': gas.computeMonthlySummary([tx], { acc_bank_main: 1000000 }) } };
 			gas.saveJsonFile('summary_snapshot.json', snapshot);
 			await db.saveSnapshot(snapshot);
-			await db.putTransaction({ ...tx, previous_target_month: '2026-09', target_month: destination, date: destination + '-20', sync_status: 'unsynced' });
+			await db.putTransaction({ ...tx, reclose_approved_months: ['2026-09', destination], previous_target_month: '2026-09', target_month: destination, date: destination + '-20', sync_status: 'unsynced' });
 			await syncManager.syncPendingDiffs();
 			const old = gas.loadJsonFile('archives/2026-09.json');
 			assert.equal(old.transactions.some(t => t.id === tx.id), false);
@@ -235,7 +236,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 		const snapshot = { schema_version: 2, last_closed_month: '2026-09', account_balances: { acc_bank_main: 999900 }, monthly_summaries: { '2026-09': gas.computeMonthlySummary([initial], { acc_bank_main: 1000000 }) } };
 		gas.saveJsonFile('summary_snapshot.json', snapshot);
 		await db.saveSnapshot(snapshot);
-		await db.putTransaction({ ...initial, amount: 500, sync_status: 'unsynced' });
+		await db.putTransaction({ ...initial, amount: 500, reclose_approved_months: ['2026-09'], sync_status: 'unsynced' });
 		const fetch = syncManager.fetch;
 		syncManager.fetch = async () => { throw new Error('offline'); };
 		await assert.rejects(syncManager.syncPendingDiffs(), /offline/);
@@ -255,7 +256,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 			gas.saveJsonFile('summary_snapshot.json', snapshot);
 			gas.saveJsonFile(source <= '2026-09' ? `archives/${source}.json` : 'pending_diffs.json', { transactions: [initial] });
 			await db.saveSnapshot(snapshot);
-			await db.putTransaction({ ...initial, date: intermediate + '-20', target_month: intermediate, previous_target_month: source, sync_status: 'unsynced' });
+			await db.putTransaction({ ...initial, reclose_approved_months: [source, intermediate], date: intermediate + '-20', target_month: intermediate, previous_target_month: source, sync_status: 'unsynced' });
 			const fetch = syncManager.fetch;
 			syncManager.fetch = async (...args) => { await fetch(...args); throw new Error('response lost'); };
 			await assert.rejects(syncManager.syncPendingDiffs(), /response lost/);
@@ -314,7 +315,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 		it(`does not acknowledge a concurrently edited version while ${route} is in flight`, async () => {
 			gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
 			gas.saveJsonFile('summary_snapshot.json', await db.getSnapshot());
-			const sent = { id: 'concurrent', date: '2026-10-20', target_month: '2026-10', type: 'expense', account_id: 'acc_bank_main', amount: 100, status: 'confirmed', sync_status: 'unsynced', updated_at: '2026-10-20T00:00:00Z', ...(route === 'retroactive_update' ? { previous_target_month: '2026-09' } : {}) };
+			const sent = { id: 'concurrent', date: '2026-10-20', target_month: '2026-10', type: 'expense', account_id: 'acc_bank_main', amount: 100, status: 'confirmed', sync_status: 'unsynced', updated_at: '2026-10-20T00:00:00Z', ...(route === 'retroactive_update' ? { previous_target_month: '2026-09', reclose_approved_months: ['2026-09'] } : {}) };
 			await db.putTransaction(sent);
 			let release;
 			let started;

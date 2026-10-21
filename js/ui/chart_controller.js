@@ -12,9 +12,11 @@ export class ChartController {
 		this.tagChart = null;
 		this.categoryBreakdownChart = null;
 		this.isDark = false;
+		this.assetHistoryChart = null;
 	}
 
 	destroy() {
+		this.assetHistoryChart?.destroy(); this.assetHistoryChart = null;
 		if (this.chart) {
 			this.chart.destroy();
 			this.chart = null;
@@ -26,6 +28,26 @@ export class ChartController {
 		if (this.categoryBreakdownChart) {
 			this.categoryBreakdownChart.destroy();
 			this.categoryBreakdownChart = null;
+		}
+	}
+
+	renderAssetHistory(history) {
+		const canvas = document.getElementById('asset-history-chart');
+		const fallback = document.getElementById('asset-history-fallback');
+		if (!canvas) return;
+		this.assetHistoryChart?.destroy();
+		const data = { labels: history.points.map(point => point.date), datasets: [
+			{ label: '純資産', data: history.points.map(point => point.net_assets), borderColor: '#2563eb' },
+			{ label: '流動資産', data: history.points.map(point => point.liquid_assets), borderColor: '#10b981' },
+			{ label: '投資資産', data: history.points.map(point => point.investment_assets), borderColor: '#8b5cf6' },
+			{ label: '負債', data: history.points.map(point => point.liabilities), borderColor: '#ef4444' }
+		] };
+		if (window.Chart) {
+			canvas.style.display = 'block'; fallback.style.display = 'none';
+			this.assetHistoryChart = new window.Chart(canvas, { type: 'line', data, options: { responsive: true, maintainAspectRatio: false, animation: false } });
+		} else {
+			canvas.style.display = 'none'; fallback.style.display = 'block';
+			fallback.textContent = history.points.map(point => `${point.date}: ¥${point.net_assets.toLocaleString()}`).join(' / ') || '確定履歴はない。';
 		}
 	}
 

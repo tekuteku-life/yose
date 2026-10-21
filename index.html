@@ -35,13 +35,13 @@
 
 			<div id="auth-webauthn-container">
 				<button type="button" id="btn-auth-webauthn" class="btn-webauthn">
-					<span>👆 生体認証 / Passkeyで解除</span>
+					<span>👆 パスキーで認証（復号はPIN）</span>
 				</button>
 			</div>
 
 			<form id="auth-pin-container" onsubmit="return false;" style="margin-top: 16px;">
 				<div class="form-group">
-					<label class="form-label" for="auth-pin-input" style="text-align: left;">PINコードで解除 (バックアップ)</label>
+					<label class="form-label" for="auth-pin-input" style="text-align: left;">データ復号用PINコード</label>
 					<input type="password" id="auth-pin-input" class="form-control" placeholder="PINコードを入力" autocomplete="current-password">
 				</div>
 				<button type="submit" id="btn-auth-pin" class="btn btn-primary btn-block" style="margin-top: 8px;">
@@ -51,7 +51,7 @@
 
 			<form id="auth-setup-container" onsubmit="return false;" style="display: none; margin-top: 16px;">
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px;">
-					初回セットアップ: データ保護用のPINコード（4桁以上）を設定してください。同時にWebAuthnおよびEd25519通信鍵が生成されます。
+					初回セットアップ: データ保護用のPINコード（4桁以上）を設定してください。Ed25519通信鍵も生成されます。パスキーは設定画面で登録できます。
 				</p>
 				<div class="form-group">
 					<input type="password" id="auth-setup-pin" class="form-control" placeholder="新しいPINコード (4桁以上)" autocomplete="new-password">
@@ -61,16 +61,7 @@
 				</button>
 			</form>
 
-			<div id="auth-synced-passkey-container" style="display: none; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border);">
-				<p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;">
-					他端末で作成・同期されたパスキー（1Password / iCloud / Google等）が見つかりました。同じパスキーで復元・解除できます。
-				</p>
-				<button type="button" id="btn-auth-synced-passkey" class="btn btn-secondary btn-block">
-					🔑 同期済みPasskeyで復元・ロック解除
-				</button>
-			</div>
-
-			<div id="auth-error-msg" style="color: var(--danger); font-size: 0.85rem; margin-top: 12px; display: none;"></div>
+			<div id="auth-error-msg" style="color:var(--danger);margin-top:12px;display:none;" role="alert"></div>
 		</div>
 	</div>
 
@@ -339,6 +330,25 @@
 				</div>
 			</div>
 
+			<div class="card" id="asset-history-card" style="display: none;">
+				<h2 class="card-title">資産推移</h2>
+				<label class="form-label" for="select-asset-period">資産推移の表示期間である</label>
+				<select id="select-asset-period" class="form-control">
+					<option value="month">選択月である</option>
+					<option value="year">選択年である</option>
+					<option value="range">期間指定である</option>
+					<option value="all">すべての期間である</option>
+				</select>
+				<div id="asset-custom-period" style="display:none;gap:8px;flex-wrap:wrap;margin-top:12px;">
+					<label>開始日 <input type="date" id="asset-period-start" class="form-control"></label>
+					<label>終了日 <input type="date" id="asset-period-end" class="form-control"></label>
+					<button type="button" id="btn-apply-asset-period" class="btn btn-secondary">期間を適用</button>
+				</div>
+				<p id="asset-history-notice" aria-live="polite"></p>
+				<div style="height:280px;position:relative;"><canvas id="asset-history-chart"></canvas></div>
+				<div id="asset-history-fallback" style="display:none;"></div>
+			</div>
+
 			<!-- Realtime Cashflow Stats (Visible when target === 'cashflow') -->
 			<div id="cashflow-stat-grid" class="summary-grid">
 				<div class="stat-card">
@@ -559,12 +569,11 @@
 						</div>
 						<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
 							端末の生体認証（Touch ID, Face ID, Windows Hello）や1Password等の同期パスキーと連携してアプリを安全にアンロックします。<br>
-							※ WebAuthn PRF対応のパスキーの場合、自己暗号化（AES-GCM-256）＆自己署名（Ed25519）付きの鍵バンドルがマスタ設定に安全に保存され、別デバイスでも同じパスキーをそのまま利用できます。
+							パスキーは1Password等の保存先を選択できる通常の認証である。データの復号にはPINを使用する。
 						</p>
 						<div id="synced-passkey-status" style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;"></div>
 						<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
 							<button id="btn-register-webauthn" class="btn btn-primary btn-sm">👆 WebAuthn (Passkey) を上書き・再登録</button>
-							<button id="btn-import-synced-passkey" class="btn btn-secondary btn-sm" style="display: none;">🔑 マスタ内の同期済みPasskeyをこの端末に適用</button>
 							<button id="btn-clear-webauthn" class="btn btn-danger btn-sm" style="display: none;">🗑️ WebAuthn登録を解除</button>
 						</div>
 					</div>
@@ -792,7 +801,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.7.5</span>
+					<span class="badge badge-info" id="badge-current-version">v1.8.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。

@@ -17,12 +17,14 @@ import {
 	calculateCrossAccrualActualSummary,
 	escapeHtml
 } from '../logic.js';
+import { buildAssetHistory, formatDate } from '../logic.js';
 
 export class SummaryController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
 		this.tagSearchQuery = '';
 		this.lastTransactions = null;
+		this.assetPeriod = 'month';
 	}
 
 	get db() {
@@ -47,7 +49,18 @@ export class SummaryController {
 		this.coordinator.txListController.currentPage = 1;
 	}
 
+	usesYearNavigation() {
+		if (this.coordinator.analyticsTarget === 'assets') return this.assetPeriod === 'year';
+		return this.coordinator.analyticsTarget === 'budget' || this.coordinator.analyticsGranularity === 'yearly';
+	}
+
 	setupSummaryView() {
+		document.getElementById('select-asset-period')?.addEventListener('change', event => {
+			this.assetPeriod = event.target.value;
+			document.getElementById('asset-custom-period').style.display = this.assetPeriod === 'range' ? 'flex' : 'none';
+			this.renderAssetHistory();
+		});
+		document.getElementById('btn-apply-asset-period')?.addEventListener('click', () => this.renderAssetHistory());
 		// Granularity toggle: Daily vs Monthly vs Yearly
 		document.querySelectorAll('#control-granularity .segment-btn').forEach(btn => {
 			btn.addEventListener('click', () => {
@@ -63,7 +76,7 @@ export class SummaryController {
 
 		// Period Navigator (Requirement 3.16 & 3.36)
 		document.getElementById('btn-period-prev')?.addEventListener('click', () => {
-			if (this.coordinator.analyticsTarget === 'budget' || this.coordinator.analyticsGranularity === 'yearly') {
+			if (this.usesYearNavigation()) {
 				this.coordinator.selectedYear = String(Number(this.coordinator.selectedYear) - 1);
 				this.setSelectedMonth(`${this.coordinator.selectedYear}-${this.coordinator.currentMonth.slice(5, 7)}`);
 			} else {
@@ -74,7 +87,7 @@ export class SummaryController {
 		});
 
 		document.getElementById('btn-period-next')?.addEventListener('click', () => {
-			if (this.coordinator.analyticsTarget === 'budget' || this.coordinator.analyticsGranularity === 'yearly') {
+			if (this.usesYearNavigation()) {
 				this.coordinator.selectedYear = String(Number(this.coordinator.selectedYear) + 1);
 				this.setSelectedMonth(`${this.coordinator.selectedYear}-${this.coordinator.currentMonth.slice(5, 7)}`);
 			} else {
@@ -166,6 +179,10 @@ export class SummaryController {
 	}
 
 	async handleGenerateRecurring() {
+		const snapshot = await this.db.getSnapshot();
+		if (snapshot?.last_closed_month && this.coordinator.currentMonth <= snapshot.last_closed_month) {
+			alert('締め済み月に予定は生成できません。未締めの月を選択してください。'); return;
+		}
 		const config = await this.db.getMasterConfig();
 		const existing = await this.db.getTransactions({ target_month: this.coordinator.currentMonth, includeDeleted: true });
 		const generated = generateRecurringTransactions(
@@ -186,34 +203,18 @@ export class SummaryController {
 	}
 
 	async handleCloseMonth() {
-		// Check if any planned items exist in this month
-		const monthTxs = await this.db.getTransactions({ target_month: this.coordinator.currentMonth });
-		const plannedTxs = monthTxs.filter(t => t.status === 'planned');
-
-		if (plannedTxs.length > 0) {
-			const confirmMsg = `${this.coordinator.currentMonth} には未確定の予定（planned）が ${plannedTxs.length} 件あります。\nすべて確定（confirmed）にして月締めを実行しますか？`;
-			if (!confirm(confirmMsg)) {
-				return;
-			}
-			for (const t of plannedTxs) {
-				t.status = 'confirmed';
-				t.sync_status = 'unsynced';
-				await this.db.putTransaction(t);
-			}
-		}
-
+		const btn = document.getElementById('btn-close-month');
+		if (btn?.disabled) return;
+		if (btn) btn.disabled = true;
 		try {
-			const btn = document.getElementById('btn-close-month');
-			if (btn) btn.disabled = true;
-			await this.syncManager.closeMonth(this.coordinator.currentMonth);
+			const records = await this.db.getTransactions({ target_month: this.coordinator.currentMonth });
+			if (records.some(tx => tx.amount_pending)) { alert('金額未入力の予定があります。金額を入力してから月締めしてください。'); return; }
+			const planned = records.filter(tx => tx.status === 'planned');
+			if (planned.length && !confirm(`${this.coordinator.currentMonth} には未確定の予定が ${planned.length} 件あります。内容を確認して確定・月締めしますか？`)) return;
+			await this.syncManager.closeMonth(this.coordinator.currentMonth, { approvedPlanned: planned });
 			alert(`${this.coordinator.currentMonth} の月締めが正常に完了しました！アーカイブが保存されました。`);
-		} catch (err) {
-			alert(`月締めに失敗しました: ${err.message}`);
-		} finally {
-			const btn = document.getElementById('btn-close-month');
-			if (btn) btn.disabled = false;
-			await this.coordinator.refreshAllViews();
-		}
+		} catch (error) { alert(`月締めに失敗しました: ${error.message}`); }
+		finally { if (btn) btn.disabled = false; await this.coordinator.refreshAllViews(); }
 	}
 
 	async renderSummary() {
@@ -269,6 +270,9 @@ export class SummaryController {
 		}
 
 		// Cards visibility
+		const historyCard = document.getElementById('asset-history-card');
+		if (historyCard) historyCard.style.display = target === 'assets' ? 'block' : 'none';
+		if (target === 'assets') await this.renderAssetHistory();
 		const cardPeriodControls = document.getElementById('card-period-controls');
 		const granularityRow = document.getElementById('granularity-control-row');
 		const catCard = document.getElementById('card-category-breakdown');
@@ -341,6 +345,23 @@ export class SummaryController {
 			this.renderCrossMatrix(transactions, config);
 			await this.coordinator.txListController.renderMonthTransactions();
 		}
+	}
+
+	async renderAssetHistory() {
+		try {
+			const today = formatDate(new Date());
+			const start = document.getElementById('asset-period-start');
+			const end = document.getElementById('asset-period-end');
+			if (!start.value) start.value = this.coordinator.currentMonth + '-01';
+			if (!end.value) end.value = today;
+			const history = buildAssetHistory(await this.db.getSnapshot(), await this.db.getTransactions(), (await this.db.getMasterConfig())?.accounts || [], {
+				mode: this.assetPeriod, month: this.coordinator.currentMonth, year: this.coordinator.selectedYear, start: start.value, end: end.value, today,
+				archiveMonths: await this.db.getSetting('downloaded_archive_months', [])
+			});
+			this.chartController.renderAssetHistory(history);
+			document.getElementById('asset-history-notice').textContent = history.notice;
+			document.getElementById('asset-history-card').dataset.period = this.assetPeriod;
+		} catch (error) { alert(error.message); }
 	}
 
 	async applyDrilldownFilter({ accountId = 'all', categoryId = 'all', tag = 'all' } = {}) {

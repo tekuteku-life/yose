@@ -11,13 +11,11 @@ import {
 } from '../logic.js';
 import {
 	encryptMasterKeysWithPin,
-	encryptWebAuthnVault,
-	createSignedPasskeyBundle,
 	exportKeyRaw,
 	exportPrivateKeyPkcs8,
-	isWebAuthnSupported,
 	registerWebAuthnCredential,
-	bytesToBase64
+	bytesToBase64,
+	base64ToBytes
 } from '../crypto.js';
 import {
 	CURRENT_APP_VERSION,
@@ -264,74 +262,25 @@ export class SettingsController {
 		document.getElementById('btn-toggle-key-details')?.addEventListener('click', () => {
 			const details = document.getElementById('key-mgmt-details');
 			if (details) {
+				details.dataset.userOpened = 'true';
 				details.style.display = details.style.display === 'none' ? 'block' : 'none';
 			}
 		});
 
-		// WebAuthn Passkey re-register / overwrite (with multi-device PRF signed bundle in master_config)
+		// Standard passkeys authenticate; PIN remains responsible for decrypting the database.
 		document.getElementById('btn-register-webauthn')?.addEventListener('click', async () => {
-			if (!isWebAuthnSupported()) {
-				alert('お使いの環境はWebAuthn (Passkey) に対応していません');
-				return;
-			}
 			try {
-				const cred = await registerWebAuthnCredential('よせあつめ家計簿 ユーザー');
-				const prfKeyRaw = cred.prfKeyRaw || cred.prfKey || null;
-				await this.db.saveSecurityKey('webauthn_credential_id', cred.credentialId);
-				if (this.authController.privateKey) {
-					const dmk = this.db.encryptionKey;
-					if (dmk) {
-						const dmkRaw = await exportKeyRaw(dmk);
-						const privPkcs8 = await exportPrivateKeyPkcs8(this.authController.privateKey);
-						if (prfKeyRaw) {
-							const encVault = await encryptWebAuthnVault({ dmkRaw, privateKeyPkcs8: privPkcs8 }, prfKeyRaw);
-							await this.db.saveSecurityKey('webauthn_vault', encVault);
-							const bundle = await createSignedPasskeyBundle({
-								dmkRaw,
-								privateKeyPkcs8: privPkcs8,
-								privateKey: this.authController.privateKey,
-								publicKeyBase64: this.authController.publicKeyBase64,
-								credentialId: cred.credentialId,
-								prfKeyRaw
-							});
-							if (bundle) {
-								const config = await this.db.getMasterConfig();
-								if (config) {
-									config.synced_passkey_bundle = bundle;
-									await this.db.saveMasterConfig(config);
-								}
-							}
-						} else {
-							await this.db.saveSecurityKey('webauthn_vault', {
-								dmk: bytesToBase64(dmkRaw),
-								priv: bytesToBase64(privPkcs8)
-							});
-						}
-					}
+				await this.authController.ensureKeyUnlocked();
+				let handle = await this.db.getSecurityKey('webauthn_user_id');
+				if (!handle) {
+					handle = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
+					await this.db.saveSecurityKey('webauthn_user_id', handle);
 				}
-				alert('WebAuthn (Passkey) を上書き・再登録しました！\n（PRF対応パスキーの場合はマスタ設定に自己暗号化＆自己署名バンドルが保存され、他デバイスでも同じパスキーを共有できます）');
+				const credential = await registerWebAuthnCredential('よせあつめ家計簿 ユーザー', undefined, { userId: base64ToBytes(handle) });
+				await this.db.saveSecurityKey('webauthn_credential', credential);
+				alert('パスキーを登録しました。データの復号にはPINを使用します。');
 				await this.renderSettings();
-			} catch (err) {
-				alert(`WebAuthn登録エラー: ${err.message}`);
-			}
-		});
-
-		// Import / apply synced Passkey bundle from master_config on current device (Requirement 4.8)
-		document.getElementById('btn-import-synced-passkey')?.addEventListener('click', async () => {
-			try {
-				const config = await this.db.getMasterConfig();
-				const bundle = config?.synced_passkey_bundle;
-				if (!bundle) {
-					alert('マスタ設定内に同期済みPasskeyバンドルが見つかりません');
-					return;
-				}
-				await this.authController.applySyncedPasskeyBundle(bundle);
-				this.coordinator.showToast('🔑 同期済みPasskeyをこの端末に適用しました');
-				alert('マスタ設定内の同期済みPasskey（自己暗号化＆Ed25519署名検証済み）をこの端末に適用しました！');
-				await this.coordinator.refreshAllViews();
-			} catch (err) {
-				alert(`同期済みPasskey適用エラー: ${err.message}`);
-			}
+			} catch (error) { alert(`WebAuthn登録エラー: ${error.message}`); }
 		});
 
 		// WebAuthn Passkey clear / unregister
@@ -340,7 +289,7 @@ export class SettingsController {
 				return;
 			}
 			try {
-				await this.db.deleteSecurityKey('webauthn_credential_id');
+				await this.db.deleteSecurityKey('webauthn_credential');
 				await this.db.deleteSecurityKey('webauthn_vault');
 				const config = await this.db.getMasterConfig();
 				if (config && config.synced_passkey_bundle) {
@@ -575,6 +524,7 @@ export class SettingsController {
 
 		document.getElementById('btn-force-cache-clear')?.addEventListener('click', async () => {
 			if (confirm('キャッシュストレージを全削除し、サーバーから最新版を強制再読み込みしますか？\n（IndexedDB内の家計データや認証鍵は保持されます）')) {
+				this.coordinator.allowNavigation = true;
 				await purgeAppCacheAndReload({
 					caches: typeof caches !== 'undefined' ? caches : null,
 					swRegistration: this.coordinator.swRegistration,
@@ -587,6 +537,7 @@ export class SettingsController {
 
 		// Update modal action buttons
 		document.getElementById('btn-confirm-app-update')?.addEventListener('click', async () => {
+			this.coordinator.allowNavigation = true;
 			await purgeAppCacheAndReload({
 				caches: typeof caches !== 'undefined' ? caches : null,
 				swRegistration: this.coordinator.swRegistration,
@@ -662,27 +613,11 @@ export class SettingsController {
 			info.textContent = `登録数: 口座 ${accCount}件 / 費目 ${catCount}件 / 定期ルール ${ruleCount}件 / 祝日 ${holidayCount}件`;
 		}
 
-		const localCredId = await this.db.getSecurityKey('webauthn_credential_id');
-		const hasWebAuthn = Boolean(localCredId);
+		const credential = await this.db.getSecurityKey('webauthn_credential');
 		const btnClearWebauthn = document.getElementById('btn-clear-webauthn');
-		if (btnClearWebauthn) btnClearWebauthn.style.display = hasWebAuthn ? 'inline-block' : 'none';
-
-		const syncedBundle = config?.synced_passkey_bundle;
-		const syncedStatusEl = document.getElementById('synced-passkey-status');
-		const btnImportSynced = document.getElementById('btn-import-synced-passkey');
-		if (syncedStatusEl) {
-			if (syncedBundle?.credentialId) {
-				const isAppliedHere = localCredId === syncedBundle.credentialId;
-				syncedStatusEl.textContent = isAppliedHere
-					? `✅ マルチデバイス共有用Passkeyバンドル: 保存・同期済み (更新: ${(syncedBundle.updated_at || '').slice(0, 10)})`
-					: `🔑 マスタ内に他端末の同期済みPasskeyバンドルがあります (更新: ${(syncedBundle.updated_at || '').slice(0, 10)})`;
-			} else {
-				syncedStatusEl.textContent = 'マルチデバイス共有用Passkeyバンドル: 未作成（PRF対応パスキー登録時に自動作成されます）';
-			}
-		}
-		if (btnImportSynced) {
-			btnImportSynced.style.display = (syncedBundle?.credentialId && localCredId !== syncedBundle.credentialId) ? 'inline-block' : 'none';
-		}
+		if (btnClearWebauthn) btnClearWebauthn.style.display = credential ? 'inline-block' : 'none';
+		const status = document.getElementById('synced-passkey-status');
+		if (status) status.textContent = credential ? 'パスキー登録済み・データ復号はPIN併用' : 'パスキー未登録・PINで利用可能';
 
 		await this.renderAnnualBudgetSettings();
 		await this.coordinator.masterController.renderMasterManagement();

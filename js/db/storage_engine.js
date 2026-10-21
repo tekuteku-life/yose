@@ -186,7 +186,7 @@ export class StorageEngine {
 	async compareAndPutRaw(storeName, key, expected, replacement) {
 		if (this.memoryDb) {
 			const store = this.memoryDb.stores[storeName];
-			if (canonicalJsonStringify(store.get(key)) !== canonicalJsonStringify(expected)) return false;
+			if (canonicalJsonStringify(store.get(key) ?? null) !== canonicalJsonStringify(expected ?? null)) return false;
 			store.set(key, JSON.parse(JSON.stringify(replacement)));
 			return true;
 		}
@@ -199,7 +199,7 @@ export class StorageEngine {
 			const store = transaction.objectStore(storeName);
 			const request = store.get(key);
 			request.onsuccess = () => {
-				if (canonicalJsonStringify(request.result) !== canonicalJsonStringify(expected)) return;
+				if (canonicalJsonStringify(request.result ?? null) !== canonicalJsonStringify(expected ?? null)) return;
 				store.put(replacement);
 				changed = true;
 			};

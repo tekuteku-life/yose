@@ -33,6 +33,7 @@ export {
 } from './logic/transaction_factory.js';
 
 export {
+	buildAssetHistory,
 	calculateBalancesAndSummaries,
 	aggregateDailySummaries,
 	aggregateMonthlySummaries,

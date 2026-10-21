@@ -36,6 +36,7 @@ export class AppCoordinator {
 		this.swRegistration = null;
 		this.availableUpdateVersion = null;
 		this._domInitialized = false;
+		this.allowNavigation = false;
 
 		// Component Controllers (DI via Mediator)
 		this.authController = new AuthController(this);
@@ -73,6 +74,7 @@ export class AppCoordinator {
 
 	async finishAppInit() {
 		// 3. Setup Sync Manager
+		this.syncManager?.detachEventListeners();
 		const gasUrl = await this.db.getSetting('gas_url', '');
 		this.syncManager = new SyncManager({
 			db: this.db,
@@ -104,12 +106,8 @@ export class AppCoordinator {
 			this.masterController.setupMasterTabs();
 			this.syncStatusController.updateNetworkBadge();
 
-			if (typeof window !== 'undefined') {
-				window.addEventListener('beforeunload', () => {
-					clearActiveSession();
-					this.db.clearEncryptionKey();
-				});
-			}
+			this.setupDepartureGuard();
+			this.setupSwipeNavigation();
 		}
 
 		// 6. Setup Theme & Collapsible Panes state
@@ -151,6 +149,85 @@ export class AppCoordinator {
 				}
 			});
 		});
+	}
+
+	setupDepartureGuard() {
+		if (!history.state?.yoseGuard) {
+			history.replaceState({ yoseBase: true }, '', location.href);
+			history.pushState({ yoseGuard: true }, '', location.href);
+		}
+		let restoring = false;
+		window.addEventListener('beforeunload', event => {
+			if (this.allowNavigation) return;
+			event.preventDefault(); event.returnValue = '';
+		});
+		window.addEventListener('popstate', () => {
+			if (this.allowNavigation) return;
+			if (restoring) { restoring = false; return; }
+			if (history.state?.yoseGuard) return;
+			if (confirm('画面を閉じて前のページへ戻りますか？入力中の内容は失われます。')) {
+				this.allowNavigation = true;
+				if (history.length > 2) history.back(); else location.assign('about:blank');
+			} else { restoring = true; history.forward(); }
+		});
+		window.addEventListener('pagehide', () => {
+			clearActiveSession(); this.db.clearEncryptionKey();
+			this.authController.privateKey = null; this.authController.isKeyLocked = true;
+			this.syncManager?.setPrivateKey(null);
+		});
+		window.addEventListener('pageshow', event => {
+			if (event.persisted) { this.allowNavigation = false; this.authController.showLockScreen(); }
+		});
+	}
+
+	setupSwipeNavigation() {
+		let start = null;
+		const excluded = element => {
+			if (document.querySelector('.modal-overlay.active') || !document.getElementById('auth-screen').classList.contains('hidden')) return true;
+			if (element.closest('input, textarea, select, button, a, canvas, [contenteditable]')) return true;
+			for (let el = element; el; el = el.parentElement) {
+				if (el.scrollWidth > el.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(el).overflowX)) return true;
+			}
+			return false;
+		};
+		document.addEventListener('touchstart', event => {
+			start = null;
+			if (event.touches.length !== 1 || excluded(event.target)) return;
+			const touch = event.touches[0];
+			if (touch.clientX < 24 || touch.clientX > innerWidth - 24) return;
+			start = { x: touch.clientX, y: touch.clientY };
+		}, { passive: true });
+		document.addEventListener('touchmove', event => {
+			if (event.touches.length !== 1) { start = null; return; }
+			if (!start) return;
+			const touch = event.touches[0];
+			if (Math.abs(touch.clientX - start.x) > Math.abs(touch.clientY - start.y) * 1.5 && event.cancelable) event.preventDefault();
+		}, { passive: false });
+		document.addEventListener('touchcancel', () => { start = null; });
+		document.addEventListener('touchend', event => {
+			const previous = start; start = null;
+			if (!previous || event.changedTouches.length !== 1 || event.touches.length) return;
+			const touch = event.changedTouches[0];
+			const dx = touch.clientX - previous.x, dy = touch.clientY - previous.y;
+			if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+			const buttons = Array.from(/** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll('.nav-tabs .tab-btn')));
+			const index = buttons.findIndex(button => button.classList.contains('active'));
+			const next = index + (dx < 0 ? 1 : -1);
+			if (next >= 0 && next < buttons.length) buttons[next].click();
+		});
+	}
+
+	async approveClosedChanges(changes, originals = []) {
+		const snapshot = await this.db.getSnapshot();
+		const closed = snapshot?.last_closed_month;
+		if (!closed) return [];
+		const months = [...new Set([...changes, ...originals].flatMap(tx => [tx.target_month, tx.previous_target_month]).filter(month => month && month <= closed))].sort();
+		if (!months.length) return [];
+		if (changes.some(tx => tx.target_month <= closed && !tx.is_deleted && (tx.status !== 'confirmed' || tx.amount_pending))) {
+			alert('締め済み月には金額入力済みの確定明細のみ保存できます。金額・状態を確認してください。');
+			return null;
+		}
+		return confirm(`${months.join('、')} は月締め済みです。変更を保存して再月締めしますか？\n取消時は変更を保存しません。`) ? months : null;
 	}
 
 	setupCollapsiblePanes() {
