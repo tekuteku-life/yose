@@ -226,7 +226,7 @@ describe('gas/Code.gs - Unit Tests', () => {
 			gas.doPost({ postData: { contents: JSON.stringify(pushEnv) } });
 
 			// 2. Close month 2026-10
-			const closeEnv = await createSignedRequest('close_month', { target_month: '2026-10' }, keyPair.privateKey, Date.now());
+			const closeEnv = await createSignedRequest('close_month', { target_month: '2026-10', approved_planned: [{ id: txs[1].id, version: gas.canonicalJsonStringify(txs[1]) }] }, keyPair.privateKey, Date.now());
 			const res = gas.doPost({ postData: { contents: JSON.stringify(closeEnv) } });
 
 			assert.equal(res.success, true);
@@ -276,6 +276,8 @@ describe('gas/Code.gs - Unit Tests', () => {
 
 			// Now retroactively modify September: add extra expense 10,000 to September
 			const retroTx = {
+				status: 'confirmed',
+				reclose_approved_months: ['2026-09'],
 				id: 'tx_sep_retro_expense',
 				target_month: '2026-09',
 				type: 'expense',

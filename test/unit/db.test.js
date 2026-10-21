@@ -694,9 +694,9 @@ describe('js/db.js - Unit Tests', () => {
 			assert.equal(cfgWithPanes.collapsed_panes['card-tag-analytics'], true);
 			assert.equal(cfgWithPanes.collapsed_panes['card-cross-matrix'], false);
 			assert.equal(Object.prototype.hasOwnProperty.call(cfgWithPanes.collapsed_panes, '__proto__'), false);
-			assert.equal(cfgWithPanes.synced_passkey_bundle.credentialId, 'cred_v1');
+			assert.equal(cfgWithPanes.synced_passkey_bundle, undefined);
 
-			// Newer synced_passkey_bundle overwrites older one, while existing collapsed_panes key is preserved
+			// Obsolete PRF bundles are ignored while existing collapsed_panes keys are preserved
 			BackupMerger.mergeMasterConfig(cfgWithPanes, {
 				collapsed_panes: {
 					'card-tag-analytics': false,
@@ -715,8 +715,7 @@ describe('js/db.js - Unit Tests', () => {
 			}, stats);
 			assert.equal(cfgWithPanes.collapsed_panes['card-tag-analytics'], true);
 			assert.equal(cfgWithPanes.collapsed_panes['card-account-balances'], true);
-			assert.equal(cfgWithPanes.synced_passkey_bundle.credentialId, 'cred_v2');
-			assert.equal(cfgWithPanes.synced_passkey_bundle.vault.prfSalt, '');
+			assert.equal(cfgWithPanes.synced_passkey_bundle, undefined);
 		});
 	});
 

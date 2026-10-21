@@ -533,6 +533,7 @@ export class TransactionInputController {
 	async handleSettleAdvanceDirectly(advanceId) {
 		const advTx = await this.db.getTransaction(advanceId);
 		if (!advTx) return;
+		if (advTx.amount_pending) { alert('金額未入力の立替は精算できません。先に金額を入力してください。'); return; }
 
 		const config = await this.db.getMasterConfig();
 		const receivingAccountId = document.getElementById('select-account')?.value || (config?.accounts?.[0]?.id || 'acc_default');
@@ -552,6 +553,9 @@ export class TransactionInputController {
 		advTx.updated_at = new Date().toISOString();
 		advTx.sync_status = 'unsynced';
 
+		const approved = await this.coordinator.approveClosedChanges([repayTx, advTx]);
+		if (approved === null) return;
+		for (const tx of [repayTx, advTx]) tx.reclose_approved_months = approved;
 		await this.db.putTransactions([repayTx, advTx]);
 		this.coordinator.showToast(`✅ 立替金(¥${advTx.amount.toLocaleString()})の回収を登録しました`);
 		alert(`立替金「${advTx.memo || '未回収'}」(¥${advTx.amount.toLocaleString()}) の回収・精算を完了しました`);
@@ -668,6 +672,12 @@ export class TransactionInputController {
 	}
 
 	async handleFormSubmit() {
+		const fields = { normal: ['input-amount'], advance: ['input-self-amount', 'input-adv-amount'], repay: ['input-repay-amount'], prepaid: ['input-prepaid-total'], point: ['input-point-total'] };
+		const amountPending = fields[this.coordinator.currentMode].every(id => !document.getElementById(id).value.trim());
+		if (amountPending && this.coordinator.currentMode === 'point' && Number(document.getElementById('input-point-used').value) > 0) {
+			alert('ポイント利用額がある場合は購入総額を入力してください。'); return;
+		}
+		if (amountPending && !confirm('金額未入力です。金額が未確定の予定（0円）として登録しますか？')) return;
 		const date = document.getElementById('input-date')?.value;
 		const memo = document.getElementById('input-memo')?.value || '';
 		const tagsRaw = document.getElementById('input-tags')?.value || '';
@@ -688,7 +698,7 @@ export class TransactionInputController {
 			const type = document.getElementById('input-type')?.value;
 			const amount = Number(document.getElementById('input-amount')?.value) || 0;
 
-			if (amount <= 0) {
+			if (amount <= 0 && !amountPending) {
 				alert('金額を入力してください');
 				return;
 			}
@@ -722,12 +732,13 @@ export class TransactionInputController {
 			const selfAmount = Number(document.getElementById('input-self-amount')?.value) || 0;
 			const advAmount = Number(document.getElementById('input-adv-amount')?.value) || 0;
 
-			if (selfAmount <= 0 && advAmount <= 0) {
+			if (selfAmount <= 0 && advAmount <= 0 && !amountPending) {
 				alert('自己負担額または立替額を入力してください');
 				return;
 			}
 
 			const advanceTxs = createAdvancePaymentTransactions({
+				includeEmpty: amountPending,
 				date,
 				payingAccountId: accountId,
 				selfAmount,
@@ -743,7 +754,7 @@ export class TransactionInputController {
 			txRecordsToSave.push(...advanceTxs);
 		} else if (this.coordinator.currentMode === 'repay') {
 			const repayAmount = Number(document.getElementById('input-repay-amount')?.value) || 0;
-			if (repayAmount <= 0) {
+			if (repayAmount <= 0 && !amountPending) {
 				alert('回収額を入力してください');
 				return;
 			}
@@ -757,7 +768,7 @@ export class TransactionInputController {
 			});
 			txRecordsToSave.push(repayTx);
 
-			if (this.currentSettlingAdvanceId) {
+			if (this.currentSettlingAdvanceId && !amountPending) {
 				const advTx = await this.db.getTransaction(this.currentSettlingAdvanceId);
 				if (advTx) {
 					advTx.settlement_status = 'settled';
@@ -771,7 +782,7 @@ export class TransactionInputController {
 			const totalAmount = Number(document.getElementById('input-prepaid-total')?.value) || 0;
 			const amortizeMonths = Number(document.getElementById('input-prepaid-months')?.value) || 12;
 
-			if (totalAmount <= 0) {
+			if (totalAmount <= 0 && !amountPending) {
 				alert('一括支払総額を入力してください');
 				return;
 			}
@@ -794,7 +805,7 @@ export class TransactionInputController {
 			const pointUsed = Number(document.getElementById('input-point-used')?.value) || 0;
 			const pointAccountId = document.getElementById('select-point-account')?.value || null;
 
-			if (totalAmount <= 0) {
+			if (totalAmount <= 0 && !amountPending) {
 				alert('購入総額を入力してください');
 				return;
 			}
@@ -817,6 +828,10 @@ export class TransactionInputController {
 		}
 
 		// Save to Database
+		if (amountPending) for (const tx of txRecordsToSave) { tx.status = 'planned'; tx.amount_pending = true; tx.tax_meta = null; }
+		const approved = await this.coordinator.approveClosedChanges(txRecordsToSave);
+		if (approved === null) return;
+		for (const tx of txRecordsToSave) tx.reclose_approved_months = approved;
 		await this.db.putTransactions(txRecordsToSave);
 		this.coordinator.showToast('✅ 登録が完了しました');
 

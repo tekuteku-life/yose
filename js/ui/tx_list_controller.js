@@ -123,7 +123,7 @@ export class TransactionListController {
 				</div>
 				<div style="text-align: right;">
 					<div class="tx-amount ${escapeHtml(t.type)}">
-						${amountPrefix}¥${Number(t.amount || 0).toLocaleString()}
+						${t.amount_pending ? '金額未入力' : `${amountPrefix}¥${Number(t.amount || 0).toLocaleString()}`}
 					</div>
 					${deleteBtnHtml}
 				</div>

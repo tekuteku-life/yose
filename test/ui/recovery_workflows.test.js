@@ -99,7 +99,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 		await d.click('#btn-header-sync');
 		await waitForDialog(d, '差分同期完了');
 		const retried = d.requests.slice(start).filter(r => r.url === gasUrl).map(r => JSON.parse(r.body));
-		assert.deepEqual(retried.map(r => r.action), ['retroactive_update']);
+		assert.deepEqual(retried.map(r => r.action), ['fetch_state', 'retroactive_update', 'fetch_state']);
 		assert.equal((await records(d))[0].sync_status, 'synced');
 		assert.equal((await d.evaluate('window.__yose_app.db.getSnapshot()')).monthly_summaries['2026-09'].expense_total, 222);
 	});
@@ -135,7 +135,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 		d.responses.set('/recovery-gas', { json: { success: true } });
 		await d.click('#btn-header-sync');
 		await waitForDialog(d, '差分同期完了');
-		const request = JSON.parse(d.requests.filter(r => r.url === gasUrl).at(-1).body);
+		const request = d.requests.filter(r => r.url === gasUrl).map(r => JSON.parse(r.body)).filter(r => r.action === 'retroactive_update').at(-1);
 		assert.equal(request.action, 'retroactive_update');
 		assert.equal(request.payload.previous_target_month, '2026-09');
 		assert.equal(request.payload.transaction.target_month, '2026-11');
