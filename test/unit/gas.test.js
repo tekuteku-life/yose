@@ -243,6 +243,7 @@ describe('gas/Code.gs - Unit Tests', () => {
 
 			// Setup initial master accounts
 			const masterEnv = await createSignedRequest('update_master', {
+				base_version: '{"schema_version":2}',
 				master_config: {
 					accounts: [{ id: 'acc_bank', initial_balance: 100000 }]
 				}

@@ -107,6 +107,9 @@ header {
 /* Navigation Tabs */
 .nav-tabs {
 	display: flex;
+	flex-wrap: nowrap;
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
 	background: var(--bg-card);
 	border-bottom: 1px solid var(--border);
 	position: sticky;
@@ -115,7 +118,8 @@ header {
 }
 
 .tab-btn {
-	flex: 1;
+	flex: 1 0 auto;
+	white-space: nowrap;
 	padding: 12px 8px;
 	background: none;
 	border: none;
@@ -357,6 +361,9 @@ header {
 /* Mode selector */
 .mode-tabs {
 	display: flex;
+	flex-wrap: nowrap;
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
 	background: var(--bg-hover);
 	padding: 4px;
 	border-radius: 8px;
@@ -365,7 +372,8 @@ header {
 }
 
 .mode-tab-btn {
-	flex: 1;
+	flex: 1 0 auto;
+	white-space: nowrap;
 	padding: 6px 8px;
 	border: none;
 	background: none;
@@ -407,7 +415,9 @@ header {
 	max-width: 500px;
 	width: 100%;
 	max-height: 90vh;
+	max-height: 90dvh;
 	overflow-y: auto;
+	overscroll-behavior-y: contain;
 	box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1);
 	padding: 20px;
 }
@@ -1093,3 +1103,46 @@ header {
 
 
 
+
+.edit-save-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
+}
+
+.edit-delete-actions {
+	margin-top: 16px;
+	padding-top: 16px;
+	border-top: 1px solid var(--border);
+}
+
+.suggest-dropdown button.suggest-item {
+	width: 100%;
+	text-align: left;
+	background: var(--bg-card);
+	color: var(--text-main);
+	border: 0;
+	font: inherit;
+	cursor: pointer;
+}
+
+.badge-syncing::before {
+	content: '';
+	display: inline-block;
+	width: 0.8em;
+	height: 0.8em;
+	margin-right: 5px;
+	border: 2px solid currentColor;
+	border-right-color: transparent;
+	border-radius: 50%;
+	animation: sync-spin 0.8s linear infinite;
+}
+
+@keyframes sync-spin {
+	to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.badge-syncing::before { animation: none; }
+}

@@ -17,6 +17,7 @@ export class SyncStatusController {
 	}
 
 	setupListeners() {
+		this.bindSyncManager();
 		// Header sync button
 		const btnHeaderSync = document.getElementById('btn-header-sync');
 		if (btnHeaderSync) {
@@ -30,6 +31,13 @@ export class SyncStatusController {
 			window.addEventListener('online', () => this.updateNetworkBadge());
 			window.addEventListener('offline', () => this.updateNetworkBadge());
 		}
+	}
+
+	bindSyncManager() {
+		this._unsubscribeSync?.();
+		this._unsubscribeMaster?.();
+		this._unsubscribeMaster = this.syncManager.onMasterChange(() => this.coordinator.refreshAllViews());
+		this._unsubscribeSync = this.syncManager.onStateChange(() => this.updateSyncBadge());
 	}
 
 	updateNetworkBadge() {
@@ -47,21 +55,39 @@ export class SyncStatusController {
 	async updateSyncBadge() {
 		const badge = document.getElementById('sync-badge');
 		if (!badge) return;
+		const showProgress = () => {
+			const syncing = this.syncManager.isSyncing;
+			for (const id of ['btn-header-sync', 'btn-manual-sync']) {
+				const button = document.getElementById(id);
+				if (button) button.disabled = syncing;
+			}
+			badge.setAttribute('aria-busy', String(syncing));
+			badge.setAttribute('aria-live', 'polite');
+			if (syncing) {
+				badge.textContent = '同期中…';
+				badge.className = 'badge badge-info badge-syncing';
+			}
+			return syncing;
+		};
+		if (showProgress()) return;
 		const unsynced = await this.db.getUnsyncedTransactions();
-		const count = unsynced ? unsynced.length : 0;
-		if (count === 0) {
-			badge.textContent = '同期済';
-			badge.className = 'badge badge-success';
+		const masterPending = await this.db.hasUnsyncedMasterConfig();
+		if (showProgress()) return;
+		const count = unsynced?.length || 0;
+		badge.title = this.syncManager.lastError || '';
+		if (count === 0 && !masterPending) {
+			badge.textContent = this.syncManager.lastError ? '同期失敗' : '同期済';
+			badge.className = this.syncManager.lastError ? 'badge badge-danger' : 'badge badge-success';
 		} else {
-			badge.textContent = `未同期: ${count}件`;
-			badge.className = 'badge badge-info';
+			badge.textContent = `${this.syncManager.lastError ? '同期失敗 / ' : ''}${count ? `未同期: ${count}件` : ''}${count && masterPending ? ' / ' : ''}${masterPending ? '設定が未同期' : ''}`;
+			badge.className = this.syncManager.lastError ? 'badge badge-danger' : 'badge badge-info';
 		}
 	}
 
 	async handleManualSync() {
 		try {
 			await this.coordinator.authController.ensureKeyUnlocked();
-			const res = await this.syncManager.syncBidirectional({ approveReclose: async (changes, months) => {
+			const res = await this.syncManager.syncBidirectional({ approveMasterConflict: async paths => confirm(`設定マスタに別端末との競合があります（${paths.join('、')}）。\n競合箇所は手元の設定を優先して送信しますか？\n取消時は手元とサーバーの設定を保持します。`), approveReclose: async (changes, months) => {
 				if (changes.some(tx => !tx.is_deleted && tx.target_month <= months.at(-1) && (tx.amount_pending || tx.status !== 'confirmed'))) {
 					alert('締め済み月の変更には金額入力済みの確定明細が必要です。'); return false;
 				}

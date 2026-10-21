@@ -74,7 +74,9 @@ async function main() {
 	console.log('6. [デプロイ] -> [新しいデプロイ] を選択');
 	console.log('   - 種類の選択: ウェブアプリ');
 	console.log('   - 次のユーザーとして実行: 自分');
-	console.log('   - アクセスできるユーザー: 全員 (Anyone)');
+	console.log('   - アクセスできるユーザー: 全員（Googleログイン不要、ANYONE_ANONYMOUS）');
+	console.log('   ※ 既存デプロイは [デプロイを管理] で実行ユーザー・アクセス設定を確認し、新バージョンへ更新する');
+	console.log('   ※ シークレットタブで /exec の status: ok を確認後、PWAから署名付き同期を確認する');
 	console.log('7. 発行された「ウェブアプリのURL」をコピーし、PWAの設定画面の GAS URL に貼り付けて保存！');
 	console.log('====================================================\n');
 }

@@ -149,12 +149,8 @@ describe('Integration - Client & GAS Sync Flow', () => {
 	it('handles retroactive edit of archived month and propagates recalculated snapshot', async () => {
 		// Initialize master config on GAS
 		const masterConfig = await db.getMasterConfig();
-		const updateMasterReq = {
-			action: 'update_master',
-			timestamp: Date.now(),
-			payload: { master_config: masterConfig }
-		};
-		gas.handleAction('update_master', { master_config: masterConfig });
+
+		assert.equal(gas.handleAction('update_master', { master_config: masterConfig, base_version: JSON.stringify({ schema_version: 2 }) }).success, true);
 
 		// Close 2026-09
 		await db.putTransaction({
@@ -210,7 +206,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 	});
 	for (const destination of ['2026-10', '2026-08']) {
 		it(`moves an archived transaction to ${destination}, removes the old entry, and recalculates once`, async () => {
-			gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+			assert.equal(gas.handleUpdateMaster({ master_config: await db.getMasterConfig(), base_version: JSON.stringify({ schema_version: 2 }) }).success, true);
 			const tx = { id: 'move_archived', date: '2026-09-20', target_month: '2026-09', type: 'expense', account_id: 'acc_bank_main', amount: 300, status: 'confirmed', sync_status: 'synced' };
 			gas.saveJsonFile('archives/2026-09.json', { transactions: [tx] });
 			const snapshot = { schema_version: 2, last_closed_month: '2026-09', account_balances: { acc_bank_main: 999700 }, monthly_summaries: { '2026-09': gas.computeMonthlySummary([tx], { acc_bank_main: 1000000 }) } };
@@ -230,7 +226,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 	}
 
 	it('keeps failed archived edits pending and retries them into the archive after reconnecting', async () => {
-		gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+		assert.equal(gas.handleUpdateMaster({ master_config: await db.getMasterConfig(), base_version: JSON.stringify({ schema_version: 2 }) }).success, true);
 		const initial = { id: 'retry_archive', date: '2026-09-20', target_month: '2026-09', type: 'expense', account_id: 'acc_bank_main', amount: 100, status: 'confirmed' };
 		gas.saveJsonFile('archives/2026-09.json', { transactions: [initial] });
 		const snapshot = { schema_version: 2, last_closed_month: '2026-09', account_balances: { acc_bank_main: 999900 }, monthly_summaries: { '2026-09': gas.computeMonthlySummary([initial], { acc_bank_main: 1000000 }) } };
@@ -250,7 +246,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 
 	for (const [source, intermediate] of [['2026-09', '2026-10'], ['2026-10', '2026-08']]) {
 		it(`deduplicates ${source} to ${intermediate} to November after the first response is lost`, async () => {
-			gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+			assert.equal(gas.handleUpdateMaster({ master_config: await db.getMasterConfig(), base_version: JSON.stringify({ schema_version: 2 }) }).success, true);
 			const initial = { id: 'lost_response', date: source + '-20', target_month: source, type: 'expense', account_id: 'acc_bank_main', amount: 300, status: 'confirmed' };
 			const snapshot = { schema_version: 2, last_closed_month: '2026-09', account_balances: { acc_bank_main: 1000000 }, monthly_summaries: { '2026-09': gas.computeMonthlySummary(source === '2026-09' ? [initial] : [], { acc_bank_main: 1000000 }) } };
 			gas.saveJsonFile('summary_snapshot.json', snapshot);
@@ -279,7 +275,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 	}
 
 	it('serializes sync before reading pending records and preserves edits made during that read', async () => {
-		gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+		assert.equal(gas.handleUpdateMaster({ master_config: await db.getMasterConfig(), base_version: JSON.stringify({ schema_version: 2 }) }).success, true);
 		gas.saveJsonFile('summary_snapshot.json', await db.getSnapshot());
 		const initial = await db.putTransaction({ id: 'read_race', date: '2026-10-20', target_month: '2026-10', type: 'expense', account_id: 'acc_bank_main', amount: 100, status: 'confirmed' });
 		let release;
@@ -313,7 +309,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 
 	for (const route of ['push_diff', 'retroactive_update']) {
 		it(`does not acknowledge a concurrently edited version while ${route} is in flight`, async () => {
-			gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+			assert.equal(gas.handleUpdateMaster({ master_config: await db.getMasterConfig(), base_version: JSON.stringify({ schema_version: 2 }) }).success, true);
 			gas.saveJsonFile('summary_snapshot.json', await db.getSnapshot());
 			const sent = { id: 'concurrent', date: '2026-10-20', target_month: '2026-10', type: 'expense', account_id: 'acc_bank_main', amount: 100, status: 'confirmed', sync_status: 'unsynced', updated_at: '2026-10-20T00:00:00Z', ...(route === 'retroactive_update' ? { previous_target_month: '2026-09', reclose_approved_months: ['2026-09'] } : {}) };
 			await db.putTransaction(sent);

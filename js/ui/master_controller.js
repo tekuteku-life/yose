@@ -141,14 +141,8 @@ export class MasterController {
 
 	async saveMasterConfigAndSync(config) {
 		await this.db.saveMasterConfig(config);
-		if (this.syncManager?.gasUrl && this.syncManager?.privateKey) {
-			try {
-				await this.syncManager.sendAction('update_master', { master_config: config });
-			} catch (err) {
-				console.warn('Sync master config to GAS deferred:', err.message);
-			}
-		}
 		await this.coordinator.refreshAllViews();
+		void this.syncManager.queueMasterSync();
 	}
 
 	async renderMasterManagement() {

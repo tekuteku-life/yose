@@ -3,6 +3,8 @@
  */
 
 import { createSignedRequest, canonicalJsonStringify } from './crypto.js';
+import { DEFAULT_MASTER_CONFIG } from './db/defaults.js';
+import { sharedMasterConfig, mergeMasterConfigs, assertMasterReferences } from './logic/master_sync.js';
 
 export class SyncManager {
 	/**
@@ -17,12 +19,76 @@ export class SyncManager {
 		this.privateKey = privateKey;
 		this.gasUrl = gasUrl;
 		this.fetch = customFetch || (typeof fetch !== 'undefined' ? fetch.bind(globalThis) : null);
-		this.isSyncing = false;
+		this._stateListeners = new Set();
+		this._masterListeners = new Set();
+		this._isSyncing = false;
+		this._masterSyncRequested = false;
+		this.requestTimeoutMs = 30000;
 		this.lastSyncedAt = null;
 		this.lastError = null;
 		this._listenersAttached = false;
 		this._onOnlineBound = null;
 		this._onVisibilityBound = null;
+	}
+
+
+	get isSyncing() { return this._isSyncing; }
+
+	set isSyncing(value) {
+		if (this._isSyncing === value) return;
+		this._isSyncing = value;
+		for (const listener of this._stateListeners) Promise.resolve().then(() => listener()).catch(error => console.warn('Sync status refresh failed:', error.message));
+		if (!value && this._masterSyncRequested) void this.queueMasterSync();
+	}
+
+	onStateChange(listener) {
+		this._stateListeners.add(listener);
+		return () => this._stateListeners.delete(listener);
+	}
+
+	onMasterChange(listener) {
+		this._masterListeners.add(listener);
+		return () => this._masterListeners.delete(listener);
+	}
+
+	async queueMasterSync() {
+		this._masterSyncRequested = true;
+		if (this.isSyncing || !this.gasUrl || !this.privateKey || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+		this._masterSyncRequested = false;
+		try { await this.syncMaster(); }
+		catch (error) { console.warn('Master sync deferred:', error.message); }
+	}
+
+	async syncMaster() {
+		if (this.isSyncing) return { status: 'already_syncing' };
+		this.isSyncing = true; this.lastError = null;
+		try {
+			const remote = await this.sendRequest('fetch_master', {});
+			await this.syncSharedMaster(remote.master_config);
+			return { status: 'synced' };
+		} catch (error) { this.lastError = error.message; throw error; }
+		finally { this.isSyncing = false; }
+	}
+
+	async syncSharedMaster(remoteConfig, approveMasterConflict = null) {
+		if (!remoteConfig) return;
+		const remote = sharedMasterConfig(remoteConfig);
+		const local = await this.db.getMasterConfig();
+		const sharedLocal = sharedMasterConfig(local);
+		const base = await this.db.getMasterSyncBase() || (Object.keys(remote).some(key => key !== 'schema_version') ? sharedMasterConfig(DEFAULT_MASTER_CONFIG) : { schema_version: 2 });
+		const { config, conflicts } = mergeMasterConfigs(base, sharedLocal, remote);
+		if (conflicts.length && (!approveMasterConflict || !await approveMasterConflict(conflicts))) throw new Error(`設定マスタが競合しています（${conflicts.join('、')}）。手元とサーバーを保持しました。手動差分同期で解決してください。`);
+		assertMasterReferences(config);
+		let accepted = remote;
+		if (canonicalJsonStringify(config) !== canonicalJsonStringify(remote)) {
+			const response = await this.sendRequest('update_master', { master_config: config, base_version: canonicalJsonStringify(remote) });
+			if (response.master_conflict) throw new Error('設定マスタが別端末で更新されました。手元の変更を保持しています。手動差分同期で再取得してください。');
+			accepted = response.master_config || config;
+		}
+		const committed = await this.db.commitMasterSync(local, accepted);
+		if (canonicalJsonStringify(sharedMasterConfig(committed)) !== canonicalJsonStringify(sharedLocal)) {
+			for (const listener of this._masterListeners) Promise.resolve().then(() => listener()).catch(error => console.warn('Master view refresh failed:', error.message));
+		}
 	}
 
 	setPrivateKey(key) {
@@ -36,8 +102,8 @@ export class SyncManager {
 	attachEventListeners() {
 		if (this._listenersAttached || typeof window === 'undefined') return;
 
-		this._onOnlineBound = () => {
-			this.syncPendingDiffs().catch(err => {
+		this._onOnlineBound = async () => {
+			await this.syncBidirectional().catch(err => {
 				console.warn('Online auto-sync failed:', err);
 			});
 		};
@@ -78,32 +144,35 @@ export class SyncManager {
 
 		const envelope = await createSignedRequest(action, payload, this.privateKey);
 
-		const res = await this.fetch(this.gasUrl, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'text/plain;charset=utf-8'
-			},
-			body: JSON.stringify(envelope),
-			keepalive: keepalive
+		const abort = new AbortController();
+		let timer;
+		const timeout = new Promise((_, reject) => {
+			timer = setTimeout(() => {
+				abort.abort();
+				reject(new Error('同期通信がタイムアウトしました。サーバーで処理済みの可能性があります。接続を確認し、手動差分同期で最新状態を再取得してください。'));
+			}, this.requestTimeoutMs);
 		});
+		const request = async () => {
+			const res = await this.fetch(this.gasUrl, {
+				method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+				body: JSON.stringify(envelope), keepalive, signal: abort.signal,
+				credentials: 'omit', redirect: 'follow'
+			});
+			if (!res.ok) throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
+			const text = await res.text();
+			let data;
+			try { data = JSON.parse(text); }
+			catch (error) { throw new Error(`Invalid JSON response from server: ${text}`); }
+			if (!data?.success) throw new Error(data?.error || 'Server returned failure response');
+			return data;
+		};
+		try { return await Promise.race([request(), timeout]); }
+		catch (error) {
+			if (error.name === 'AbortError') throw new Error('同期通信がタイムアウトしました。サーバーで処理済みの可能性があります。接続を確認し、手動差分同期で最新状態を再取得してください。');
+			if (error instanceof TypeError || /Failed to fetch|fetch error|NetworkError/i.test(error.message)) throw new Error(`GASに接続できませんでした。ネット接続、GASの公開権限、保存URL（デプロイ済みの /exec）を確認してください。手元の変更は保持しています。詳細: ${error.message}`);
+			throw error;
+		} finally { clearTimeout(timer); }
 
-		if (!res.ok) {
-			throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
-		}
-
-		const text = await res.text();
-		let data;
-		try {
-			data = JSON.parse(text);
-		} catch (e) {
-			throw new Error(`Invalid JSON response from server: ${text}`);
-		}
-
-		if (!data.success) {
-			throw new Error(data.error || 'Server returned failure response');
-		}
-
-		return data;
 	}
 
 	async sendAction(action, payload, options) {
@@ -153,12 +222,13 @@ export class SyncManager {
 		return { response, count };
 	}
 
-	async syncBidirectional({ approveReclose = null } = {}) {
+	async syncBidirectional({ approveReclose = null, approveMasterConflict = null } = {}) {
 		if (this.isSyncing) return { status: 'already_syncing', synced_count: 0, downloaded_count: 0 };
 		this.isSyncing = true; this.lastError = null;
 		let stage = '受信';
 		try {
 			const first = await this.downloadTransactions();
+			await this.syncSharedMaster(first.response.master_config, approveMasterConflict);
 			const closed = (await this.db.getSnapshot())?.last_closed_month;
 			const pending = await this.db.getUnsyncedTransactions();
 			const affectedMonths = tx => [tx.target_month, tx.previous_target_month, ...(first.response.archived_transactions || []).filter(remote => remote.id === tx.id).map(remote => remote.target_month)].filter(month => month && closed && month <= closed);
@@ -174,6 +244,8 @@ export class SyncManager {
 			const uploaded = await this.pushPending();
 			stage = '再受信';
 			const last = await this.downloadTransactions();
+			await this.syncSharedMaster(last.response.master_config, approveMasterConflict);
+			this.lastSyncedAt = new Date().toISOString();
 			return { status: 'synced', synced_count: uploaded.synced_count, downloaded_count: first.count + last.count, pending_count: (await this.db.getUnsyncedTransactions()).length };
 		} catch (error) { this.lastError = `${stage}: ${error.message}`; throw new Error(this.lastError); }
 		finally { this.isSyncing = false; }
@@ -247,7 +319,7 @@ export class SyncManager {
 		try {
 			const response = await this.sendRequest('fetch_state', {});
 			if (response.master_config) {
-				await this.db.saveMasterConfig(response.master_config);
+				await this.syncSharedMaster(response.master_config);
 			}
 			if (response.snapshot) {
 				await this.db.saveSnapshot(response.snapshot);

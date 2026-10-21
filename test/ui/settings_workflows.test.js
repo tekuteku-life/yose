@@ -291,16 +291,16 @@ describe('Settings, files, security rendering, and persistence', { timeout: 1200
 		await d.waitFor('document.getElementById("update-status-msg").textContent.includes("オフライン")');
 	});
 
-	it('reports unconfigured sync, master sync, remote fetch, and month-close errors without disabling controls', async () => {
+	it('reports unconfigured unified sync and month-close errors without disabling controls', async () => {
 		const d = fixture.driver;
 		await seed(d, [transaction('unsynced')]);
 		await d.click('#btn-header-sync');
 		await waitForDialog(d, '同期に失敗');
 		await settings(d);
-		await d.click('#btn-sync-master');
-		await waitForDialog(d, 'URL が設定されていません');
-		await d.click('#btn-fetch-remote');
-		await waitForDialog(d, 'リモート状態取得エラー');
+		assert.equal(await d.evaluate('document.getElementById("btn-sync-master")'), null);
+		assert.equal(await d.evaluate('document.getElementById("btn-fetch-remote")'), null);
+		await d.click('#btn-manual-sync');
+		assert.equal(await d.evaluate('document.getElementById("btn-manual-sync").disabled'), false);
 		await cashflow(d);
 		await d.click('#btn-close-month');
 		await waitForDialog(d, '月締めに失敗');

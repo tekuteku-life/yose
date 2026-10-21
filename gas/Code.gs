@@ -531,6 +531,8 @@ function handleAction(action, payload) {
 			return handleRetroactiveUpdate(payload);
 		case 'fetch_state':
 			return handleFetchState();
+		case 'fetch_master':
+			return { success: true, master_config: sharedMasterConfig(loadJsonFile('master_config.json', { schema_version: 2 })) };
 		case 'update_master':
 			return handleUpdateMaster(payload);
 		case 'update_external_assets':
@@ -564,7 +566,7 @@ function handleFetchState() {
 	const archives = readArchives();
 	return {
 		success: true,
-		master_config: loadJsonFile('master_config.json', { schema_version: 2 }),
+		master_config: sharedMasterConfig(loadJsonFile('master_config.json', { schema_version: 2 })),
 		snapshot: loadJsonFile('summary_snapshot.json', { schema_version: 2, last_closed_month: null, account_balances: {}, monthly_summaries: {} }),
 		pending_diffs: loadJsonFile('pending_diffs.json', { transactions: [] }).transactions || [],
 		archived_transactions: archives.flatMap(archive => archive.transactions || []),
@@ -572,10 +574,30 @@ function handleFetchState() {
 	};
 }
 
+function sharedMasterConfig(config) {
+	function assertSafe(value) {
+		if (!value || typeof value !== 'object') return;
+		for (const key of Object.keys(value)) {
+			if (['__proto__', 'constructor', 'prototype'].includes(key)) throw new Error('設定マスタに不正なキーが含まれています');
+			assertSafe(value[key]);
+		}
+	}
+	assertSafe(config);
+	const shared = {};
+	for (const key of ['schema_version', 'accounts', 'categories', 'recurring_rules', 'holidays', 'annual_budgets']) if (config[key] !== undefined) shared[key] = config[key];
+	return shared;
+}
+
 function handleUpdateMaster(payload) {
 	if (!payload || !payload.master_config) return { success: false, error: 'Missing master_config in payload' };
-	saveJsonFile('master_config.json', payload.master_config);
-	return { success: true };
+	if (typeof payload.base_version !== 'string') return { success: false, error: 'Missing base_version; update the app and retry synchronization' };
+	try {
+		const current = sharedMasterConfig(loadJsonFile('master_config.json', { schema_version: 2 }));
+		const next = sharedMasterConfig(payload.master_config);
+		if (payload.base_version !== canonicalJsonStringify(current)) return { success: true, master_conflict: true, master_config: current };
+		saveJsonFile('master_config.json', next);
+		return { success: true, master_config: next };
+	} catch (error) { return { success: false, error: error.message }; }
 }
 
 function handlePushDiff(payload) {

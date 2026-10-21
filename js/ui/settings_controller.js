@@ -107,33 +107,6 @@ export class SettingsController {
 			await this.coordinator.syncStatusController.handleManualSync();
 		});
 
-		// Sync Master button
-		document.getElementById('btn-sync-master')?.addEventListener('click', async () => {
-			try {
-				await this.authController.ensureKeyUnlocked();
-				if (!this.syncManager?.gasUrl) {
-					alert('GAS Web App URL が設定されていません');
-					return;
-				}
-				const config = await this.db.getMasterConfig();
-				await this.syncManager.sendAction('update_master', { master_config: config });
-				alert('設定マスタをGASへ送信しました！');
-			} catch (err) {
-				alert(`マスタ同期エラー: ${err.message}`);
-			}
-		});
-
-		// Fetch remote state
-		document.getElementById('btn-fetch-remote')?.addEventListener('click', async () => {
-			try {
-				await this.syncManager.fetchRemoteState();
-				alert('リモート最新状態の取得が完了しました');
-				await this.coordinator.refreshAllViews();
-			} catch (err) {
-				alert(`リモート状態取得エラー: ${err.message}`);
-			}
-		});
-
 		// Helper function to trigger download of JSON
 		const downloadJsonFile = (data, filename) => {
 			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -422,6 +395,7 @@ export class SettingsController {
 			});
 			alert(`${year}年の年間予算・費目別目標を保存しました！`);
 			await this.coordinator.refreshAllViews();
+			void this.syncManager.queueMasterSync();
 		});
 
 		// View / Edit Master JSON
@@ -443,9 +417,8 @@ export class SettingsController {
 		btnSaveMaster?.addEventListener('click', async () => {
 			try {
 				const config = JSON.parse(txtMaster.value);
-				await this.db.saveMasterConfig(config);
+				await this.coordinator.masterController.saveMasterConfigAndSync(config);
 				alert('マスタ設定を保存しました');
-				await this.coordinator.refreshAllViews();
 			} catch (err) {
 				alert(`JSONフォーマットエラー: ${err.message}`);
 			}

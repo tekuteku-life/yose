@@ -206,6 +206,65 @@ export class StorageEngine {
 		});
 	}
 
+	async compareAndPutMaintenanceBatch(expectedMaster, expectedRecords, replacements) {
+		const equalRecords = records => canonicalJsonStringify([...records].sort((a, b) => a.id.localeCompare(b.id))) === canonicalJsonStringify([...expectedRecords].sort((a, b) => a.id.localeCompare(b.id)));
+		if (this.memoryDb) {
+			if (canonicalJsonStringify(this.memoryDb.stores.master_config.get('current')) !== canonicalJsonStringify(expectedMaster) || !equalRecords(this.memoryDb.stores.transactions.values())) return false;
+			for (const replacement of replacements) this.memoryDb.stores.transactions.set(replacement.id, JSON.parse(JSON.stringify(replacement)));
+			return true;
+		}
+		return new Promise((resolve, reject) => {
+			const transaction = this.db.transaction(['master_config', 'transactions'], 'readwrite');
+			let applied = false;
+			transaction.oncomplete = () => resolve(applied);
+			transaction.onerror = () => reject(transaction.error || new Error('Maintenance batch failed'));
+			transaction.onabort = () => reject(transaction.error || new Error('Maintenance batch aborted'));
+			const master = transaction.objectStore('master_config').get('current');
+			const records = transaction.objectStore('transactions').getAll();
+			let remaining = 2;
+			const commit = () => {
+				if (--remaining) return;
+				if (canonicalJsonStringify(master.result) !== canonicalJsonStringify(expectedMaster) || !equalRecords(records.result)) return;
+				const store = transaction.objectStore('transactions');
+				for (const replacement of replacements) store.put(replacement);
+				applied = true;
+			};
+			master.onsuccess = commit;
+			records.onsuccess = commit;
+		});
+	}
+
+
+	async compareAndPutRawBatch(storeName, entries) {
+		if (this.memoryDb) {
+			const store = this.memoryDb.stores[storeName];
+			if (entries.some(entry => canonicalJsonStringify(store.get(entry.key) ?? null) !== canonicalJsonStringify(entry.expected ?? null))) return false;
+			const replacements = entries.map(entry => ({ key: entry.key, value: structuredClone(entry.replacement) }));
+			for (const entry of replacements) store.set(entry.key, entry.value);
+			return true;
+		}
+		return new Promise((resolve, reject) => {
+			const transaction = this.db.transaction([storeName], 'readwrite');
+			const store = transaction.objectStore(storeName);
+			let remaining = entries.length, matches = true, changed = false;
+			transaction.oncomplete = () => resolve(changed);
+			transaction.onerror = () => reject(transaction.error || new Error('IndexedDB batch comparison failed'));
+			transaction.onabort = () => reject(transaction.error || new Error('IndexedDB batch comparison aborted'));
+			for (const entry of entries) {
+				const request = store.get(entry.key);
+				request.onsuccess = () => {
+					if (canonicalJsonStringify(request.result ?? null) !== canonicalJsonStringify(entry.expected ?? null)) matches = false;
+					if (--remaining || !matches) return;
+					for (const replacement of entries) {
+						if (store.keyPath) store.put(replacement.replacement);
+						else store.put(replacement.replacement, replacement.key);
+					}
+					changed = true;
+				};
+			}
+		});
+	}
+
 	async deleteRaw(storeName, key) {
 		if (this.memoryDb) {
 			return await this.memoryDb.delete(storeName, key);

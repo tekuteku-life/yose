@@ -15,7 +15,7 @@ describe('Bidirectional sync and explicit month closing', () => {
 		db = new YoseDB(); await db.init();
 		const kp = await generateEd25519KeyPair();
 		PropertiesService.getScriptProperties().setProperty('USER_PUBLIC_KEYS', await exportPublicKeyBase64(kp.publicKey));
-		gas.handleUpdateMaster({ master_config: await db.getMasterConfig() });
+		assert.equal(gas.handleUpdateMaster({ master_config: await db.getMasterConfig(), base_version: JSON.stringify({ schema_version: 2 }) }).success, true);
 		gas.saveJsonFile('summary_snapshot.json', await db.getSnapshot());
 		sync = new SyncManager({ db, privateKey: kp.privateKey, gasUrl: 'https://gas.test', customFetch: async (_url, options) => ({ ok: true, text: async () => JSON.stringify(gas.doPost({ postData: { contents: options.body } })) }) });
 	});
@@ -33,6 +33,28 @@ describe('Bidirectional sync and explicit month closing', () => {
 		assert.equal((await db.getTransaction('archive')).sync_status, 'synced');
 		assert.equal((await db.getUnsyncedTransactions()).length, 0);
 		assert.ok(gas.loadJsonFile('pending_diffs.json').transactions.some(tx => tx.id === 'local'));
+	});
+
+	it('migrates archived master references through signed sync and recalculates closed summaries', async () => {
+		const config = await db.getMasterConfig();
+		config.categories.find(category => category.id === 'cat_food').is_archived = true;
+		await db.saveMasterConfig(config);
+		gas.saveJsonFile('master_config.json', config);
+		const original = transaction('maintenance_closed', { date: '2026-09-10', target_month: '2026-09', sync_status: 'synced' });
+		await db.putTransaction(original);
+		gas.saveJsonFile('archives/2026-09.json', { transactions: [original] });
+		await db.migrateArchivedMaster({ kind: 'category', id: 'cat_food' }, { id: 'cat_housing', subcategoryId: null }, await db.getTransactions(), await db.getMasterConfig(), ['2026-09']);
+		await sync.syncBidirectional();
+		const archive = gas.loadJsonFile('archives/2026-09.json').transactions;
+		assert.equal(archive.length, 1);
+		assert.equal(archive[0].id, original.id);
+		assert.equal(archive[0].category_id, 'cat_housing');
+		assert.equal(archive[0].actual_category_id, 'cat_housing');
+		assert.equal(archive[0].amount, original.amount);
+		const snapshot = gas.loadJsonFile('summary_snapshot.json');
+		assert.equal(snapshot.monthly_summaries['2026-09'].by_category.cat_housing.total, 100);
+		assert.equal(snapshot.monthly_summaries['2026-09'].by_category.cat_food, undefined);
+		assert.equal((await db.getTransaction(original.id)).sync_status, 'synced');
 	});
 
 	it('downloads even when the local device has no pending upload', async () => {

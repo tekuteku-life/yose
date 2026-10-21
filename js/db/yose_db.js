@@ -2,12 +2,14 @@
  * Yoseatsume Kakeibo - High-Level Domain Repository (YoseDB)
  */
 
+import { buildMasterMigration } from '../logic/master_maintenance.js';
 import { DEFAULT_MASTER_CONFIG, DEFAULT_SUMMARY_SNAPSHOT } from './defaults.js';
 import { StorageEngine } from './storage_engine.js';
 import { BackupMerger } from './backup_merger.js';
 import { formatDate, calculateCreditCardDebitDate } from '../logic/date_utils.js';
 import { canonicalJsonStringify } from '../crypto.js';
 import { createCreditCardSettlementTransaction } from '../logic/transaction_factory.js';
+import { SHARED_MASTER_FIELDS, sharedMasterConfig, mergeMasterConfigs, assertMasterReferences } from '../logic/master_sync.js';
 
 export class YoseDB extends StorageEngine {
 	// --- Master Config ---
@@ -24,6 +26,36 @@ export class YoseDB extends StorageEngine {
 		const toStore = await this.encryptRecord(updated);
 		await this.putRaw('master_config', toStore, 'current');
 		return updated;
+	}
+
+
+	async getMasterSyncBase() {
+		return this.decryptRecord(await this.getRaw('master_config', 'sync_base'));
+	}
+
+	async hasUnsyncedMasterConfig() {
+		const base = await this.getMasterSyncBase() || sharedMasterConfig(DEFAULT_MASTER_CONFIG);
+		return canonicalJsonStringify(sharedMasterConfig(await this.getMasterConfig())) !== canonicalJsonStringify(base);
+	}
+
+	async commitMasterSync(submittedLocal, acceptedShared) {
+		const accepted = sharedMasterConfig(acceptedShared);
+		while (true) {
+			const raw = await this.getRaw('master_config', 'current');
+			const baseRaw = await this.getRaw('master_config', 'sync_base');
+			const current = await this.decryptRecord(raw);
+			const merged = mergeMasterConfigs(sharedMasterConfig(submittedLocal), sharedMasterConfig(current), accepted).config;
+			assertMasterReferences(merged);
+			const replacement = { ...current };
+			for (const field of SHARED_MASTER_FIELDS) delete replacement[field];
+			Object.assign(replacement, merged);
+			const encrypted = await this.encryptRecord(replacement);
+			const encryptedBase = await this.encryptRecord(accepted);
+			if (await this.compareAndPutRawBatch('master_config', [
+				{ key: 'current', expected: raw, replacement: encrypted },
+				{ key: 'sync_base', expected: baseRaw, replacement: encryptedBase }
+			])) return replacement;
+		}
 	}
 
 	// --- Summary Snapshot ---
@@ -575,5 +607,22 @@ export class YoseDB extends StorageEngine {
 		await this.putTransactions(updatedTxs);
 		return updatedTxs.length;
 	}
+	async migrateArchivedMaster(source, target, expectedRecords, expectedConfig, approvedMonths) {
+		const rawMaster = await this.getRaw('master_config', 'current');
+		const config = await this.decryptRecord(rawMaster);
+		if (canonicalJsonStringify(config) !== canonicalJsonStringify(expectedConfig)) throw new Error('設定が変更されたため、一覧を更新して再確認する必要がある');
+		const rawRecords = await this.getAllRaw('transactions');
+		const records = await Promise.all(rawRecords.map(raw => this.decryptRecord(raw)));
+		const planned = buildMasterMigration(expectedRecords, config, source, target);
+		const current = buildMasterMigration(records, config, source, target);
+		const orderedOriginals = (rows, plan) => rows.filter(row => plan.some(item => item.id === row.id)).sort((a, b) => a.id.localeCompare(b.id));
+		if (canonicalJsonStringify(orderedOriginals(expectedRecords, planned)) !== canonicalJsonStringify(orderedOriginals(records, current))) throw new Error('対象明細が変更されたため、一覧を更新して再確認する必要がある');
+		const timestamp = new Date().toISOString();
+		const replacements = current.map(record => ({ ...record, updated_at: timestamp, sync_status: 'unsynced', reclose_approved_months: approvedMonths }));
+		const encrypted = await Promise.all(replacements.map(record => this.encryptRecord(record, { id: record.id, target_month: record.target_month, date: record.date, sync_status: record.sync_status, is_deleted: false })));
+		if (!await this.compareAndPutMaintenanceBatch(rawMaster, rawRecords, encrypted)) throw new Error('処理中に設定または明細が変更されたため、再確認する必要がある');
+		return replacements;
+	}
+
 }
 
