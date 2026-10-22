@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { findArchivedReferences, buildMasterMigration } from '../../js/logic/master_maintenance.js';
+import * as maintenance from '../../js/logic/master_maintenance.js';
 import { YoseDB } from '../../js/db.js';
 
 const config = {
@@ -30,6 +31,27 @@ async function historicalFixture() {
 }
 
 describe('archived master maintenance', () => {
+	it('offers only archived sources referenced by undeleted loaded records, including zero and planned rows', () => {
+		const records = [
+			tx('actual', { category_id: 'new', subcategory_id: null, actual_category_id: 'old', actual_subcategory_id: 'oldsub', account_id: 'new', amount: 0, amount_pending: true, status: 'planned' }),
+			tx('both', { account_id: 'new', actual_category_id: 'old', actual_subcategory_id: 'oldsub' }),
+			tx('destination', { type: 'transfer', category_id: null, subcategory_id: null, actual_category_id: null, actual_subcategory_id: null, account_id: 'new', to_account_id: 'old' }),
+			tx('deleted-child', { category_id: 'new', subcategory_id: 'archsub', actual_category_id: 'new', is_deleted: true, account_id: 'new' })
+		];
+		assert.deepEqual(maintenance.referencedArchivedMasterSources(config, records).map(s => [s.kind, s.parentId || null, s.id, s.count]), [
+			['account', null, 'old', 1], ['category', null, 'old', 2], ['subcategory', 'old', 'oldsub', 2]
+		]);
+		assert.equal(maintenance.referencedArchivedMasterSources(config, [tx('both-endpoints', { type: 'transfer', to_account_id: 'old' })]).find(s => s.kind === 'account').count, 1);
+		assert.deepEqual(maintenance.referencedArchivedMasterSources(config, []), []);
+		assert.deepEqual(maintenance.referencedArchivedMasterSources(config, records.map(r => ({ ...r, is_deleted: true }))), []);
+		assert.ok(maintenance.referencedArchivedMasterSources(config, [tx('child', { category_id: 'new', subcategory_id: 'archsub', account_id: 'new' })]).some(s => s.id === 'archsub'));
+	});
+	it('filters the visible maintenance rows by the selected archived source', () => {
+		const records = [tx('category', { account_id: 'new' }), tx('account', { category_id: 'new', subcategory_id: null }), tx('child', { category_id: 'new', subcategory_id: 'archsub', account_id: 'new' })];
+		assert.deepEqual(findArchivedReferences(records, config, { kind: 'category', id: 'old' }).map(r => r.id), ['category']);
+		assert.deepEqual(findArchivedReferences(records, config, { kind: 'account', id: 'old' }).map(r => r.id), ['account']);
+		assert.deepEqual(findArchivedReferences(records, config, { kind: 'subcategory', id: 'archsub', parentId: 'new' }).map(r => r.id), ['child']);
+	});
 	it('lists archived references including actual axes, transfer destinations and archived parents, excluding deleted rows', () => {
 		const result = findArchivedReferences([
 			tx('normal'), tx('actual', { category_id: 'new', subcategory_id: null, actual_category_id: 'old', actual_subcategory_id: 'oldsub', account_id: 'new' }),

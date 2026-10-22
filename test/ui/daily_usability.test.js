@@ -99,7 +99,10 @@ describe('Daily usability improvements', { timeout: 120000 }, () => {
 		await seed(d, [transaction('local_upload')]);
 		await gas(d, { success: true, pending_diffs: [transaction('remote_download')], archived_transactions: [], archive_months: [], snapshot: { schema_version: 2, last_closed_month: '2026-09', account_balances: {}, monthly_summaries: {} } });
 		await d.click('#btn-header-sync');
-		await waitForDialog(d, '受信');
+		await d.waitFor('window.__dialogs.some(dialog => /^(差分同期完了:|同期に失敗しました:)/.test(dialog.message))');
+		const completion = await d.evaluate('window.__dialogs.find(dialog => /^(差分同期完了:|同期に失敗しました:)/.test(dialog.message)).message');
+		assert.match(completion, /^差分同期完了:/, completion);
+		await d.waitFor('!window.__yose_app.syncManager.isSyncing');
 		assert.deepEqual((await records(d)).map(tx => tx.id).sort(), ['local_upload', 'remote_download']);
 		const actions = d.requests.filter(r => r.url === gasUrl).map(r => JSON.parse(r.body).action);
 		assert.deepEqual(actions, ['fetch_state', 'fetch_master', 'push_diff', 'fetch_state']);

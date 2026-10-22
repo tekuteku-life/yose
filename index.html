@@ -435,6 +435,12 @@
 				<div class="card-title">
 					<span id="category-breakdown-title">費目別推移・内訳</span>
 				</div>
+				<h4 id="category-trend-title">費目ごとの支出推移</h4>
+				<p id="category-trend-scope" style="color: var(--text-muted); font-size: 0.8rem;"></p>
+				<div id="category-trend-chart-container" class="chart-container" style="height: 280px; position: relative;">
+					<canvas id="category-trend-chart" role="img" aria-label="費目ごとの支出推移"></canvas>
+				</div>
+				<div id="category-trend-fallback" class="table-container" role="status"></div>
 				<div id="category-breakdown-chart-container" class="chart-container" style="height: 240px; position: relative; margin-bottom: 12px; display: none;">
 					<canvas id="category-breakdown-chart"></canvas>
 				</div>
@@ -802,7 +808,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.11.1</span>
+					<span class="badge badge-info" id="badge-current-version">v1.12.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。

@@ -20,9 +20,16 @@ function matches(record, source) {
 		&& (source.kind === 'category' || record[`${prefix}subcategory_id`] === source.id));
 }
 
-export function findArchivedReferences(records, config) {
+export function referencedArchivedMasterSources(config, records) {
+	return archivedMasterSources(config).map(source => ({
+		...source,
+		count: records.filter(record => matches(record, source)).length
+	})).filter(source => source.count > 0);
+}
+
+export function findArchivedReferences(records, config, selectedSource = null) {
 	const sources = archivedMasterSources(config);
-	return records.filter(record => sources.some(source => matches(record, source))).map(record => ({
+	return records.filter(record => selectedSource ? matches(record, selectedSource) : sources.some(source => matches(record, source))).map(record => ({
 		...record,
 		archived_labels: sources.filter(source => matches(record, source)).map(source => source.label)
 	}));

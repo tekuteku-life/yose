@@ -17,6 +17,7 @@ export class TransactionListController {
 		this.pageSize = 30;
 		this.totalPages = 1;
 		this._paginationEventsAttached = false;
+		this._renderGeneration = 0;
 	}
 
 	get db() {
@@ -24,10 +25,19 @@ export class TransactionListController {
 	}
 
 	populateFilterDropdowns(txs = [], masterConfig = {}) {
+		const referencedAccounts = new Set();
+		const referencedCategories = new Set();
+		for (const tx of txs) {
+			if (!tx || tx.is_deleted) continue;
+			referencedAccounts.add(tx.account_id);
+			referencedAccounts.add(tx.to_account_id);
+			referencedCategories.add(tx.category_id);
+			referencedCategories.add(tx.actual_category_id);
+		}
 		const accSelect = document.getElementById('select-account-filter');
 		if (accSelect) {
 			const currentAcc = accSelect.value || 'all';
-			const accounts = (masterConfig?.accounts || []).filter(a => !a.is_archived);
+			const accounts = (masterConfig?.accounts || []).filter(a => !a.is_archived || referencedAccounts.has(a.id));
 			accSelect.innerHTML = [
 				'<option value="all">すべての口座</option>',
 				...accounts.map(a => `<option value="${escapeHtml(a.id)}">🏦 ${escapeHtml(a.name)}</option>`)
@@ -42,7 +52,7 @@ export class TransactionListController {
 		const catSelect = document.getElementById('select-category-filter');
 		if (catSelect) {
 			const currentCat = catSelect.value || 'all';
-			const categories = (masterConfig?.categories || []).filter(c => !c.is_archived);
+			const categories = (masterConfig?.categories || []).filter(c => !c.is_archived || referencedCategories.has(c.id));
 			catSelect.innerHTML = [
 				'<option value="all">すべての費目</option>',
 				...categories.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.icon || '🏷️')} ${escapeHtml(c.name)}</option>`)
@@ -132,6 +142,7 @@ export class TransactionListController {
 	}
 
 	async renderMonthTransactions() {
+		const generation = ++this._renderGeneration;
 		const list = document.getElementById('month-tx-list');
 		if (!list) return;
 
@@ -143,7 +154,7 @@ export class TransactionListController {
 			const targetYear = this.coordinator.selectedYear || new Date().getFullYear();
 			if (titleEl) titleEl.textContent = `📋 ${targetYear}年 (年間) の明細一覧`;
 			const all = await this.db.getTransactions({ includeDeleted: false });
-			txs = all.filter(t => t.date && t.date.startsWith(String(targetYear)));
+			txs = all.filter(t => t.target_month && t.target_month.startsWith(`${targetYear}-`));
 		} else if (granularity === 'daily') {
 			const targetDate = this.coordinator.selectedDate || (formatDate ? formatDate(new Date()) : new Date().toISOString().slice(0, 10));
 			if (titleEl) titleEl.textContent = `📋 ${targetDate} (日別) の明細一覧`;
@@ -157,7 +168,9 @@ export class TransactionListController {
 
 		txs.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.created_at || '').localeCompare(a.created_at || ''));
 
+		if (generation !== this._renderGeneration) return;
 		const masterConfig = await this.db.getMasterConfig();
+		if (generation !== this._renderGeneration) return;
 
 		this.populateFilterDropdowns(txs, masterConfig);
 

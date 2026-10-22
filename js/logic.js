@@ -53,3 +53,5 @@ export {
 	generateAnnualTrajectory
 } from './logic/budget_engine.js';
 
+export { buildCategoryTrend } from './logic/category_trend.js';
+
