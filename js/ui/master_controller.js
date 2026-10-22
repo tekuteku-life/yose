@@ -801,7 +801,7 @@ export class MasterController {
 					</div>
 					<div class="form-row">
 						<div class="form-group"><label class="form-label" for="m-rec-account">決済口座</label><select id="m-rec-account" class="form-control" required>${options(config.accounts || [], item?.account_id)}</select></div>
-						<div class="form-group" id="m-rec-to-group"><label class="form-label" for="m-rec-to-account">振替先口座</label><select id="m-rec-to-account" class="form-control"><option value="">振替先の指定が必要である</option>${options(config.accounts || [], item?.to_account_id)}</select></div>
+						<div class="form-group" id="m-rec-to-group"><label class="form-label" for="m-rec-to-account">振替先口座</label><select id="m-rec-to-account" class="form-control"><option value="">振替先の指定が必要です</option>${options(config.accounts || [], item?.to_account_id)}</select></div>
 					</div>
 					<div id="m-rec-classification">
 						<div class="form-row"><div class="form-group"><label class="form-label" for="m-rec-cat">計上費目</label><select id="m-rec-cat" class="form-control"></select></div><div class="form-group"><label class="form-label" for="m-rec-sub">計上中項目</label><select id="m-rec-sub" class="form-control"></select></div></div>

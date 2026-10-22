@@ -791,11 +791,11 @@ export class YoseDB extends StorageEngine {
 	async migrateArchivedMaster(source, target, expectedRecords, expectedConfig, approvedMonths) {
 		return this.mutateBusiness(state => {
 			const config = state.master_config, records = state.transactions;
-			if (canonicalJsonStringify(config) !== canonicalJsonStringify(expectedConfig)) throw new Error('設定が変更されたため、一覧を更新して再確認する必要がある');
+			if (canonicalJsonStringify(config) !== canonicalJsonStringify(expectedConfig)) throw new Error('設定が変更されたため、一覧を更新して再確認してください。');
 			const planned = buildMasterMigration(expectedRecords, config, source, target);
 			const current = buildMasterMigration(records, config, source, target);
 			const orderedOriginals = (rows, plan) => rows.filter(row => plan.some(item => item.id === row.id)).sort((a, b) => a.id.localeCompare(b.id));
-			if (canonicalJsonStringify(orderedOriginals(expectedRecords, planned)) !== canonicalJsonStringify(orderedOriginals(records, current))) throw new Error('対象明細が変更されたため、一覧を更新して再確認する必要がある');
+			if (canonicalJsonStringify(orderedOriginals(expectedRecords, planned)) !== canonicalJsonStringify(orderedOriginals(records, current))) throw new Error('対象明細が変更されたため、一覧を更新して再確認してください。');
 			const timestamp = new Date().toISOString();
 			const replacements = current.map(record => ({ ...record, updated_at: timestamp, sync_status: 'unsynced', reclose_approved_months: approvedMonths }));
 			state.transactions = records.map(record => replacements.find(item => item.id === record.id) || record);

@@ -19,13 +19,13 @@ export class MaintenanceController {
 		panel.id = 'maintenance-panel';
 		panel.className = 'card';
 		panel.innerHTML = `<summary>アーカイブ設定の明細メンテナンス</summary>
-			<p id="maintenance-scope">取得済み明細が対象である。過去分を含める場合は先に差分同期を実行する。</p>
-			<p>明細の設定参照を移行する。口座初期残高と定期ルールは対象外である。</p>
+			<p id="maintenance-scope">取得済み明細が対象です。過去分を含める場合は先に差分同期を実行してください。</p>
+			<p>明細の設定参照を移行します。口座初期残高と定期ルールは対象外です。</p>
 			<button type="button" id="btn-refresh-maintenance" class="btn btn-secondary">一覧を更新</button>
 			<p id="maintenance-refresh-status" role="status"></p>
-			<div class="form-group"><label class="form-label" for="maintenance-source">移行元（アーカイブ済みである）</label><select class="form-control" id="maintenance-source"></select></div>
-			<div class="form-group"><label class="form-label" for="maintenance-target">移行先（有効な設定である）</label><select class="form-control" id="maintenance-target"></select></div>
-			<div class="form-group" id="maintenance-subcategory-group"><label class="form-label" for="maintenance-subcategory">移行先中項目（選択費目の配下である）</label><select class="form-control" id="maintenance-subcategory"></select></div>
+			<div class="form-group"><label class="form-label" for="maintenance-source">移行元（アーカイブ済みです）</label><select class="form-control" id="maintenance-source"></select></div>
+			<div class="form-group"><label class="form-label" for="maintenance-target">移行先（有効な設定です）</label><select class="form-control" id="maintenance-target"></select></div>
+			<div class="form-group" id="maintenance-subcategory-group"><label class="form-label" for="maintenance-subcategory">移行先中項目（選択費目の配下です）</label><select class="form-control" id="maintenance-subcategory"></select></div>
 			<p id="maintenance-count" role="status"></p>
 			<button type="button" id="btn-migrate-maintenance" class="btn btn-primary">対象明細を一括移行</button>
 			<div id="maintenance-records" class="table-container"></div>`;
@@ -66,7 +66,7 @@ export class MaintenanceController {
 		if (!document.querySelector('details#maintenance-panel')?.hasAttribute('open') || this.busy) return;
 		const generation = ++this.refreshGeneration;
 		this.loading = true;
-		document.getElementById('maintenance-refresh-status').textContent = '一覧を更新中である。';
+		document.getElementById('maintenance-refresh-status').textContent = '一覧を更新しています。';
 		this.updateControls();
 		try {
 			const db = this.coordinator.db;
@@ -79,12 +79,12 @@ export class MaintenanceController {
 			const previous = source.value;
 			source.innerHTML = this.sources.map(item => `<option value="${escapeHtml(this.sourceKey(item))}">${escapeHtml(item.label)}（${item.count}件）</option>`).join('');
 			if ([...source.options].some(option => option.value === previous)) source.value = previous;
-			document.getElementById('maintenance-scope').textContent = `取得済み明細 ${records.length}件が対象である。取得済みアーカイブ月: ${months.length ? months.join('、') : 'なし'}。未取得過去を含める場合は先に差分同期を実行する。`;
+			document.getElementById('maintenance-scope').textContent = `取得済み明細 ${records.length}件が対象です。取得済みアーカイブ月: ${months.length ? months.join('、') : 'なし'}。未取得の過去分を含める場合は先に差分同期を実行してください。`;
 			this.populateTargets();
-			document.getElementById('maintenance-refresh-status').textContent = '一覧を更新した。';
+			document.getElementById('maintenance-refresh-status').textContent = '一覧を更新しました。';
 		} catch (error) {
 			if (generation === this.refreshGeneration) {
-				document.getElementById('maintenance-refresh-status').textContent = '一覧を更新できなかった。再実行が必要である。';
+				document.getElementById('maintenance-refresh-status').textContent = '一覧を更新できませんでした。再実行してください。';
 				throw error;
 			}
 		} finally {
@@ -98,7 +98,7 @@ export class MaintenanceController {
 	renderRecords() {
 		const source = this.selectedSource();
 		const affected = source ? findArchivedReferences(this.records, this.config, source) : [];
-		document.getElementById('maintenance-records').innerHTML = affected.length ? `<table><thead><tr><th>日付</th><th>メモ</th><th>金額</th><th>アーカイブ設定</th></tr></thead><tbody>${affected.map(record => `<tr><td>${escapeHtml(record.date)}</td><td>${escapeHtml(record.memo || record.id)}</td><td>${escapeHtml(record.amount_pending ? '金額未入力' : String(record.amount))}</td><td>${escapeHtml(record.archived_labels.join('、'))}</td></tr>`).join('')}</tbody></table>` : '<p>アーカイブ設定を参照する取得済み明細はない。</p>';
+		document.getElementById('maintenance-records').innerHTML = affected.length ? `<table><thead><tr><th>日付</th><th>メモ</th><th>金額</th><th>アーカイブ設定</th></tr></thead><tbody>${affected.map(record => `<tr><td>${escapeHtml(record.date)}</td><td>${escapeHtml(record.memo || record.id)}</td><td>${escapeHtml(record.amount_pending ? '金額未入力' : String(record.amount))}</td><td>${escapeHtml(record.archived_labels.join('、'))}</td></tr>`).join('')}</tbody></table>` : '<p>アーカイブ設定を参照する取得済み明細はありません。</p>';
 	}
 
 	populateTargets() {
@@ -132,12 +132,12 @@ export class MaintenanceController {
 
 	updateCount() {
 		let count = 0;
-		let message = '移行可能な対象明細はない。';
+		let message = '移行可能な対象明細はありません。';
 		try {
 			const source = this.selectedSource();
 			if (source) count = buildMasterMigration(this.records, this.config, source, this.selectedTarget()).length;
 		} catch (error) { message = error.message; }
-		document.getElementById('maintenance-count').textContent = count ? `移行対象は${count}件である。` : message;
+		document.getElementById('maintenance-count').textContent = count ? `移行対象は${count}件です。` : message;
 		document.getElementById('btn-migrate-maintenance').disabled = !count || this.busy || this.loading;
 		this.renderRecords();
 	}

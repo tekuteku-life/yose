@@ -55,14 +55,14 @@ describe('archived master maintenance UI', () => {
 		await d.click('#btn-refresh-maintenance');
 		await d.waitFor('document.getElementById("maintenance-records").textContent.includes("更新された明細")');
 		assert.ok((await d.textContent('#maintenance-source')).includes('更新された費目'));
-		assert.equal(await d.textContent('#maintenance-refresh-status'), '一覧を更新した。');
+		assert.equal(await d.textContent('#maintenance-refresh-status'), '一覧を更新しました。');
 		assert.equal(await d.evaluate('document.getElementById("maintenance-source").value'), 'category:cat_food');
 		assert.equal(await d.evaluate('document.getElementById("maintenance-target").value'), 'cat_housing');
 		assert.equal(await d.evaluate('document.getElementById("maintenance-subcategory").value'), 'refresh_child');
 		await d.evaluate('window.__yose_app.db.deleteTransaction("archived")');
 		await d.click('#btn-refresh-maintenance');
 		await d.waitFor('document.getElementById("maintenance-source").options.length===0');
-		assert.ok((await d.textContent('#maintenance-records')).includes('ない'));
+		assert.ok((await d.textContent('#maintenance-records')).includes('ありません'));
 		assert.equal(await d.evaluate('document.getElementById("btn-migrate-maintenance").disabled'), true);
 	});
 	it('keeps the newest refresh response and blocks migration while records are loading', async () => {
@@ -79,7 +79,7 @@ describe('archived master maintenance UI', () => {
 		assert.equal(await d.evaluate('document.getElementById("btn-migrate-maintenance").disabled'), true);
 		assert.equal(await d.evaluate('document.getElementById("maintenance-source").disabled'), true);
 		assert.ok((await d.textContent('#btn-refresh-maintenance')).includes('更新中'));
-		assert.ok((await d.textContent('#maintenance-refresh-status')).includes('更新中'));
+		assert.equal(await d.textContent('#maintenance-refresh-status'), '一覧を更新しています。');
 		await d.click('#btn-refresh-maintenance');
 		await d.waitFor('document.getElementById("maintenance-records").textContent.includes("最新応答")');
 		await d.evaluate('(async()=>{window.__resolveOldMaintenance();await window.__firstMaintenanceRefresh;window.__restoreMaintenanceReads();})()');
@@ -91,7 +91,7 @@ describe('archived master maintenance UI', () => {
 		await d.evaluate(`const db=window.__yose_app.db, read=db.getTransactions.bind(db);let fail=true;
 			db.getTransactions=(...args)=>{if(fail){fail=false;throw new Error('一覧再取得のテスト失敗');}return read(...args);};`);
 		await d.click('#btn-refresh-maintenance'); await waitForDialog(d, '一覧更新を完了できませんでした: 一覧再取得のテスト失敗');
-		assert.ok((await d.textContent('#maintenance-refresh-status')).includes('更新できなかった'));
+		assert.ok((await d.textContent('#maintenance-refresh-status')).includes('更新できませんでした'));
 		assert.equal(await d.evaluate('document.getElementById("maintenance-source").disabled'), false);
 		assert.ok(!(await d.textContent('#btn-refresh-maintenance')).includes('更新中'));
 		await d.click('#btn-refresh-maintenance');

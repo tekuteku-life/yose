@@ -329,7 +329,7 @@ export class SummaryController {
 			if (catCard) catCard.style.display = 'block';
 			if (accountBalancesTitle) accountBalancesTitle.textContent = '口座別支出（収支）';
 			const scope = document.getElementById('category-trend-scope');
-			if (scope) scope.textContent = granularity === 'daily' ? `${this.coordinator.currentMonth}の取得済み明細を取引日で集計する。未取得の日別明細は含まない。` : '計上月と保存済み月次集計に基づく取得済み範囲の支出推移である。';
+			if (scope) scope.textContent = granularity === 'daily' ? `${this.coordinator.currentMonth}の取得済み明細を取引日で集計します。未取得の日別明細は含みません。` : '計上月と保存済み月次集計に基づく取得済み範囲の支出推移です。';
 			const title = document.getElementById('category-trend-title');
 			if (title) title.textContent = `${granularity === 'daily' ? this.coordinator.currentMonth + ' 取引日別' : granularity === 'monthly' ? this.coordinator.selectedYear + '年 月別' : '年別'} 費目ごとの支出推移（${this.coordinator.useActualCategoryAxis ? '実態分類' : '計上分類'}）`;
 			this.chartController.renderCategoryTrend(buildCategoryTrend(transactions, snapshot, config, { granularity, month: this.coordinator.currentMonth, year: this.coordinator.selectedYear, actualAxis: this.coordinator.useActualCategoryAxis, includePlanned: this.coordinator.showPlanned }));
