@@ -166,12 +166,12 @@ describe('Settings, files, security rendering, and persistence', { timeout: 1200
 		await d.fill('#m-sub-id', 'sub_ui');
 		await d.fill('#m-sub-name', '追加内訳');
 		await submit(d, '#form-master-subcategory');
-		await d.waitFor('document.querySelector(".btn-edit-subcat[data-sub-id=sub_ui]") !== null');
+		await d.waitFor('!document.getElementById("modal-master-item").classList.contains("active") && document.querySelector(".btn-edit-subcat[data-sub-id=sub_ui]") !== null');
 		await d.click('.btn-edit-subcat[data-sub-id="sub_ui"]');
 		assert.equal(await d.evaluate('document.getElementById("m-sub-id").readOnly'), true);
 		await d.fill('#m-sub-name', '変更内訳');
 		await submit(d, '#form-master-subcategory');
-		await d.waitFor('document.getElementById("master-categories-list").textContent.includes("変更内訳")');
+		await d.waitFor('!document.getElementById("modal-master-item").classList.contains("active") && document.getElementById("master-categories-list").textContent.includes("変更内訳")');
 		await d.click('.btn-archive-subcat[data-sub-id="sub_ui"]');
 		await d.click('.tab-btn[data-tab="tab-input"]');
 		assert.equal(await d.evaluate('Array.from(document.getElementById("select-subcategory").options).some(o => o.value === "sub_ui")'), false);
@@ -195,7 +195,7 @@ describe('Settings, files, security rendering, and persistence', { timeout: 1200
 		await d.select('#m-acc-premium-pay-account', 'acc_bank_main');
 		await d.select('#m-acc-premium-cat', 'cat_housing');
 		await submit(d, '#form-master-account');
-		await d.waitFor('document.querySelector(".btn-edit-account[data-id=acc_insurance_ui]") !== null');
+		await d.waitFor('!document.getElementById("modal-master-item").classList.contains("active") && document.querySelector(".btn-edit-account[data-id=acc_insurance_ui]") !== null');
 		let config = await d.evaluate('window.__yose_app.db.getMasterConfig()');
 		let rule = config.recurring_rules.find(r => r.id === 'rec_ins_acc_insurance_ui');
 		assert.equal(rule.amount, 12000);
@@ -217,7 +217,7 @@ describe('Settings, files, security rendering, and persistence', { timeout: 1200
 		await d.fill('#m-rec-name', '変更家賃');
 		await d.fill('#m-rec-amount', '80000');
 		await submit(d, '#form-master-recurring');
-		await d.waitFor('document.getElementById("master-recurring-list").textContent.includes("変更家賃")');
+		await d.waitFor('!document.getElementById("modal-master-item").classList.contains("active") && document.getElementById("master-recurring-list").textContent.includes("変更家賃")');
 		await d.click('.btn-toggle-recurring[data-id="rec_rent"]');
 		assert.equal((await d.evaluate('window.__yose_app.db.getMasterConfig()')).recurring_rules[0].is_active, false);
 		await d.click('.btn-toggle-recurring[data-id="rec_rent"]');

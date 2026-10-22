@@ -124,7 +124,7 @@ export class MaintenanceController {
 		const previous = select.value;
 		const category = this.config.categories?.find(item => item.id === document.getElementById('maintenance-target').value);
 		const children = source?.kind !== 'account' ? (category?.subcategories || []).filter(item => !item.is_archived) : [];
-		select.innerHTML = '<option value="">中項目の指定はなしである</option>' + children.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('');
+		select.innerHTML = '<option value="">（指定なし / 費目のみ）</option>' + children.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('');
 		if (children.some(item => item.id === previous)) select.value = previous;
 		document.getElementById('maintenance-subcategory-group').hidden = source?.kind === 'account';
 		this.updateCount();

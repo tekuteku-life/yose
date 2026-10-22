@@ -185,6 +185,11 @@ export class TransactionInputController {
 	}
 
 	async switchInputMode(mode) {
+		if (this.coordinator.currentMode === 'normal' && mode === 'prepaid') {
+			const total = document.getElementById('input-prepaid-total');
+			const amount = document.getElementById('input-amount');
+			if (total && amount && total.value === '') total.value = amount.value;
+		}
 		this.coordinator.currentMode = mode;
 		this.coordinator.currentTaxMeta = null;
 
@@ -332,8 +337,8 @@ export class TransactionInputController {
 		} else {
 			const subSelect = document.getElementById('select-subcategory');
 			const actSubSelect = document.getElementById('select-actual-subcategory');
-			if (subSelect) subSelect.innerHTML = '<option value="">なし</option>';
-			if (actSubSelect) actSubSelect.innerHTML = '<option value="">なし</option>';
+			if (subSelect) subSelect.innerHTML = '<option value="">（指定なし / 費目のみ）</option>';
+			if (actSubSelect) actSubSelect.innerHTML = '<option value="">（指定なし / 費目のみ）</option>';
 		}
 	}
 
@@ -414,15 +419,11 @@ export class TransactionInputController {
 		const config = await this.db.getMasterConfig();
 		const receivingAccountId = document.getElementById('select-account')?.value || (config?.accounts?.[0]?.id || 'acc_default');
 		const today = formatDate(new Date());
-		const memo = `[立替精算] ${advTx.memo || ''}`.trim();
-		const tags = Array.from(new Set([...(advTx.tags || []), '立替回収']));
-
 		const repayTx = createAdvanceRepaymentTransaction({
 			date: today,
 			receivingAccountId,
 			amount: advTx.amount,
-			memo,
-			tags
+			memo: '立替回収'
 		});
 
 		advTx.settlement_status = 'settled';
