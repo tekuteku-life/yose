@@ -1,6 +1,6 @@
 {
 	"name": "yose",
-	"version": "1.12.1",
+	"version": "1.12.2",
 	"description": "よせあつめ家計簿 - 脱ベンダーロックイン・複式簿記ライクなPWA家計・資産管理システム",
 	"type": "module",
 	"scripts": {

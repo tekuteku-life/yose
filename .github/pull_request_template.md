@@ -7,7 +7,7 @@
 ## 概要 / 背景 (Background)
 <!--
 - 今回の変更の背景、課題、達成したい目的を簡潔に記載してください。
-- 関連するIssueや要求定義（docs/Req.md, docs/system_design.md）があればリンクを記載してください。
+- 関連するIssueや要求定義（docs/requirements.md, docs/external_design.md, docs/internal_design.md）があればリンクを記載してください。
 -->
 - 
 
@@ -40,7 +40,8 @@
 レビュアーおよび作成者が確認すべき項目にチェックを入れてください。
 -->
 - [ ] システム全体を俯瞰し、局所的・場当たり的対応ではなく「あるべき姿」に基づいているか
-- [ ] [docs/system_design.md](docs/system_design.md) に設計変更が先行反映されているか
+- [ ] [要件定義](docs/requirements.md)・[外部設計](docs/external_design.md)・[内部設計](docs/internal_design.md)の該当箇所に変更が先行反映されているか
+- [ ] [設計テスト監査](docs/design_test_audit.md)に設計ID・assert対応・未検証を反映したか
 - [ ] 不要になったコード、一時的なデバッグコード、不要な過去互換性維持コードが削除されているか
 - [ ] 外部公開Secrets（秘密鍵・APIキー等）のハードコードや平文永続化がないか
 - [ ] ユーザー入力値（メモ、マスタ項目名等）の描画時に適切なHTMLエスケープ（escapeHtml / textContent）が適用され、XSSリスクがないか
