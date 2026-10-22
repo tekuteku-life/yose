@@ -95,7 +95,8 @@ flowchart TD
    - 新規要件・修正要求に対し、フロントエンド（PWA/IndexedDB）、バックエンド（GAS/スプレッドシート）、暗号層、同期プロトコルの全体影響範囲を洗い出す。
    - 既存の仕様や制限（Google OAuthスコープ、40k文字セル制限、Ed25519暗号検証など）との整合性を確認する。
 2. **設計書の先行更新**:
-   - [docs/system_design.md](system_design.md)（および関連仕様書）を更新する。
+   - [要件定義書](requirements.md)、[外部設計書](external_design.md)、[内部設計書](internal_design.md)のうち影響する文書を先行更新する。[system_design.md](system_design.md)は文書索引・旧章対応として維持する。
+   - [設計テスト監査](design_test_audit.md)へ設計ID・既存assert・不足観点を対応付ける。テストファイルの存在や合格だけで全設計の網羅と判定しない。
    - 必要に応じて、データフロー図（DFD）、シーケンス図、ERD、状態遷移図を更新・追記する。
    - 部分的な継ぎ接ぎではなく、システム全体として最も自然で簡潔な設計となっているかを確認する。
 

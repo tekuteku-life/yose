@@ -1,0 +1,441 @@
+# 「よせあつめ家計簿」内部設計書
+
+## 本書の位置付け
+
+[要件定義書](requirements.md)を実現するモジュール、計算、状態、永続化、通信、認証、復旧方式を定義する。画面・公開JSONは[外部設計書](external_design.md)、既存テストの実assertと不足は[設計テスト監査](design_test_audit.md)に定義する。
+
+`I-`で始まるIDは内部設計の識別子であり、旧章番号を継承した箇所と本書で分解した箇所を区別する。要求の実装/検証が不足する点は明記し、旧文書の「完全保証」「100%互換」等の表現を実測なしに引き継がない。データ構造のJSON例の正本は外部設計書であり、本書はその格納方式と参照関係を扱う。
+
+<a id="i-2-1"></a>
+## I-2.1 全体構成と信頼境界
+
+| 要素 | 実装 | 責務 |
+| --- | --- | --- |
+| 静的配布/画面 | GitHub Pages相当のHTTPS、HTML/CSS、ES Modules | 画面、入力、計算、端末内保存、同期/更新の操作である。 |
+| 端末内保存 | IndexedDB、Web Crypto API | 金融本文の暗号化、検索用メタデータ、PIN保護された鍵、同期基点/送信待ちを保持する。 |
+| 通信 | SyncManager、Ed25519署名、HTTPS POST | 設定と明細の調停、署名、送信、受信候補の検証と反映を行う。 |
+| サーバー | コンテナバインドGAS、PropertiesService、LockService | 公開鍵検証、時刻検証、排他、候補検証、保存/再計算、復旧を行う。 |
+| サーバー保存 | スプレッドシートのJSONシート | マスタ、未締め差分、月別履歴、集計、復旧記録を保持する。端末内AES暗号化とは別である。 |
+
+ローカル暗号化はブラウザ保存時の本文を保護する。解除済みセッションの実行コード、端末そのもの、サーバーの閲覧権限まで不可視にする設計ではない。
+
+<a id="i-2-2"></a>
+## I-2.2 ディレクトリと実行入口
+
+```text
+yose/
+  index.html / css/style.css / manifest.json
+  sw.js / version.json
+  js/app.js                 起動Facade
+  js/ui/                    認証、調停、入力、編集、集計、設定、保守、競合確認
+  js/db.js / js/db/          公開Facade、低水準保存、業務保存、取込
+  js/logic.js / js/logic/    公開Facade、計算、参照検証、設定調停
+  js/crypto.js / js/webauthn.js / js/sync.js / js/version.js
+  gas/Code.gs / gas/appsscript.json
+  scripts/                  静的検査、GASセットアップ、共有検証器の生成
+  test/unit/ / test/integration/ / test/system/ / test/ui/
+  test/helpers/             GAS/IDBの模擬とChrome CDP
+  docs/                     要件、外部/内部設計、監査、開発プロセス、レビュー
+```
+
+`js/app.js`はAppCoordinatorを入口として公開する。`js/db.js`と`js/logic.js`は細分化したモジュールの再エクスポートを担う。使用するランタイムモジュールはSW配布対象にも含める。
+
+<a id="i-2-3"></a>
+## I-2.3 スプレッドシートの保存単位
+
+`master_config`、`summary_snapshot`、`pending_diffs`、`arch_YYYY-MM`をJSONデータセットとして扱う。`loadJsonFile`/`saveJsonFile`は論理ファイル名とシート名を対応させる。`replacement_journal.json`等の復旧記録も同じ格納経路を使う。PropertiesServiceは登録公開鍵を保持する。復旧確定マーカーはreplacement_commitシートの単一セルに保存する。
+
+JSONは40,000文字ごとにセルへ分割する。サーバーには金融データの平文JSONを保存する。Google側のアクセス権、実際のシート権限、配布済みGASの設定はローカルAESで代替されない。
+
+<a id="i-2-4"></a>
+## I-2.4 GASセットアップと配布設定
+
+`gas/appsscript.json`はV8、Asia/Tokyo、`spreadsheets.currentonly`、`ANYONE_ANONYMOUS`、`USER_DEPLOYING`を宣言する。`initialSetup`と`scripts/setup_gas.js`/`setup_gas.sh`は初期設定を補助する。実行手順は[README](../README.md)を参照する。
+
+ソース宣言は公開済みデプロイの権限を変更しない。初回認可、シートへのバインド、公開URL、匿名GETと署名POSTの到達性は実環境の確認対象である。模擬GAS実行をデプロイ成功の証拠としない。
+
+<a id="i-4-6"></a>
+## I-4.6 UIモジュールと状態の責務
+
+AppCoordinatorはDB/同期の依存注入、期間・表示軸・入力モード、タブ/モーダル/認証のライフサイクルを調停する。
+
+| モジュール | 責務 |
+| --- | --- |
+| auth_controller / sync_status_controller | 鍵/PIN/パスキー、ロック、同期状態の購読と表示である。 |
+| tx_input_controller / tx_edit_controller / tx_list_controller | モード別入力、原本比較付き編集、期間抽出/検索/ページ送りである。 |
+| summary_controller / chart_controller | 期間/軸別集計、グラフと代替表示、旧描画の破棄である。 |
+| master_controller / settings_controller | マスタ編集、予算/テーマ/鍵管理/バックアップ操作である。 |
+| tag_memo_input / backup_import_controller | 入力候補/チップ、完全取込の確認と取消状態である。 |
+| maintenance_controller / master_conflict_controller | アーカイブ参照の移行、設定競合の比較と選択である。 |
+
+各コントローラーの相互操作はcoordinator経由を基本とする。実際の依存はimportと生成箇所を正とし、旧文書の「10ファイル固定」「循環参照100%防止」は保証条件としない。
+
+<a id="i-4-7"></a>
+## I-4.7 コアモジュールの責務
+
+| モジュール | 処理 |
+| --- | --- |
+| defaults / storage_engine / yose_db | 定数、Memory/IndexedDB、暗号化、業務候補生成/原本比較/原子的保存である。 |
+| backup_merger / backup_replacement | 非破壊マージ、種別判定/全置換候補/参照検証である。 |
+| date_utils / transaction_factory | 日付/休日/カード請求、ID、税/電卓、定期/前払/立替/ポイント/保険連動を計算する。 |
+| aggregator / budget_engine / category_trend | 残高・粒度別・分類/タグ/クロス・資産・予算・費目推移を集計する。 |
+| master_sync / master_maintenance / data_integrity | 三方向設定調停、アーカイブ参照移行、共通整合性規則を扱う。 |
+| crypto / webauthn / sync / version | 署名/暗号、資格情報認証、通信状態、配布版更新を扱う。 |
+
+GASの整合性検証器は共有data_integrityから生成し、`check:gas-integrity`で一致を検査する。金融値の算出・候補検証とUI表示を分離する。
+
+<a id="i-3-1"></a>
+## I-3.1 仕訳生成と分類
+
+transaction_factoryはexpense/income/transferの単一明細を生成する。立替自己負担と貸付、ポイントの自己負担/専用口座または相殺収入は別明細として関連付ける。直接精算は短いメモとシステムタグを指定し、手入力回収では利用者のメモを保持してタグをSetで重複排除する。
+
+計上/実態の親子を保持し、実態中項目は省略時だけ同じ親の計上中項目を補う。明示nullを異なる親の子へ置換しない。移行済みのアーカイブ参照と、新規に禁止する参照を区別する。
+
+<a id="i-3-2"></a>
+## I-3.2 定期・休日・カード生成
+
+`generateRecurringTransactions`は有効状態、開始/終了月、月間隔、既存の同一ルール+計上月を検査する。月末日を丸め、休日補正後もtarget_monthを保持し、安定IDを生成する。生成結果はplannedである。現在のUI起動経路はカード自動精算を実行するが、定期は生成ボタン経路である。要求3.2の起動自動生成/固定額自動確定は未達として監査する。
+
+カード精算は請求周期内の確定・金額確定済み支出を対象とし、安定IDとcreate-only比較で並行二重作成を抑止する。保険口座の編集は対応する定期ルールの作成/更新/無効化を伴う。定期編集UIが提供していない周期等の項目を、計算APIが対応することだけで画面対応済みとしない。
+
+<a id="i-3-3"></a>
+## I-3.3 前払分割と一括更新
+
+総額の支払振替1件と、前払口座からの月次費用N件を同一group_idで作る。2回目以降をfloor(総額/N)、初回に余りを加える。親子とamortization_metaを保持する。
+
+`updateInstallmentGroup`は編集前グループ集合を比較する。メモ等だけの編集で総額を再分割せず、明示的な金額/期間変更時に再計算する。親/子の単独編集、締め済みメンバーの再締め、未入力フラグ、原本変更・暗号化/IDB失敗時の全件保持を扱う。
+
+<a id="i-3-4"></a>
+## I-3.4 収支・資産・費目推移
+
+aggregatorは口座残高、確定/予定、日/月/年、計上/実態を算出する。月次snapshotがある月はローカル同月行との二重計上を避ける。資産は履歴残高を基点に確定明細を加え、履歴のない過去日を0円で推測補完しない。ローン/カードの内部符号は一律の負数限定とせず、資産/負債の集計規則に従う。
+
+category_trendは日別では取引日、月/年では計上月の既存集計を利用する。日次へsnapshotを推測配賦しない。明細リストの年/月はtarget_month、日はdateで抽出する。フィルター前の期間集合から計上/実態と振替先を含めてアーカイブ候補を決める。
+
+summaryの描画世代と取得済み同一マスタを使い、古いreadによる描画を拒否する。ChartControllerは既存chartをdestroyし、テーマ/空状態を反映する。Chart不可時の表はHTMLエスケープする。
+
+<a id="i-3-5"></a>
+## I-3.5 予算・タグ・クロス計算
+
+budget_engineは前年の確定実績とsnapshotから年度初期値を算出し、金額規模別に百/千/一万円単位へ丸める。年度予算、費目別内訳、累積推移、経過月ペース、貯蓄率/額を算出する。表示中の有効費目を保存する際に非表示アーカイブ予算を消さない。
+
+タグ集計は対象取引のタグを集計し、クロスは計上/実態費目ごとに行列、行/列合計と総合計を返す。クロス集計の計算対応と、要求3.23の行/列クリック操作の対応は別に判定する。
+
+<a id="i-3-6"></a>
+## I-3.6 マスタ編集・競合・アーカイブ移行
+
+編集開始版をexpectedConfigとして保持し、送信ごとに候補を複製する。失敗した新規候補を次回pushへ持ち越さない。DB保存では三方向比較により無関係な変更を保持し、同じ項目の競合を拒否する。設定の画面反映後に背景同期を要求する。
+
+保守一覧は削除を除いた取得済み明細から両分類/両口座のアーカイブ参照を数え、参照1件以上の設定だけを示す。refresh世代を比較し、移行中の更新を抑止する。移行は型/収支種別/資産区分/親子を検証し、明細・マスタ原本と確認済み締め月を比較して一括保存する。
+
+<a id="i-3-7"></a>
+## I-3.7 入力部品と画面状態
+
+TagMemoInputは新規/編集のチップ・候補を共有する。候補採用時は未確定文字列を置換し、IME・フォーカス移動・マウス/タッチ/キーを扱う。電卓は対象入力IDと適用前の税メタ情報を持ち、取消では適用しない。通常から前払の空総額へだけ文字列の金額を引き継ぐ。
+
+モーダルは最上位だけを操作可能とし、背景inertとbody固定で背面操作/スクロールを抑止する。戻る/Escape/closeは共通経路を使い、明細/マスタは初期値比較で破棄確認する。履歴ガードを復元し、認証ロック時は閉じる。マスタopenは世代+認証鍵、save-closeは世代を比較し、保存中closeを保留する。
+
+折畳み/テーマの永続化は意図の順序を保ち、先行失敗で後続操作を止めない。期間・モード・親分類の後着readから最新操作を保護する。
+
+<a id="i-3-8"></a>
+## I-3.8 差分インポート
+
+JSONを解析し、種別・配列・危険キー・ID重複・有限数値等を事前検証してから候補全体を合成する。明細はID/更新日時、設定は非破壊の和集合、snapshotは月キーを基準に扱う。新設定を参照する明細を同じ候補で検証できる。
+
+書込前に参照整合性と認証鍵を確認し、全件暗号化後に比較付き一括保存する。不正JSONや混在不正要素で部分保存せず、元データを維持する。形式・結果通知は外部設計3.15/3.26に従う。
+
+<a id="i-3-9"></a>
+## I-3.9 完全インポートと送信待ち
+
+prepareReplacementImportは種別単位の全置換候補と原本版を作成する。正確な確認語、planの同一性、認証、原本比較後に業務ストアと暗号化pending_importを原子的に更新する。取消/ロック/暗号化途中失敗/IDB例外は全原本を保持する。
+
+同期は未送信の完全取込を先に処理し、fetch_stateでbase_versionを結び、replace_importへimport_id付きで送る。版競合は再承認、ACKは送信したoutbox/版を比較する。応答喪失時も同一操作を再送でき、送信後のローカル編集を古いACKで消さない。サーバーはreceiptとjournal/markerで複数シート変更を復旧する。
+
+<a id="i-3-10"></a>
+## I-3.10 共通整合性と保存境界
+
+data_integrityは型/必須値/安全なID/参照/親子/収支種別/重複/予算/snapshot階層を検査する。既存問題の種類と件数を比較し、悪化を拒否して修復を許す。全置換では候補全体を厳格に検査する。通常新規のアーカイブ参照禁止と履歴取込を区別する。
+
+`mutateBusiness`は原本取得→復号→候補生成/検証→事前暗号化→認証同一性と原本の比較→単一readwrite transactionの順に処理する。low-level requestのsuccessだけでなくtransactionの完了を待つ。明細編集/削除/精算/グループ更新、生成、受信/ACKにも原本比較を適用する。
+
+GASも署名後の候補状態を共通規則で検証し、複数シートの更新を復旧journal経由で確定する。不正な保存JSONや読取失敗を空データと誤認して上書きしない。
+
+<a id="i-4-1"></a>
+## I-4.1 同期状態と調停
+
+SyncManagerは同期実行中、最後のエラー/同期時刻、設定再送待ち、競合パスを持つ。非表示/オンライン/手動/月締めの契機を登録し、ロック時は署名鍵を外し、再初期化でlistenerを重複させない。
+
+通常の双方向同期は完全取込待ち→リモート状態取得→共有master調停/検証→未同期明細送信（締め済みは遡及経路）→再取得の流れを使う。共有設定の基点・手元・サーバーで三方向比較し、端末固有設定を除外する。競合候補は選択/参照整合/原本版/鍵を再確認する。同一受信候補のmaster/明細/snapshot/ACKは一括反映し、既に完了した別段階までは巻き戻さない。
+
+成功ACKで同期済みにする対象は送信した版だけであり、送信中の再編集を未同期のまま残す。通信失敗や確認取消で原本を消去しない。requestTimeoutMsは30秒で本文読取も対象とする。UIの同期中・未同期・競合待ちを別状態として通知する。
+
+<a id="i-4-2"></a>
+## I-4.2 GAS入口と要求検証
+
+`doGet`は固定の疎通状態だけを返す。`doPost`はJSON解析、script lock、復旧処理、action/payload/署名・timestamp検証を行う。初回公開鍵は登録済み鍵の上書きを許さず、登録要求の署名を検証する。
+
+既存actionはpush_diff、close_month、retroactive_update、fetch_state、fetch_master、update_master、replace_importおよび互換経路のupdate_external_assetsである。候補全体の不整合は保存前に拒否する。close_monthは予定集合と内容版の承認を照合し、未入力金額を確定しない。遡及更新は元月を保持して移動/削除を扱い、履歴を最新締め月まで再計算する。
+
+<a id="i-4-3"></a>
+## I-4.3 端末内暗号化
+
+DMKは256bit乱数、本文はAES-GCM-256と12byte IVで暗号化する。対象はtransactions、master_config/current、summary_snapshot、共有同期基点、完全取込outboxである。取引のid/target_month/date/sync_status/is_deleted等は検索用に暗号化外へ付ける。
+
+security_keysにはPIN暗号化されたmaster_keys_packageや公開credential等を保存し、settingsには接続先等を保存する。これらのストア全体、検索メタデータ、Google側JSONまで「全て暗号化」とは扱わない。DMKが必要な業務更新で途中ロックした場合、平文保存へ退避しない。
+
+<a id="i-4-4"></a>
+## I-4.4 鍵と通常WebAuthn
+
+Ed25519署名鍵とDMKを初回生成し、PINからPBKDF2/HMAC-SHA-256（100,000回、16byte salt）で導いたAES鍵でまとめて保護する。解除中だけCryptoKeyをメモリに保持する。
+
+パスキーはPRFなしの通常WebAuthnで、永続user handleとcredential ID/公開鍵等を保存する。challenge・origin・RP ID・署名等を検証して認証し、その後もDB復号にはPINを必要とする。パスキー内部秘密鍵をexportせず、鍵束を設定同期へ含めない。1Password実機の提供者動作と、仮想CTAP2でのプロトコル確認は区別する。
+
+<a id="i-4-8"></a>
+## I-4.8 旧PRF形式の移行
+
+PIN復号成功を確認して同じDMKと署名鍵を復元した後に、旧vault/credential ID/共有bundleを除去する。誤PIN・取消時は原本を保持する。通常credentialへの再登録を案内し、旧IDのみを検証済み資格情報と扱わない。
+
+<a id="i-5"></a>
+## I-5 永続化スキーマと論理モデル
+
+| 端末ストア/キー | 内容と保護 |
+| --- | --- |
+| transactions/id | 暗号化金融本文と検索用メタデータである。 |
+| master_config/current | 暗号化した端末の設定である。 |
+| master_config/sync_base | 受理済み共有masterの暗号化基点である。 |
+| master_config/pending_import | 全置換の暗号化送信待ち・操作ID・base_versionである。 |
+| summary_snapshot/current | 暗号化した締め済み月集計/残高である。 |
+| security_keys | PINラップ鍵束、公開鍵、WebAuthn公開情報等である。 |
+| settings | GAS URL等の端末設定であり、業務本文暗号化とは別である。 |
+
+メモリ実装は非ブラウザ試験向けであり、IndexedDBの実transaction/失敗特性を同一と仮定しない。サーバーのSchema v2 JSONと端末内暗号化envelopeは異なる層である。入出力項目・型は外部設計5.1〜5.3、参照関係はI-6.4を参照する。
+
+<a id="i-6-1-2"></a>
+## I-6.1.2 詳細データフロー
+
+```mermaid
+flowchart LR
+    UI["AppCoordinator / UI"] --> Logic["計算 / 候補生成"]
+    Logic --> Validate["共有整合性検証"]
+    Validate --> Store["YoseDB / 原本比較 / 暗号化"]
+    Store --> IDB[("IndexedDB 本文 + メタデータ")]
+    IDB --> Sync["SyncManager"]
+    Sync --> Crypto["Ed25519 / PIN復元済み鍵"]
+    Crypto --> Sync
+    Sync -->|"text/plain POST"| GAS["doPost"]
+    GAS --> Lock["tryLock / 署名・時刻検証 / 復旧journal"]
+    Lock --> Sheet[("Spreadsheet JSON")]
+    Sheet --> GAS
+    GAS --> Sync
+    Sync --> Validate
+```
+
+<a id="i-6-3-1"></a>
+## I-6.3.1 入力・ポイント連動の保存
+
+```mermaid
+sequenceDiagram
+    participant U as UI
+    participant F as Factory
+    participant D as YoseDB
+    participant S as StorageEngine
+    U->>F: モード別入力・分類・税情報
+    F-->>U: 関連する明細集合
+    U->>U: 未入力/締め済みの確認
+    U->>D: putTransactions + 原本/承認月
+    D->>D: 全候補の参照・型・重複検証
+    D->>S: 全件事前暗号化とCAS
+    S-->>D: transaction完了 / 全件取消
+    D-->>U: 保存結果
+    U->>U: 成功時の通知・一覧更新
+```
+
+<a id="i-6-3-2"></a>
+## I-6.3.2 双方向同期・署名検証
+
+```mermaid
+sequenceDiagram
+    participant C as SyncManager
+    participant D as YoseDB
+    participant G as GAS
+    C->>C: 完全取込待ちの先行処理
+    C->>G: 署名付きfetch_state
+    G-->>C: master・明細・snapshot
+    C->>C: 三方向調停 / 必要時は利用者確認
+    C->>D: 候補検証と原子的受信
+    C->>G: master更新 / push_diff / retroactive_update
+    G->>G: 鍵・時刻・整合性 / journal保存
+    G-->>C: ACK
+    C->>D: 送信版と比較してACK反映
+    C->>G: 最新状態の再取得
+```
+
+<a id="i-6-3-3"></a>
+## I-6.3.3 月締めと復旧
+
+```mermaid
+sequenceDiagram
+    participant U as UI
+    participant C as SyncManager
+    participant G as GAS
+    U->>C: 月締め要求
+    C->>G: 未同期差分の先行送信
+    C->>U: 予定の集合・版の確認
+    U-->>C: 承認 / 取消
+    C->>G: close_month + 承認済み版
+    G->>G: 未入力拒否・集合照合・集計候補検証
+    G->>G: journal / marker / archive・snapshot更新
+    G-->>C: 成功状態
+    C->>C: 成功版だけ端末へ反映
+```
+
+<a id="i-6-3-4"></a>
+## I-6.3.4 締め済み明細の遡及変更
+
+```mermaid
+sequenceDiagram
+    participant U as Editor
+    participant D as YoseDB
+    participant C as SyncManager
+    participant G as GAS
+    U->>U: 再締め承認・変更前集合を確定
+    U->>D: 原本比較付きローカル保存
+    D-->>U: ローカル保存済み
+    U->>C: 原本月を保持した変更
+    C->>G: retroactive_update
+    G->>G: 旧月と新月の履歴更新・以降再集計
+    G-->>C: 受理版・snapshot
+    C->>D: 版比較付き受信/ACK
+    U->>U: 同期未完了と再計算成功を区別
+```
+
+<a id="i-6-3-5"></a>
+## I-6.3.5 起動・認証・ロック
+
+```mermaid
+sequenceDiagram
+    participant U as 利用者
+    participant A as AuthController
+    participant W as WebAuthn
+    participant D as DB / Crypto
+    A->>U: 初回設定またはロック画面
+    opt パスキーを利用
+        U->>W: 通常credential認証
+        W-->>A: assertion
+        A->>A: challenge・origin・RP ID・署名を検証
+    end
+    U->>A: PIN入力
+    A->>D: 鍵束復号とメモリ鍵設定
+    D-->>A: 成功 / 誤PIN
+    A->>U: 成功後に画面初期化
+    U->>A: ロック / ページ離脱
+    A->>D: メモリ鍵・署名鍵解除
+```
+
+<a id="i-6-3-6"></a>
+## I-6.3.6 初回公開鍵登録
+
+```mermaid
+sequenceDiagram
+    participant U as 設定UI
+    participant C as Crypto / Sync
+    participant G as GAS
+    U->>C: 端末公開鍵の登録要求
+    C->>G: register_initial_key + 自己署名
+    G->>G: script lock / 鮮度 / 署名の検査
+    alt 未登録
+        G->>G: 公開鍵を初回保存
+        G-->>U: 登録結果
+    else 登録済み
+        G-->>U: 既存鍵の上書き拒否
+    end
+```
+
+<a id="i-6-4"></a>
+## I-6.4 論理エンティティの参照関係
+
+```mermaid
+erDiagram
+    MASTER_CONFIG ||--o{ ACCOUNT : contains
+    MASTER_CONFIG ||--o{ CATEGORY : contains
+    CATEGORY ||--o{ SUBCATEGORY : contains
+    MASTER_CONFIG ||--o{ RECURRING_RULE : contains
+    ACCOUNT ||--o{ TRANSACTION : referenced_by
+    CATEGORY ||--o{ TRANSACTION : accounting_or_actual
+    SUBCATEGORY ||--o{ TRANSACTION : child_of_axis
+    RECURRING_RULE ||--o{ TRANSACTION : generated_as
+    TRANSACTION ||--o| TAX_META : includes
+    TRANSACTION ||--o| AMORTIZATION_META : includes
+    SUMMARY_SNAPSHOT ||--o{ MONTHLY_SUMMARY : summarizes
+    MONTHLY_SUMMARY ||--o{ ACCOUNT_BALANCE : closes
+    TRANSACTION {
+        string id PK
+        string group_id
+        string date
+        string target_month
+        string type
+        string status
+        int amount
+        boolean amount_pending
+        string account_id FK
+        string to_account_id FK
+        string category_id FK
+        string subcategory_id FK
+        string actual_category_id FK
+        string actual_subcategory_id FK
+        string recurring_rule_id FK
+        string related_tx_id FK
+        boolean is_point_split
+        boolean is_deleted
+    }
+```
+
+図は論理的な参照を示す。IndexedDBやJSONシートの外部キー機構ではなく、I-3.10の検証で保証する。tax_meta/amortization_metaの全項目や口座種別は外部設計のスキーマを参照する。
+
+<a id="i-7-1"></a>
+## I-7.1 OAuth権限境界
+
+コンテナバインドと`@OnlyCurrentDoc`を採用し、許可スコープを対象スプレッドシートへ限定する。Drive全体アクセスを前提としない。Googleの審査・公開権限・認可状態はコード内宣言だけでは保証されない。
+
+<a id="i-7-2"></a>
+## I-7.2 JSONチャンク境界
+
+スプレッドシートのセル上限に余裕を持たせ、40,000文字単位に分割して保存し、読取時に連結してJSON解析する。複数チャンク・境界値・古い余剰セルの消去・読取/書込失敗を独立した検証対象とする。テスト名にlargeとあっても40,000を超える入力か実assertを確認する。
+
+<a id="i-7-3"></a>
+## I-7.3 通信オプション
+
+POST本文は署名付きJSON文字列、Content-Typeは`text/plain;charset=utf-8`、credentialsはomit、redirectはfollowである。ブラウザのCORS処理はクライアント/GASモックだけでは再現できない。GET疎通成功は署名付きPOSTの成功を意味しない。
+
+<a id="i-7-4"></a>
+## I-7.4 署名直列化と時刻検証の限界
+
+action/timestamp/payloadをキー順序の一致するcanonical JSONにしてEd25519で署名する。クライアント生成/署名はWeb Crypto対応が必要であり、独自の未対応環境fallbackを持つと説明しない。GASはPure JSのEd25519検証を持つ。
+
+GASは現在時刻との±300,000ms超を拒否し、CacheServiceが利用できる場合はsignatureをキーに300秒記録して同一署名の再送を拒否する。これは鮮度と短期キャッシュの併用であり、永続nonceによる全再送防止ではない。CacheServiceの不存在/例外時はその検査を継続できず、早期失効も含めた保証は別途検証が必要である。完全取込のimport_id/receiptや安定IDによる冪等性と、認証の再送防止を混同しない。
+
+<a id="i-7-5"></a>
+## I-7.5 鍵ライフサイクル
+
+PINラップ、通常WebAuthn、署名鍵はI-4.3/I-4.4に従う。ページ離脱/手動ロックでメモリ鍵を外し、BFCache復帰は再ロックする。ブラウザ更新取消時はセッションを保つ。解除済みDevToolsでの本文参照不可まで保証しない。
+
+<a id="i-7-6"></a>
+## I-7.6 排他と永続復旧
+
+GASはscript lockの`tryLock(30000)`を使い、取得失敗を返しfinallyで解放する。処理候補を検証してから永続journalとmarkerで複数保存を確定/復旧する。GoogleのシートI/OとPropertiesService自体が単一ACID transactionを提供するという意味ではない。
+
+ローカルCAS、script lock、サーバー状態版、更新時刻、安定ID、再送receiptは異なる競合境界である。模擬LockServiceのassertをGoogle実行基盤の同時実行検証と扱わない。
+
+<a id="i-7-7"></a>
+## I-7.7 Service Workerと配布版
+
+SWは静的資産をinstallでaddAllし、activateで旧cacheを消してclients.claimする。GETのみcache-firstとし、非HTTP(S)、version.json、script.google.comを処理対象外とする。network fallbackはbasic/200のみcacheへ追加し、cache.put失敗で応答を妨げない。HTMLの通信失敗ではindexを返す。
+
+SKIP_WAITINGは即時待機解除、CLEAR_ALL_CACHESはcache削除であり、同じ動作ではない。登録はupdateViaCache:none、版確認はno-storeと時刻query、承認後はcache削除と再読込を行う。package/version.json/js版定数/SW/index表示とlockの版を揃える。
+
+Chart.jsは外部CDNであり静的資産一覧に含まれない。オフライン時のグラフ初回描画や実SW更新ライフサイクルは、Chart stubを使いSW本体のライフサイクルを直接assertしないCDPのDOM試験だけでは保証されない。
+
+<a id="i-7-8"></a>
+## I-7.8 金額精度と表示
+
+保存金額は有限な整数を検査し、税/分割は明示丸めを行う。計算はJavaScript Numberを使用し、任意桁整数や全浮動小数点誤差排除を保証しない。安全整数範囲の上限拒否や大量累積の誤差境界は別の設計/試験課題である。旧文書の精度目標を達成済みと扱わず、監査へ残す。

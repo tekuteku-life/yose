@@ -158,7 +158,7 @@ yose/
  │    ├── crypto.js          # Web Crypto Ed25519署名・PIN暗号化
  │    └── sync.js            # GAS同期クライアント（CORS回避・keepalive）
  ├── gas/
- │    ├── Code.gs            # GASバックエンド（署名検証・LockService・Drive保存・月締め）
+ │    ├── Code.gs            # GASバックエンド（署名検証・LockService・Spreadsheet JSON保存・月締め）
  │    └── appsscript.json    # GASマニフェスト（V8・Web App設定）
  ├── scripts/
  │    ├── setup_gas.js       # GASセットアップ支援スクリプト
@@ -168,10 +168,18 @@ yose/
  │    ├── integration/       # 結合テスト（sync_flow, recurrent_and_amortization）
  │    └── system/            # システムテスト（e2e_scenario）
  └── docs/
-      ├── system_design.md       # システム設計書（DFD, シーケンス, ERD, 状態遷移）
-      ├── development_process.md # 開発プロセス定義書（品質ゲート, Argonレビューフロー）
+      ├── system_design.md       # 設計文書索引・旧章対応
+      ├── requirements.md        # 要件定義書
+      ├── external_design.md     # 外部設計書（画面・操作・入出力）
+      ├── internal_design.md     # 内部設計書（構成・計算・保存・通信）
+      ├── design_test_audit.md   # 設計と既存テストの対応・不足
+      ├── development_process.md # 開発プロセス定義書（品質ゲート・独立サブエージェントレビュー）
       └── reviews/               # 独立監査・レビュー記録ディレクトリ
            ├── review1.md        # 第1回独立設計・セキュリティ監査レポート
            └── review2.md        # 第2回プロセス・PRテンプレート監査レポート
 ```
 
+
+## 要件・設計・検証の参照先
+
+[要件定義](docs/requirements.md)、[外部設計](docs/external_design.md)、[内部設計](docs/internal_design.md)を分けて管理する。既存テストの確認範囲と未検証項目は[設計テスト監査](docs/design_test_audit.md)、旧番号との対応は[文書索引](docs/system_design.md)を参照する。
