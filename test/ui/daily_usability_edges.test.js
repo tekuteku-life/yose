@@ -49,7 +49,9 @@ describe('Usability migration and operation boundaries', { timeout: 180000 }, ()
 			assert.equal(await d.evaluate('window.__yose_app.db.getSecurityKey("webauthn_vault")'), null);
 			assert.equal(await d.evaluate('(async () => (await window.__yose_app.db.getMasterConfig()).synced_passkey_bundle === undefined)()'), true);
 			await settings(d);
-			if (!await d.isVisible('#btn-register-webauthn')) await d.click('#btn-toggle-key-details');
+			await d.waitFor('document.getElementById("key-configured-summary").checkVisibility() && document.getElementById("key-mgmt-details").style.display === "none"');
+			await d.click('#btn-toggle-key-details');
+			assert.equal(await d.isVisible('#btn-register-webauthn'), true);
 			await d.click('#btn-register-webauthn');
 			await waitForDialog(d, 'WebAuthn登録エラー');
 			await d.click('#btn-lock-now');

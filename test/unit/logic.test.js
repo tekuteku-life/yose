@@ -40,6 +40,17 @@ import {
 } from '../../js/logic.js';
 
 describe('js/logic.js - Unit Tests', () => {
+	it('keeps repayment user text and deduplicates tags without mutating their source', () => {
+		const tags = ['旅行', '立替回収', '旅行', '立替回収'];
+		const tx = createAdvanceRepaymentTransaction({ date: '2026-10-20', receivingAccountId: 'acc_wallet', amount: 1200, memo: 'そのまま残すメモ', tags });
+		assert.equal(tx.memo, 'そのまま残すメモ');
+		assert.deepEqual(tx.tags, ['旅行', '立替回収']);
+		assert.deepEqual(tags, ['旅行', '立替回収', '旅行', '立替回収']);
+		const defaultTx = createAdvanceRepaymentTransaction({ date: '2026-10-20', receivingAccountId: 'acc_wallet', amount: 1200 });
+		assert.equal(defaultTx.memo, '立替回収');
+		assert.deepEqual(defaultTx.tags, ['立替回収']);
+	});
+
 	describe('Date Helpers', () => {
 		it('formatDate formats Date object to YYYY-MM-DD with zero-padding', () => {
 			const d = new Date(2026, 4, 3); // May 3, 2026
@@ -1133,7 +1144,7 @@ describe('js/logic.js - Unit Tests', () => {
 				amount: 3500,
 				memo: ''
 			});
-			assert.equal(repay.memo, '[立替回収]');
+			assert.equal(repay.memo, '立替回収');
 
 			// 4. Prepaid amortization with empty memo
 			const prep = createPrepaidAmortizationTransactions({
@@ -1320,7 +1331,7 @@ describe('js/logic.js - Unit Tests', () => {
 				memo: '田中さんより精算',
 				tags: ['精算']
 			});
-			assert.equal(repayWithMemo.memo, '[立替回収] 田中さんより精算');
+			assert.equal(repayWithMemo.memo, '田中さんより精算');
 			assert.ok(repayWithMemo.tags.includes('精算'));
 
 			// 14. Holiday parsing item.Date and invalid date matches

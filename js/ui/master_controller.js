@@ -15,6 +15,9 @@ import {
 export class MasterController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
+		this.openGeneration = 0;
+		this.submittingVersion = null;
+		this.initialValues = null;
 	}
 
 	get db() {
@@ -42,7 +45,7 @@ export class MasterController {
 		});
 
 		document.getElementById('btn-close-master-modal')?.addEventListener('click', () => {
-			document.getElementById('modal-master-item')?.classList.remove('active');
+			this.requestClose();
 		});
 
 		document.getElementById('btn-add-account')?.addEventListener('click', () => {
@@ -170,17 +173,42 @@ export class MasterController {
 
 	bindMasterSubmit(formId, handler) {
 		const form = document.getElementById(formId);
+		const version = this.openGeneration;
 		let busy = false;
 		form?.addEventListener('submit', async event => {
 			event.preventDefault();
 			if (busy) return;
 			busy = true;
+			this.submittingVersion = version;
 			const button = /** @type {HTMLButtonElement} */ (form.querySelector('button[type="submit"]'));
 			if (button) button.disabled = true;
 			try { await handler(event); }
 			catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
-			finally { busy = false; if (button) button.disabled = false; }
+			finally {
+				busy = false;
+				if (this.submittingVersion === version) this.submittingVersion = null;
+				if (button) button.disabled = false;
+			}
 		});
+	}
+
+	captureValues() {
+		return JSON.stringify(Array.from(document.querySelectorAll('#master-modal-body input, #master-modal-body select, #master-modal-body textarea'), element => [element.id, element.value, element instanceof HTMLInputElement && ['checkbox', 'radio'].includes(element.type) ? element.checked : null]));
+	}
+
+	requestClose() {
+		if (this.submittingVersion === this.openGeneration) {
+			this.coordinator.showToast('保存中です。完了してから閉じてください。');
+			return false;
+		}
+		if (this.initialValues !== this.captureValues() && !confirm('編集中の変更を破棄して閉じますか？')) return false;
+		this.closeMasterModal(this.openGeneration);
+		return true;
+	}
+
+	closeMasterModal(version) {
+		if (version !== this.openGeneration) return;
+		document.getElementById('modal-master-item')?.classList.remove('active');
 	}
 
 	async renderMasterManagement() {
@@ -423,8 +451,12 @@ export class MasterController {
 		const title = document.getElementById('master-modal-title');
 		const body = document.getElementById('master-modal-body');
 		if (!modal || !title || !body) return;
+		if (modal.classList.contains('active') && this.submittingVersion === this.openGeneration) return;
+		const openVersion = ++this.openGeneration;
+		const key = this.coordinator.privateKey;
 
 		const config = await this.db.getMasterConfig();
+		if (openVersion !== this.openGeneration || !key || this.coordinator.privateKey !== key) return;
 		const expectedConfig = structuredClone(config);
 		if (parentItem) parentItem = config.categories.find(category => category.id === parentItem.id) || parentItem;
 		if (item) {
@@ -553,7 +585,7 @@ export class MasterController {
 				const category = config.categories?.find(candidate => candidate.id === document.getElementById('m-acc-premium-cat').value);
 				const children = (category?.subcategories || []).filter(child => !child.is_archived || child.id === preserve);
 				const select = document.getElementById('m-acc-premium-sub');
-				select.innerHTML = '<option value="">中項目の指定はなしである</option>' + children.map(child => `<option value="${escapeHtml(child.id)}">${escapeHtml(child.name)}${child.is_archived ? '（アーカイブ済み）' : ''}</option>`).join('');
+				select.innerHTML = '<option value="">（指定なし / 費目のみ）</option>' + children.map(child => `<option value="${escapeHtml(child.id)}">${escapeHtml(child.name)}${child.is_archived ? '（アーカイブ済み）' : ''}</option>`).join('');
 				select.value = preserve || '';
 			};
 			updatePremiumChildren(item?.premium_subcategory_id);
@@ -567,6 +599,7 @@ export class MasterController {
 			});
 
 			this.bindMasterSubmit('form-master-account', async (e) => {
+				const config = structuredClone(expectedConfig);
 				e.preventDefault();
 				const id = document.getElementById('m-acc-id')?.value.trim() || item?.id || ('acc_' + Date.now().toString(36));
 				const name = document.getElementById('m-acc-name').value.trim();
@@ -643,7 +676,7 @@ export class MasterController {
 				syncInsuranceRecurringRule(config, targetAccount);
 
 				await this.saveMasterConfigAndSync(config, expectedConfig);
-				modal.classList.remove('active');
+				this.closeMasterModal(openVersion);
 			});
 
 		} else if (type === 'category') {
@@ -673,6 +706,7 @@ export class MasterController {
 			`;
 
 			this.bindMasterSubmit('form-master-category', async (e) => {
+				const config = structuredClone(expectedConfig);
 				e.preventDefault();
 				const id = document.getElementById('m-cat-id')?.value.trim() || item?.id || ('cat_' + Date.now().toString(36));
 				const name = document.getElementById('m-cat-name').value.trim();
@@ -696,7 +730,7 @@ export class MasterController {
 				}
 
 				await this.saveMasterConfigAndSync(config, expectedConfig);
-				modal.classList.remove('active');
+				this.closeMasterModal(openVersion);
 			});
 
 		} else if (type === 'subcategory') {
@@ -719,6 +753,7 @@ export class MasterController {
 			`;
 
 			this.bindMasterSubmit('form-master-subcategory', async (e) => {
+				const config = structuredClone(expectedConfig);
 				e.preventDefault();
 				const id = document.getElementById('m-sub-id')?.value.trim() || item?.id || ('sub_' + Date.now().toString(36));
 				const name = document.getElementById('m-sub-name').value.trim();
@@ -746,11 +781,14 @@ export class MasterController {
 				}
 
 				await this.saveMasterConfigAndSync(config, expectedConfig);
-				modal.classList.remove('active');
+				this.closeMasterModal(openVersion);
 			});
 
 		} else if (type === 'recurring') {
 			const isNew = !item;
+			const actualCategory = item?.actual_category_id || item?.category_id;
+			const actualChild = item?.actual_subcategory_id !== undefined ? item.actual_subcategory_id : actualCategory === item?.category_id ? item?.subcategory_id : null;
+			const sameClassification = isNew || (item.category_id === actualCategory && (item.subcategory_id || '') === (actualChild || ''));
 			title.textContent = isNew ? '📅 新規定期ルールの追加' : `📅 定期ルールの編集: ${item.name}`;
 			const options = (items, current, preserve = true) => items.filter(candidate => !candidate.is_archived || (preserve && candidate.id === current)).map(candidate => `<option value="${escapeHtml(candidate.id)}" ${candidate.id === current ? 'selected' : ''}>${escapeHtml(candidate.name)}${candidate.is_archived ? '（アーカイブ済み）' : ''}</option>`).join('');
 			body.innerHTML = `
@@ -767,7 +805,8 @@ export class MasterController {
 					</div>
 					<div id="m-rec-classification">
 						<div class="form-row"><div class="form-group"><label class="form-label" for="m-rec-cat">計上費目</label><select id="m-rec-cat" class="form-control"></select></div><div class="form-group"><label class="form-label" for="m-rec-sub">計上中項目</label><select id="m-rec-sub" class="form-control"></select></div></div>
-						<div class="form-row"><div class="form-group"><label class="form-label" for="m-rec-actual-cat">実態費目</label><select id="m-rec-actual-cat" class="form-control"></select></div><div class="form-group"><label class="form-label" for="m-rec-actual-sub">実態中項目</label><select id="m-rec-actual-sub" class="form-control"></select></div></div>
+						<label class="form-label"><input type="checkbox" id="m-rec-sync-actual" ${sameClassification ? 'checked' : ''}> 実態分類を計上分類と同じにする</label>
+						<div id="m-rec-actual-classification"><div class="form-row"><div class="form-group"><label class="form-label" for="m-rec-actual-cat">実態費目</label><select id="m-rec-actual-cat" class="form-control"></select></div><div class="form-group"><label class="form-label" for="m-rec-actual-sub">実態中項目</label><select id="m-rec-actual-sub" class="form-control"></select></div></div></div>
 					</div>
 					<div class="form-row">
 						<div class="form-group"><label class="form-label" for="m-rec-day">発生日 (毎月何日: 1-31)</label><input type="number" id="m-rec-day" class="form-control" min="1" max="31" value="${escapeHtml(item?.day_of_month || 25)}" required></div>
@@ -780,8 +819,18 @@ export class MasterController {
 			get('m-rec-holiday').value = item?.holiday_adjustment || 'none';
 			const updateChildren = (prefix, current = null, preserve = false) => {
 				const category = config.categories.find(candidate => candidate.id === get(`${prefix}-cat`).value);
-				get(`${prefix}-sub`).innerHTML = '<option value="">中項目の指定はなしである</option>' + options(category?.subcategories || [], current, preserve);
+				get(`${prefix}-sub`).innerHTML = '<option value="">（指定なし / 費目のみ）</option>' + options(category?.subcategories || [], current, preserve);
 				get(`${prefix}-sub`).value = current || '';
+			};
+			const syncActualClassification = () => {
+				const same = get('m-rec-sync-actual').checked;
+				get('m-rec-actual-classification').hidden = same;
+				get('m-rec-actual-cat').required = !same && get('m-rec-type').value !== 'transfer';
+				if (same) {
+					get('m-rec-actual-cat').innerHTML = get('m-rec-cat').innerHTML;
+					get('m-rec-actual-cat').value = get('m-rec-cat').value;
+					updateChildren('m-rec-actual', get('m-rec-sub').value, true);
+				}
 			};
 			const updateClassifications = (preserve = false) => {
 				const recType = get('m-rec-type').value;
@@ -791,20 +840,25 @@ export class MasterController {
 				get('m-rec-classification').hidden = transfer;
 				for (const [prefix, categoryId, childId] of [
 					['m-rec', item?.category_id, item?.subcategory_id],
-					['m-rec-actual', item?.actual_category_id || item?.category_id, item?.actual_subcategory_id !== undefined ? item.actual_subcategory_id : (item?.actual_category_id || item?.category_id) === item?.category_id ? item?.subcategory_id : null]
+					['m-rec-actual', actualCategory, actualChild]
 				]) {
 					const categories = (config.categories || []).filter(candidate => (candidate.type || 'expense') === recType);
 					get(`${prefix}-cat`).innerHTML = options(categories, preserve ? categoryId : null, preserve);
 					get(`${prefix}-cat`).required = !transfer;
 					updateChildren(prefix, preserve ? childId : null, preserve);
 				}
+				syncActualClassification();
 			};
 			get('m-rec-type').addEventListener('change', () => updateClassifications());
-			get('m-rec-cat').addEventListener('change', () => updateChildren('m-rec'));
+			get('m-rec-cat').addEventListener('change', () => { updateChildren('m-rec'); syncActualClassification(); });
+			get('m-rec-sub').addEventListener('change', syncActualClassification);
+			get('m-rec-sync-actual').addEventListener('change', syncActualClassification);
 			get('m-rec-actual-cat').addEventListener('change', () => updateChildren('m-rec-actual'));
 			updateClassifications(true);
 			this.bindMasterSubmit('form-master-recurring', async () => {
+				const config = structuredClone(expectedConfig);
 				const recType = get('m-rec-type').value;
+				const same = get('m-rec-sync-actual').checked;
 				const id = get('m-rec-id').value.trim();
 				const next = {
 					id, name: get('m-rec-name').value.trim(), type: recType,
@@ -812,8 +866,8 @@ export class MasterController {
 					to_account_id: recType === 'transfer' ? get('m-rec-to-account').value : null,
 					category_id: recType === 'transfer' ? null : get('m-rec-cat').value,
 					subcategory_id: recType === 'transfer' ? null : get('m-rec-sub').value || null,
-					actual_category_id: recType === 'transfer' ? null : get('m-rec-actual-cat').value,
-					actual_subcategory_id: recType === 'transfer' ? null : get('m-rec-actual-sub').value || null,
+					actual_category_id: recType === 'transfer' ? null : get(same ? 'm-rec-cat' : 'm-rec-actual-cat').value,
+					actual_subcategory_id: recType === 'transfer' ? null : get(same ? 'm-rec-sub' : 'm-rec-actual-sub').value || null,
 					day_of_month: Number(get('m-rec-day').value), holiday_adjustment: get('m-rec-holiday').value
 				};
 				if (recType === 'transfer' && (!next.to_account_id || next.to_account_id === next.account_id)) throw new Error('振替元とは異なる振替先口座を選択してください。');
@@ -821,10 +875,11 @@ export class MasterController {
 				if (item) Object.assign(config.recurring_rules.find(rule => rule.id === item.id), next);
 				else config.recurring_rules.push({ is_active: true, start_date: formatDate(new Date()).slice(0, 7) + '-01', end_date: null, frequency: 'interval_months', interval_months: 1, amortize_months: 1, ...next });
 				await this.saveMasterConfigAndSync(config, expectedConfig);
-				modal.classList.remove('active');
+				this.closeMasterModal(openVersion);
 			});
 		}
 
+		this.initialValues = this.captureValues();
 		modal.classList.add('active');
 	}
 }

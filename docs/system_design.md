@@ -370,8 +370,8 @@ GASプロジェクトの迅速な立ち上げと構成自動化のため、以�
    * 取引入力画面の「立替返済（`#mode-repay`）」モード選択時、未精算の立替貸付取引（`createAdvancePaymentTransactions` で生成される `type === 'transfer' && to_account_id === 'acc_receivable'`、または互換用の `type === 'advance_payment'` であり、かつ `!is_deleted && settlement_status !== 'settled'` のレコード）を `getUnsettledAdvancePayments()` により検索し、一覧カード（`#unsettled-advance-list`）として表示。
    * 各明細に対象日付、立替相手・メモ、立替金額、および「回収・精算」ボタンを配置。
 2. **ワンクリック返済確定と未回収リストからの自動除外**
-   * 「回収・精算」ボタンを押下すると、回収額入力欄（`#input-repay-amount`）に立替額を自動セットし、メモ欄に `[立替回収] ${元メモ}` を補完。
-   * そのまま登録を実行することで、返済取引（`createAdvanceRepaymentTransaction`）が即座に生成・保存され、元の立替取引の `settlement_status` が `'settled'` に更新されて未回収リストから自動的に消去・相殺される。
+   * 「回収・精算」ボタンを押下すると、指定受取口座へ立替額の回収明細を直接作成する。回収明細のメモは `立替回収`、タグは `立替回収` 1個とし、元明細のメモ・タグを継承しない。
+   * 返済取引（`createAdvanceRepaymentTransaction`）と元明細の更新を原本比較付きで一括保存し、元の立替取引の `settlement_status` が `'settled'` に更新されて未回収リストから自動的に消去・相殺される。
 
 ### 3.21 クレジットカード締め日・口座引き落とし日設定および自動引き落とし相殺要件
 
@@ -827,6 +827,16 @@ GAS通常更新も候補検証後の永続ジャーナルによる確定/復旧�
 明細フィルターは有効設定に加え、フィルター適用前の対象期間の未削除明細が参照するアーカイブ済み費目・口座を含める。費目は計上・実態の両軸、口座は振替元・先を参照する。金額0や予定表示OFFでも参照自体があれば候補を残す。他の絞り込み条件によって候補を消さない。期間は年・月では計上月target_month、日では取引日dateとする。選択可能なら現在値を保持し、期間変更等で候補が消えた場合は「すべて」へ戻す。新規入力のアーカイブ設定選択禁止は維持する。
 
 費目カードへ日別・月別・年別の費目別支出推移を追加し、既存のドーナツ・内訳・明細への絞り込みは保持する。日別は選択月の取得済み明細を取引日で集計する。月別は選択年の12か月、年別は取得済み履歴の年を計上月で集計する。計上/実態分類の切替と予定の表示切替を反映する。月次snapshotがある月はsnapshotを採用し、取得済み同月明細を重ねて数えない。日分解情報を持たないsnapshotを日別へ推測配分しない。取得済み範囲である旨と日別/計上月の違いを画面へ明示する。アーカイブ済み・未分類・未知IDの系列名を安全に表示する。Chart.js利用不可でも時系列を表で確認でき、空データ・再描画・テーマ変更で古いグラフを残さない。推移と内訳は同じ描画要求のマスタを使い、古い要求の後着描画を拒否する。
+
+### 3.48 定期ルール・入力切替・精算の操作整合性（1.12.1）
+
+定期ルールの追加は「実態分類を計上分類と同じにする」を初期ONとし、編集は保存済みの計上・実態の親子分類が一致するときだけONにする。実態の省略は既存の生成規則に従って補完し、明示的な中項目未指定は保持する。ON中は実態欄を畳み、計上変更を保存する両軸へ反映する。OFFでは個別に指定でき、振替では両分類を保存しない。既存不一致の値を開いただけで変更しない。入力・明細編集・定期ルール・保険の定期費目・メンテナンスの中項目未指定は「（指定なし / 費目のみ）」へ統一する。
+
+ブラウザの戻るは、表示中の最上位モーダルを閉じる操作として扱い、アプリ離脱確認を出さない。明細編集に加えてマスタ追加・編集にも変更破棄確認を適用する。変更なしは即閉じ、入力変更時は取消で入力とモーダルを維持し、承認時だけ閉じる。閉じるボタン・Escapeも同じ経路を使う。履歴ガードを復元し、次の戻るやネストした電卓を安全に扱う。認証ロック後に未保存編集を再表示しない。保存処理中は閉じる操作を保留し、破棄確認で保存済み変更を取り消せると誤案内しない。保存失敗後は入力を保持して再操作できる。口座・費目・中項目・定期ルールの保存候補は送信ごとに編集開始版から生成し、失敗した追加候補を再送で重複追加しない。読取要求・保存完了は画面世代と認証鍵を確認し、旧読取で新しい編集を置き換えず、旧保存完了で新しい編集を閉じない。
+
+立替回収リストからの直接精算は、新たな回収明細のタグを「立替回収」1個、メモを「立替回収」のみにする。元明細のタグ・メモは保持し、原本比較・二重精算拒否・一括保存を維持する。手入力の回収では利用者が指定したタグ・メモを保持し、システム付与タグは重複させない。
+
+通常入力から前払分割への切替で、未入力の一括支払総額へ通常金額を引き継ぐ。空欄と明示0を区別し、すでに入力済みの分割総額は上書きしない。共通の日付・口座・両分類・メモ・タグを保持し、入力モードが異なる税計算メタデータは破棄する。その他のモードでも入力を勝手に消去・上書きしないことを点検する。
 
 ## 4. 同期トリガー・通信・セキュリティ要件
 
@@ -1865,6 +1875,7 @@ flowchart TD
 | **3.44.2** | 設定競合の比較・項目別解消と取消 | `js/logic/master_sync.js`, `js/ui/master_conflict_controller.js`, `js/ui/sync_status_controller.js`, `js/sync.js` | 既存 `update_master` の版検査を維持 | 暗号化共有マスタ・共有基点 | `test/unit/master_conflict_resolution.test.js`, `test/integration/master_conflict_outcomes.test.js`, `test/ui/master_conflict_resolution.test.js` |
 | **3.45** | タイトルバー開閉・編集分類共通化・種別別完全取込とサーバー反映 | `js/ui/coordinator.js`, `js/ui/tx_edit_controller.js`, `js/ui/backup_import_controller.js`, `js/db/backup_replacement.js`, `js/db/yose_db.js`, `js/sync.js`, `gas/Code.gs` | `replace_import` | 業務3ストア・暗号化outbox・サーバー復旧journal/receipt | `test/ui/section_and_edit_categories.test.js`, `test/ui/replacement_import.test.js`, `test/integration/replacement_import.test.js`, `test/integration/full_import_sync.test.js`, `test/system/full_import_recovery_scenario.test.js` |
 | **3.47** | メンテナンス最新一覧・参照あり候補・費目別推移・期間内アーカイブfilter | `js/logic/category_trend.js`, `js/logic/master_maintenance.js`, `js/ui/maintenance_controller.js`, `js/ui/tx_list_controller.js`, `js/ui/summary_controller.js`, `js/ui/chart_controller.js`, `index.html` | - | 取得済み明細・master・月次snapshot（読取） | `test/unit/category_trend.test.js`, `test/unit/master_maintenance.test.js`, `test/ui/category_trends.test.js`, `test/ui/archived_filters.test.js`, `test/ui/master_maintenance.test.js` |
+| **3.48** | 定期分類の共通化・中項目文言統一・全モーダル戻る・回収表示・前払金額引継ぎ | `js/ui/master_controller.js`, `js/ui/coordinator.js`, `js/ui/maintenance_controller.js`, `js/ui/tx_input_controller.js`, `js/logic/transaction_factory.js` | - | 定期ルール・精算明細 | `test/ui/recurring_categories.test.js`, `test/ui/master_modal_navigation.test.js`, `test/ui/input_mode_settlement.test.js`, `test/unit/logic.test.js` |
 | **4.1** | 差分同期トリガー（visibilitychange等） | `js/sync.js` | `gas/Code.gs` (`push_diff`) | `pending_diffs` | `test/unit/sync.test.js`, `test/integration/sync_flow.test.js` |
 | **4.2** | CORS回避プロトコル (`text/plain`) | `js/sync.js` | `gas/Code.gs` | - | `test/unit/sync.test.js` |
 | **4.3** | WebAuthn生体認証・全データAES-GCM暗号化・公開鍵自動登録 | `js/crypto.js`, `js/sync.js`, `js/db.js`, `js/app.js` | `gas/Code.gs` (`register_initial_key`) | `PropertiesService` | `test/unit/crypto.test.js`, `test/unit/gas.test.js` |

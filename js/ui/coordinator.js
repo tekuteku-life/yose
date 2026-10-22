@@ -173,7 +173,7 @@ export class AppCoordinator {
 		window.addEventListener('popstate', () => {
 			if (this.allowNavigation) return;
 			if (restoring) { restoring = false; return; }
-			if (['modal-edit-tx', 'modal-master-conflict', 'modal-replacement-import'].some(id => document.getElementById(id)?.classList.contains('active'))) {
+			if (this.getTopModal()) {
 				this.closeTopModal();
 				restoring = true; history.forward();
 				return;
@@ -201,6 +201,7 @@ export class AppCoordinator {
 	closeTopModal() {
 		const top = this.getTopModal();
 		if (top?.id === 'modal-edit-tx') return this.txEditController.requestClose();
+		if (top?.id === 'modal-master-item') return this.masterController.requestClose();
 		if (top?.id === 'modal-master-conflict') { this.masterConflictController.cancel(); return true; }
 		/** @type {HTMLElement} */ (top?.querySelector('.close-btn'))?.click();
 		return true;

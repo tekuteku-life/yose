@@ -77,6 +77,8 @@ describe('Mutation integrity in real UI workflows', { timeout: 180000 }, () => {
 		await d.waitFor('!document.getElementById("modal-master-item").classList.contains("active")');
 		await d.click('.btn-edit-recurring[data-id="rec_integrity"]');
 		await d.select('#m-rec-cat', 'cat_food');
+		await d.click('#m-rec-sync-actual');
+		assert.equal(await d.isVisible('#m-rec-actual-cat'), true);
 		await d.select('#m-rec-actual-cat', 'cat_housing');
 		assert.equal(await value(d, '#m-rec-sub'), '');
 		assert.equal(await value(d, '#m-rec-actual-sub'), '');
