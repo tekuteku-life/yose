@@ -145,7 +145,8 @@ export class StorageEngine {
 		});
 	}
 
-	async putRaw(storeName, value, key = undefined) {
+	async putRaw(storeName, value, key = undefined, isSessionValid = () => true) {
+		if (!isSessionValid()) throw new Error('認証状態が変更されました。');
 		if (this.memoryDb) {
 			const targetKey = key !== undefined ? key : value.id;
 			await this.memoryDb.put(storeName, targetKey, value);
@@ -158,7 +159,26 @@ export class StorageEngine {
 			tx.onabort = () => reject(tx.error || new Error('IndexedDB write aborted'));
 			const store = tx.objectStore(storeName);
 			const req = key !== undefined ? store.put(value, key) : store.put(value);
+			req.onsuccess = () => { if (!isSessionValid()) tx.abort(); };
 			req.onerror = () => reject(req.error);
+		});
+	}
+
+	async putSecurityKeys(entries, isSessionValid) {
+		const prepared = structuredClone(entries);
+		if (!isSessionValid()) throw new Error('認証状態が変更されました。');
+		if (this.memoryDb) {
+			for (const [key, value] of Object.entries(prepared)) this.memoryDb.stores.security_keys.set(key, value);
+			return;
+		}
+		return new Promise((resolve, reject) => {
+			const tx = this.db.transaction(['security_keys'], 'readwrite');
+			tx.oncomplete = () => resolve(undefined);
+			tx.onerror = tx.onabort = () => reject(tx.error || new Error('認証鍵の保存を中止しました。'));
+			for (const [key, value] of Object.entries(prepared)) {
+				const request = tx.objectStore('security_keys').put(value, key);
+				request.onsuccess = () => { if (!isSessionValid()) tx.abort(); };
+			}
 		});
 	}
 

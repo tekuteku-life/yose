@@ -31,8 +31,8 @@ const FIELD_LABELS = {
 function valueAtSegments(root, segments) {
 	let value = root;
 	for (const segment of segments) {
-		if (typeof segment === 'string') value = value && Object.hasOwn(value, segment) ? value[segment] : undefined;
-		else value = Array.isArray(value) ? value.find(item => item?.id === segment.id) : undefined;
+		if (typeof segment === 'string') value = value[segment];
+		else value = value.find(item => item.id === segment.id);
 	}
 	return value;
 }

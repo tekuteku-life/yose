@@ -68,7 +68,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 	}
 
 	for (const destination of ['2026-10-20', '2026-08-20']) {
-		it(`moves a closed transaction to ${destination} using its original month in a retroactive request`, async () => {
+		it(`moves a closed transaction to ${destination} using its original month in an approved batch`, async () => {
 			const d = fixture.driver;
 			await seed(d, [transaction('move', { date: '2026-09-20', target_month: '2026-09', sync_status: 'synced' })]);
 			await configureGas(d, { success: true });
@@ -78,16 +78,16 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 			await d.click('#month-tx-list .tx-item[data-id="move"]');
 			await d.fill('#edit-tx-date', destination);
 			await submit(d, '#edit-tx-form');
-			await d.waitFor(async () => d.requests.some(r => r.url === gasUrl && JSON.parse(r.body).action === 'retroactive_update'));
-			const request = JSON.parse(d.requests.find(r => r.url === gasUrl && JSON.parse(r.body).action === 'retroactive_update').body);
-			assert.equal(request.payload.previous_target_month, '2026-09');
-			assert.equal(request.payload.transaction.target_month, destination.slice(0, 7));
+			await d.waitFor(async () => d.requests.some(r => r.url === gasUrl && JSON.parse(r.body).action === 'push_diff'));
+			const request = JSON.parse(d.requests.find(r => r.url === gasUrl && JSON.parse(r.body).action === 'push_diff').body);
+			assert.equal(request.payload.transactions[0].previous_target_month, '2026-09');
+			assert.equal(request.payload.transactions[0].target_month, destination.slice(0, 7));
 			await d.waitFor('(async () => (await window.__yose_app.db.getTransaction("move")).sync_status === "synced")()');
 			assert.equal((await records(d))[0].previous_target_month, undefined);
 		});
 	}
 
-	it('retries a failed archived edit through manual sync without downgrading it to push_diff', async () => {
+	it('retries a failed archived edit through an approved manual batch', async () => {
 		const d = fixture.driver;
 		await seed(d, [transaction('retry', { date: '2026-09-20', target_month: '2026-09', sync_status: 'synced' })]);
 		await configureGas(d, { success: false, error: 'temporary failure' });
@@ -104,7 +104,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 		await d.click('#btn-header-sync');
 		await waitForDialog(d, '差分同期完了');
 		const retried = d.requests.slice(start).filter(r => r.url === gasUrl).map(r => JSON.parse(r.body));
-		assert.deepEqual(retried.map(r => r.action), ['fetch_state', 'fetch_master', 'retroactive_update', 'fetch_state']);
+		assert.deepEqual(retried.map(r => r.action), ['fetch_state', 'fetch_master', 'push_diff', 'fetch_state']);
 		assert.equal((await records(d))[0].sync_status, 'synced');
 		assert.equal((await d.evaluate('window.__yose_app.db.getSnapshot()')).monthly_summaries['2026-09'].expense_total, 222);
 	});
@@ -139,7 +139,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 				const submitted = d.requests.slice(before).some(request => {
 					if (request.url !== gasUrl || !request.body) return false;
 					const envelope = JSON.parse(request.body);
-					return envelope.action === 'retroactive_update' && envelope.payload.transaction.id === 'double_move' && envelope.payload.transaction.date === destination;
+					return envelope.action === 'push_diff' && envelope.payload.transactions.some(tx=>tx.id === 'double_move' && tx.date === destination);
 				});
 				return submitted && !await d.evaluate('window.__yose_app.syncManager.isSyncing');
 			});
@@ -148,10 +148,10 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 		setGasResponse(d, { json: { success: true } });
 		await d.click('#btn-header-sync');
 		await waitForDialog(d, '差分同期完了');
-		const request = d.requests.filter(r => r.url === gasUrl).map(r => JSON.parse(r.body)).filter(r => r.action === 'retroactive_update').at(-1);
-		assert.equal(request.action, 'retroactive_update');
-		assert.equal(request.payload.previous_target_month, '2026-09');
-		assert.equal(request.payload.transaction.target_month, '2026-11');
+		const request = d.requests.filter(r => r.url === gasUrl).map(r => JSON.parse(r.body)).filter(r => r.action === 'push_diff').at(-1);
+		assert.equal(request.action, 'push_diff');
+		assert.equal(request.payload.transactions[0].previous_target_month, '2026-09');
+		assert.equal(request.payload.transactions[0].target_month, '2026-11');
 		assert.equal((await records(d))[0].previous_target_month, undefined);
 	});
 
@@ -167,10 +167,10 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 		await d.click(`#month-tx-list .tx-item[data-id="${parent.id}"]`);
 		await d.fill('#edit-tx-date', '2026-10-21');
 		await submit(d, '#edit-tx-form');
-		await d.waitFor(async () => d.requests.some(r => r.url === gasUrl && JSON.parse(r.body).payload?.transaction?.id === parent.id));
-		const moved = d.requests.filter(r => r.url === gasUrl).map(r => JSON.parse(r.body)).find(r => r.payload?.transaction?.id === parent.id);
-		assert.equal(moved.action, 'retroactive_update');
-		assert.equal(moved.payload.previous_target_month, '2026-09');
+		await d.waitFor(async () => d.requests.some(r => r.url === gasUrl && JSON.parse(r.body).payload?.transactions?.some(tx=>tx.id === parent.id)));
+		const moved = d.requests.filter(r => r.url === gasUrl).map(r => JSON.parse(r.body)).find(r => r.payload?.transactions?.some(tx=>tx.id === parent.id));
+		assert.equal(moved.action, 'push_diff');
+		assert.equal(moved.payload.transactions.find(tx=>tx.id === parent.id).previous_target_month, '2026-09');
 		const after = await records(d);
 		assert.deepEqual(after.filter(t => t.type === 'expense').map(t => [t.id, t.date, t.amount]), initial.filter(t => t.type === 'expense').map(t => [t.id, t.date, t.amount]));
 	});
@@ -215,10 +215,10 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 		}
 	});
 
-	for (const route of ['push_diff', 'retroactive_update']) {
+	for (const route of ['open', 'closed']) {
 		it(`keeps an edit made through the UI while ${route} is waiting unsynced`, async () => {
 			const d = fixture.driver;
-			const source = route === 'retroactive_update' ? '2026-09' : '2026-10';
+			const source = route === 'closed' ? '2026-09' : '2026-10';
 			await seed(d, [transaction('inflight', { date: source + '-20', target_month: source, sync_status: 'synced' })]);
 			let release;
 			const barrier = new Promise(resolve => { release = resolve; });
@@ -235,7 +235,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 				await d.waitFor(async () => d.requests.some(r => r.url === gasUrl));
 				await d.click('#month-tx-list .tx-item[data-id="inflight"]');
 				await d.fill('#edit-tx-amount', '222');
-				if (route === 'retroactive_update') await d.fill('#edit-tx-date', '2026-11-20');
+				if (route === 'closed') await d.fill('#edit-tx-date', '2026-11-20');
 				await submit(d, '#edit-tx-form');
 				await d.waitFor('!document.getElementById("modal-edit-tx").classList.contains("active")');
 				release();
@@ -243,7 +243,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 				const [latest] = await records(d);
 				assert.equal(latest.amount, 222);
 				assert.equal(latest.sync_status, 'unsynced');
-				if (route === 'retroactive_update') assert.equal(latest.previous_target_month, '2026-09');
+				if (route === 'closed') assert.equal(latest.previous_target_month, '2026-09');
 			} finally {
 				release();
 			}

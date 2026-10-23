@@ -122,11 +122,17 @@ npx http-server . -p 8080
 
 ## 🧪 テスト実行 & カバレッジ測定
 
-Node.js ネイティブのテストランナーを使用して、単体テスト・結合テスト・システムテストを実行します（外部テストライブラリ不要）。
+Node.js標準テストランナーで単体・結合・システム試験を、CDP経由の実ChromiumでUI試験を実行する。検証環境はNode.js 24とChromiumである。静的検査・全原本カバレッジ用の開発依存を、事前に`npm ci`で導入する。
 
 ```bash
-# 全テスト実行 & カバレッジレポート出力（目標: 95%以上）
+# 静的検査と単体・結合・システム試験（Node標準の参考coverageを出力）
 npm test
+
+# 実ChromiumのUI試験
+npm run test:ui
+
+# 全4層を実行し、本番の全JS/GAS/SWでLine/Branch各97%以上を判定
+npm run test:coverage
 
 # 単体テストのみ実行
 npm run test:unit
@@ -137,6 +143,8 @@ npm run test:integration
 # システム（E2E）テストのみ実行
 npm run test:system
 ```
+
+`test:coverage`はテスト時のみIstanbul counterを挿入し、Nodeとブラウザの実行結果を共通の原本位置へ統合する。未実行ファイルも含め、対象漏れ・原本差異・計測失敗・各97%未達を終了コード非0で報告する。HTML/JSONレポートは`coverage/`、原本manifestと生記録は実行時に表示する`/tmp/yose-coverage-*`へ出力する。Node標準coverageとは測定器・対象が異なるため数値を混同しない。
 
 ---
 

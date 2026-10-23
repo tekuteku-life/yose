@@ -10,12 +10,12 @@ describe('Standard passkeys without PRF', () => {
 		const credential = await registerWebAuthnCredential('test', f.nav, { userId, origin: f.origin });
 		assert.ok(credential.publicKeySpki);
 		assert.equal(credential.algorithm, -7);
-		assert.equal(f.lastCreate.publicKey.extensions, undefined);
+		assert.equal(f.lastCreate.publicKey.extensions.prf.eval.first.byteLength, 32);
 		assert.equal(f.lastCreate.publicKey.authenticatorSelection.authenticatorAttachment, undefined);
 		assert.equal(f.lastCreate.publicKey.authenticatorSelection.userVerification, 'required');
 		const result = await authenticateWithWebAuthn(credential, f.nav);
 		assert.equal(result.success, true);
-		assert.equal(f.lastGet.publicKey.extensions, undefined);
+		assert.equal(f.lastGet.publicKey.extensions.prf.eval.first.byteLength, 32);
 		assert.equal(f.lastGet.publicKey.allowCredentials[0].transports, undefined);
 		await registerWebAuthnCredential('test', f.nav, { userId, origin: f.origin });
 		assert.deepEqual(f.lastCreate.publicKey.user.id, userId);

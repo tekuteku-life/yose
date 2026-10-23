@@ -188,7 +188,7 @@ security_keysにはPIN暗号化されたmaster_keys_packageや公開credential�
 
 Ed25519署名鍵とDMKを初回生成し、PINからPBKDF2/HMAC-SHA-256（100,000回、16byte salt）で導いたAES鍵でまとめて保護する。解除中だけCryptoKeyをメモリに保持する。
 
-パスキーはPRFなしの通常WebAuthnで、永続user handleとcredential ID/公開鍵等を保存する。challenge・origin・RP ID・署名等を検証して認証し、その後もDB復号にはPINを必要とする。パスキー内部秘密鍵をexportせず、鍵束を設定同期へ含めない。1Password実機の提供者動作と、仮想CTAP2でのプロトコル確認は区別する。
+パスキーは通常WebAuthnで、credentialごとのuser handleとcredential ID/公開鍵等を保存する。challenge・origin・RP ID・署名等を検証し、PRF対応登録は暗号ラップを復号してPINを省略する。非対応・旧登録はPINで解除する。パスキー内部秘密鍵をexportせず、鍵束を設定同期へ含めない。1Password実機の提供者動作と、仮想CTAP2でのプロトコル確認は区別する。
 
 <a id="i-4-8"></a>
 ## I-4.8 旧PRF形式の移行
@@ -205,7 +205,7 @@ PIN復号成功を確認して同じDMKと署名鍵を復元した後に、旧va
 | master_config/sync_base | 受理済み共有masterの暗号化基点である。 |
 | master_config/pending_import | 全置換の暗号化送信待ち・操作ID・base_versionである。 |
 | summary_snapshot/current | 暗号化した締め済み月集計/残高である。 |
-| security_keys | PINラップ鍵束、公開鍵、WebAuthn公開情報等である。 |
+| security_keys | PINラップ鍵束、公開鍵、WebAuthn公開情報と任意のPRF暗号ラップである。 |
 | settings | GAS URL等の端末設定であり、業務本文暗号化とは別である。 |
 
 メモリ実装は非ブラウザ試験向けであり、IndexedDBの実transaction/失敗特性を同一と仮定しない。サーバーのSchema v2 JSONと端末内暗号化envelopeは異なる層である。入出力項目・型は外部設計5.1〜5.3、参照関係はI-6.4を参照する。
@@ -319,14 +319,17 @@ sequenceDiagram
     participant W as WebAuthn
     participant D as DB / Crypto
     A->>U: 初回設定またはロック画面
-    opt パスキーを利用
-        U->>W: 通常credential認証
-        W-->>A: assertion
+    alt PRF対応パスキーを利用
+        U->>W: credential認証とPRF要求
+        W-->>A: assertionとPRF出力
         A->>A: challenge・origin・RP ID・署名を検証
+        A->>D: PRFラップ復号
+    else PINで解除
+        U->>A: PIN入力
+        A->>D: PINラップ復号
     end
-    U->>A: PIN入力
-    A->>D: 鍵束復号とメモリ鍵設定
-    D-->>A: 成功 / 誤PIN
+    A->>D: 保存公開鍵照合と既存データ検証
+    D-->>A: 世代一致時にセッション鍵設定
     A->>U: 成功後に画面初期化
     U->>A: ロック / ページ離脱
     A->>D: メモリ鍵・署名鍵解除
@@ -439,3 +442,84 @@ Chart.jsは外部CDNであり静的資産一覧に含まれない。オフライ
 ## I-7.8 金額精度と表示
 
 保存金額は有限な整数を検査し、税/分割は明示丸めを行う。計算はJavaScript Numberを使用し、任意桁整数や全浮動小数点誤差排除を保証しない。安全整数範囲の上限拒否や大量累積の誤差境界は別の設計/試験課題である。旧文書の精度目標を達成済みと扱わず、監査へ残す。
+
+<a id="i-3-49"></a>
+## I-3.49 パスキー鍵解除と既存立替回収
+
+### パスキーの鍵ライフサイクル
+
+`webauthn_credential` の1レコードに公開credentialと任意の `prfWrap` を保存する。登録ではPRFを要求してcreate後に署名検証付きgetを必ず行い、得た32byte PRF出力からHKDF-SHA-256（乱数salt、用途固有info）でAES-GCM-256鍵を導出する。鍵束（DMK/Ed25519 PKCS8）を乱数12byte IVで暗号化する。version/credentialId/rpId/originをAADへ結合する。レコードに保存するのは公開情報、PRF入力salt、HKDF salt、IV、暗号文のみであり、PRF出力・生鍵・PINは永続化/ログ/共有設定/バックアップへ含めない。再登録createでは必ず新しい乱数user handleを用い、認証器側で旧credentialを同一利用者として置換させない。user handleはcredential内で保持し、旧webauthn_user_idの再利用を廃止する。登録失敗/取消/ロック競合/保存失敗では端末の旧登録と旧パスキーによる解除を維持する。新credentialを生成した後の認証器内残存はWebAuthnから削除できず、提供者の管理対象である。生の一時byte列はfinallyで消去し、解除中だけCryptoKeyをメモリへ保持する。
+
+解除は署名検証→PRF鍵導出/復号→鍵import→既存config/snapshot/全明細読取→同じ解除試行でsecurity_keysから読み直した保存公開署名鍵との一致検証→session/sync署名鍵の確定である。失敗/世代不一致では仮のDB鍵を消去し、遅い認証/登録が再ロックを覆さない。PIN変更は同一鍵なのでPRFラップを保持する。署名鍵再生成は新公開鍵・PIN鍵束・旧credentialのPRFラップ失効を単一security_keys transactionで確定し、古い署名鍵を復元できなくする。コミット直後にロックされた場合は解除中状態を戻さず、次のPIN解除で保存公開鍵を読み直して新鍵を復元する。解除はcredentialレコード全体の削除であり、旧vaultとは区別する。
+
+PRFの根拠は[WebAuthn Level 3 PRF extension](https://www.w3.org/TR/webauthn-3/#prf-extension)である。create時の出力は必須ではなく、getではenabledを要求しない。PRF非対応の通常パスキーもPIN経路とともに保持する。
+
+### 関係モデルと保存境界
+
+回収側の `advance_source_id` だけを正本とする。新規直接回収も同じ関係を生成し、元の `settlement_status` は更新しない。未回収は旧settledと有効回収参照の両方を除いて導出する。既存の到達不能 `currentSettlingAdvanceId` 分岐を削除する。
+
+専用DB操作で選択時の両原本を現在値と照合し、1対1・同額正数・confirmed・金額確定・口座方向を検証して回収の参照だけを変更する。収入候補の口座は非アーカイブかつacc_receivable以外の有効口座に限定し、DB保存時も検証する。収入からの変換は同一IDをtransfer/account_id=acc_receivable/to_account_id=旧account_idへ変更し、両分類と税情報をnullにする。メモ/タグ/日付/グループ/作成日時を保持する。旧settled元の関連補完は許可するが新規直接回収の対象にはしない。補完リンク作成時に旧settledをunsettledへ変更し、有効回収参照による精算判定へ原子的に移行する。この元変更も原本比較と再締め承認の対象である。解除は回収参照を削除する。以降は回収削除だけでも元が自然に未回収へ戻り、元未取得時も回収側だけで解除/削除できる。原本比較・事前暗号化・鍵世代検証・複数書込は既存mutateBusinessの原子境界を使う。
+
+共有validatorでは回収参照の型/安全ID/自己参照/回収役割/確定/正数/二重参照を常に検証する。元が取得済みなら非削除・立替振替・同額・確定・旧settledでないことを検証し、未取得元は過去明細未取得として保持する。旧settledと有効参照の併存を禁止することで、移行元の日時競合時に回収だけを部分受理させない。関連を壊す編集は解除を案内して拒否する。立替金口座以外の支払元/受取先は、口座の有効性・同額・確定状態・立替方向を保つ通常編集を許可する。前後の金融口座を固定する制約は設けず、オフラインの解除→編集→再リンクの最終状態も一括同期可能にする。墓標回収は参照検証/重複/未回収導出から除く。GASにも同じvalidatorを生成埋込する。
+
+閉じ月を跨ぐ解除後編集で関係の途中状態を送らないよう、承認済み過去月と未締め月の差分を単一push_diffバッチで送る。GASは全候補のタイムスタンプ競合/再締め承認を確認し、pending/archives/snapshotを既存runIntegrityMutationで一体検証・保存する。閉じ月変更/移動/削除で影響月以降を再計算する。1件でも関係が不整合になる競合はバッチ全体を拒否し未同期を保持する。旧retroactive_update APIは既存呼出し向けに維持し、新しい同期経路は統一する。
+
+### 設定URLの入力と再描画
+
+設定のGAS URLはinputイベントで未保存状態と入力世代を記録する。renderSettingsは開始時の世代を取得し、同一世代かつ未保存入力がない場合だけ保存済みURLを入力欄へ反映する。URL保存は提出時の値をDB/SyncManagerへ適用し、提出後に別の入力があればその未保存状態を残す。保存完了も世代を進め、保存前の古い読取結果でURL/接続表示を戻さない。UIで遅い再描画→入力→保存、および遅い読取→保存→読取完了の双方を検証する。
+
+### 数値受入の再計測
+
+Nodeの標準coverageとブラウザ未計測のままでは全対象の数値受入を判定できないため、`test:coverage`を追加する。対象は`js/**/*.js`、`gas/**/*.gs`、`sw.js`の本番原本集合である。head内のテーマ初期化を同位置の同期外部スクリプト`js/theme_bootstrap.js`へ抽出し、SW資産にも含める。HTMLの定数`onsubmit="return false;"`は分岐のない宣言であり、テーマ以外の本番インラインロジックが増えた場合は対象追加を要する。
+
+Node・ブラウザ・GASで同一のIstanbul計測器を使用する。Nodeは同期module load hook、ブラウザはCDP Fetchによるテスト配信、SW/themeのVM試験は読込helperで、元ソースへ標準statement/function/branch counterだけを挿入する。本番原本・SWキャッシュ資産に計測コードを保存しない。計測前の原本SHA-256とIstanbulの位置mapを証跡に含め、集計時も原本のhashと再生成した位置mapを完全照合する。差替fixtureやCDNを本番コードとして採用しない。V8/CDPの詳細Profilerは遷移中の破棄処理の分岐が失われるため、最終受入の集計器には使用しない。
+
+ブラウザは最初のnavigate前にCDP Runtime bindingと収集関数を注入する。navigate/reload直前・pagehide・明示flush・closeでcounterを退避し、退避後に0へ戻してdeltaを保持する。通常操作前はpagehide listenerの末尾再配置だけを行う。pagehideの末尾は破棄中にCDP通知が失われるため、テスト専用の乱数keyでsessionStorageへ同期保存してから0へ戻す。同一originの次document/復帰/通常flushで保留記録をbindingへ送り、ACK後に保留記録を消す。BFCacheの同一documentもcounterを保持したまま通常どおり復帰し、再開のためのdebugger停止は要しない。保存・送信失敗や未知の原本/位置mapを無視しない。Nodeはprocess終了時に同じ形式を保存する。
+
+別originでテストが終了した場合は、assert完了後のcloseで元originの収集専用空HTMLへ遷移して保留記録を回収する。このHTMLは本番スクリプトを読み込まず、回収のために本番処理を追加実行しない。VMは共通のcoverage objectをcontextへ渡し、context内のcounterもNode終了時の証跡に含める。
+
+収集/退避/listener再配置に用いるRuntime.evaluateはexceptionDetailsを検査して例外を呼出し元へ伝播し、closeの回収失敗も握り潰さない。送信・sessionStorage・counter reset・再配置の各失敗を直接試験する。deltaでは全counterが0のファイルを省き、原本集合は全対象0初期化で保持する。省略前に形式/原本検証を行い、不正な0記録を見逃さない。
+
+遷移中のevaluate応答やbinding通知が失われても記録を落とさないよう、通常flushも乱数chunk ID付きでsessionStorageへ同期保存してからcounterを0へ戻す。bindingは保留chunkを再送し、Nodeは原本/位置/counterの検証と保存が成功したchunkだけをACKする。ACKは次回flushで渡し、ブラウザはACK済みchunkだけを除去する。同じIDの再受信はpayload SHA-256が一致することを確認して重複保存せず、異なるpayloadなら拒否する。遷移によるcontext破棄の明確なCDPエラーだけは計測用の冪等evaluateで期限付き再試行し、一般の計測例外を再試行/無視しない。UI操作そのものは自動再実行しない。通知喪失・応答喪失でも実際の分岐回数が重複しないことを回帰試験で確認する。
+
+再試行対象はCDPプロトコル由来の例外型で識別し、本文だけで判定しない。exceptionDetails由来のJavaScript例外は、同じcontext破棄の文言を含んでいても即時失敗とする。計測evaluateとwaitFor双方で一般例外の実行回数が1回のままであることを検証する。
+
+生データは実行固有ディレクトリへ保存し、JSON破損/不正構造/原本差異/位置map差異/不正counterを計測失敗とする。全対象manifestの各原本を0で初期化してから、Istanbul標準mergeとreportで統合し、全ファイルのLine/Branch各97%を判定する。未実行SWを含む原本集合とレポート集合を照合し、率の平均や手製OR集計を行わない。Node標準V8の参考値とIstanbulの数値は測定器が異なるため混同しない。SWのVM試験は実配備試験とは区別する。
+
+通常の読取・入力操作ごとに全counterを複製/保存する必要はなく、同じdocumentのcounterへ累積する。明示的navigate/reloadの直前、pagehide、明示flush、closeで記録を退避する。操作前にpagehide listenerを末尾へ置き直す処理は保持し、アプリの同期pagehide処理の計数も含める。全スナップショットのmap/counter検証と未ACK再送を維持し、計測負荷で長いUIスイートを打ち切らない。
+
+収集器の回帰試験はreloadで新document tokenの変更を待ち、履歴復帰で同じtoken/persisted=trueをassertする。reload前後の両分岐、復帰listener内の反対分岐、旧documentのpagehideだけの反対分岐を保持することを確認する。SWのfetchはResponseを返すかrejectする標準契約に従い、null応答を想定した到達不能分岐を削除する。試験もResponseのstatus/type/bodyと通信拒否を用いる。
+
+### 認証境界の追加監査
+
+ES ModulesではglobalThisが存在するため、暗号APIの既定値にあるglobalThis不存在フォールバックを除去する。明示的にWeb Crypto非対応である場合の失敗は維持する。RSAの実署名、DER不正構造、保存credential不備、PRF出力長/拡張結果欠損を公開APIから検証する。署名のcanonical JSONは配列内のundefined/function/symbolおよび疎配列の穴をnullへ正規化し、JSONの配列位置を保持する。
+
+### 認証画面の背景と旧解除経路
+
+全原本監査で認証表示中のTabが背景へ抜けることを実Chromiumから検出した。modal interaction guardをDB読込前に1回設置し、認証画面を通常モーダルより優先する最上位として扱う。認証以外のbody直下要素をinertにし、背景スクロールを固定する。Tab/Shift+Tabは表示中かつ有効な認証内controlの端で循環し、Escapeで認証を閉じない。解除後は元のinert/scroll状態を復元し、再初期化でguardを重複設置しない。
+
+設定の旧PIN解除モーダルは全画面認証の背後にしかなく、正規操作から不要である。promptPinUnlock・関連HTML/イベント/委譲を除去し、ensureKeyUnlockedは実際のロック状態・DMK・秘密鍵を検査して全画面解除を案内する拒否ガードへ統一する。認証後は常にPIN鍵束が存在するため、非PIN保護の通常画面、isKeyProtectedWithPinフラグ、平文保護解除の警告だけの旧APIも除去する。存在しない非保護状態を作る試験ではなく、実際の初期設定・PIN/PRF解除・再ロック・再起動・BFCacheからの復帰を検証する。
+
+### 公開ロジックの境界試験
+
+数値ゲートの再入では、既存の公開API契約を実際の入力から追加検証する。日付の引数省略では休日補正なし・標準カード周期を保持し、祝日のJSONスカラー入力は後段の文字列走査に従う。マスタの省略可能な一覧は空として扱い、存在しない移行先中項目を拒否して元明細を保持する。
+
+マスタ競合は生成されたconflictDetailsの名称/存在フラグ/経路に従って解決する。対象配列やIDが消えた古い解決情報、値IDの不一致、欠損メタデータを公開デコーダの異常入力として拒否し、入力を変更しない。これは通常UIで不正データを作る試験とは区別する。両端末で異なる祝日を削除した場合は両方の削除を反映する。
+
+予算は実明細による費目実績を同費目の前年集計で上書きせず、非正数の集計を追加しない。所有プロパティとして渡された__proto__/constructor/prototypeを集計・費目予算から除外し、Object.prototypeを変更しない。0円予算の実績超過でも消化率の除算異常を起こさない。テストのために未知の税アクションを新たな成功契約とせず、存在しない保険費目を架空の正常データとして使用しない。
+
+移行元の存在検証後のaccounts/categories空配列フォールバックは不要である。UUID生成はES Modulesで存在するglobalThisからcryptoを取得し、randomUUIDがない場合の既存生成経路は保持する。マスタ競合の私有経路取得では、ID segmentは三者すべてがID配列の場合だけ生成され、削除/型変更は親の競合で停止する。ラベル検索はIDまで、参照名検索は存在する値のlocal/remoteレコードまでである。この不変条件から途中の親欠損/非配列フォールバックを削除し、公開APIの古い解決情報を拒否するガードは維持する。
+
+### 明細一覧のポインタ操作と再描画
+
+保存後のrefreshAllViewsが、行へのmousePressedとmouseReleasedの間にinnerHTMLを置換し、行クリックを失わせる実装不具合を実Chromiumで再現した。openは最新DBを読むため、旧DB値や単なる待機不足とは区別する。最近/期間一覧のポインタ操作中は対象一覧のDOM置換を保留し、windowでpointerup/cancelを捕捉した後の次taskで解放する。クリックと削除のイベントが元の行/ボタン上で完了した後に描画を適用する。複数pointerはIDで管理し、次taskで新たな押下を含むすべての操作完了を再確認する。blur/表示非活性でも待機を解放する。認証変更・離脱では待機を解放するとともに描画世代を失効させる。
+
+最近/期間一覧に独立した描画世代を持ち、待機後に世代・認証鍵・ロック状態を再確認する。古い検索/期間/原本の結果を適用しない。AuthController.invalidateSessionから共通の描画取消を呼び、再認証後へ旧結果を持ち越さない。行操作は最新DBの明細を読み、削除済みなら編集画面を開かない。待機中の変更・削除を古い表示のまま保存しない。
+
+保留はDOM適用に限定し、金融データの読取/保存やローカル保存後の新編集をネットワーク応答待ちにしない。フィルタ/ページ変更と空一覧も同じ適用境界を通し、初期化の重複でlistenerを増やさない。実押下中に保存後の再描画を進める先行試験で、押下対象が残り、解放後に最新値で編集できることを確認する。キャンセル・blur・認証変更でも待機を残さない。
+
+### 編集を閉じた後の遅延ひも付けと通知
+
+ひも付け候補の読込中に元の編集画面を閉じた場合も、AdvanceLinkControllerの操作/読込世代を失効させる。編集closeから共通cancelを呼び、Escape・取消・保存・認証変更で閉じた元画面に遅延ダイアログを復活させない。取消後の再編集と新しいひも付け読込は独立して成功できる。
+
+鍵再生成の成功/取消/失敗通知は、実際の鍵保存を担当するAuthControllerだけが行う。設定イベント側の無条件の重複成功通知を除去し、PIN取消・誤PIN・保存失敗を成功として表示しない。コミット前の取消・誤PIN・保存失敗では公開鍵・PIN鍵束・既存パスキー原本を維持する。コミット直後ロックの場合は、保存済みの新鍵を戻さず既存のPIN復旧設計に従う。

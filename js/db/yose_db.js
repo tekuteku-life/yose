@@ -4,6 +4,7 @@
 
 import { dataIntegrity } from '../logic/data_integrity.js';
 import { buildMasterMigration } from '../logic/master_maintenance.js';
+import { buildAdvanceLink, linkedRepayment } from '../logic/advance_links.js';
 import { DEFAULT_MASTER_CONFIG } from './defaults.js';
 import { StorageEngine } from './storage_engine.js';
 import { BackupMerger } from './backup_merger.js';
@@ -290,8 +291,8 @@ export class YoseDB extends StorageEngine {
 		return await this.getRaw('security_keys', key);
 	}
 
-	async saveSecurityKey(key, value) {
-		return await this.putRaw('security_keys', value, key);
+	async saveSecurityKey(key, value, { isSessionValid = () => true } = {}) {
+		return await this.putRaw('security_keys', value, key, isSessionValid);
 	}
 
 	async deleteSecurityKey(key) {
@@ -576,11 +577,39 @@ export class YoseDB extends StorageEngine {
 	}
 
 	// --- Advance Unsettled Tracking (Requirement 3.20) ---
+	async linkAdvanceRepayment(source, repayment, { approvedMonths = [], create = false } = {}) {
+		return this.mutateBusiness(state => {
+			const current = new Map(state.transactions.map(tx => [tx.id, tx]));
+			if (canonicalJsonStringify(current.get(source.id)) !== canonicalJsonStringify(source)
+				|| (create ? current.has(repayment.id) : canonicalJsonStringify(current.get(repayment.id)) !== canonicalJsonStringify(repayment))) throw new Error('対象明細が変更されました。開き直して確認してください。');
+			if (create && source.settlement_status === 'settled') throw new Error('対象の立替明細は精算済みです。');
+			const candidates = create ? [...state.transactions, repayment] : state.transactions;
+			const changed = buildAdvanceLink(source, repayment, candidates, state.master_config, approvedMonths);
+			for (const tx of changed) {
+				tx.updated_at = new Date(Math.max(Date.now(), transactionTimestamp(tx.updated_at) + 1)).toISOString(); tx.sync_status = 'unsynced';
+				current.set(tx.id, tx);
+			}
+			state.transactions = [...current.values()];
+			return { state, result: changed };
+		});
+	}
+
+	async unlinkAdvanceRepayment(repayment, { approvedMonths = [] } = {}) {
+		return this.mutateBusiness(state => {
+			const current = state.transactions.find(tx => tx.id === repayment.id);
+			if (!current || current.is_deleted || !current.advance_source_id || canonicalJsonStringify(current) !== canonicalJsonStringify(repayment)) throw new Error('ひも付け明細が変更されました。開き直して確認してください。');
+			delete current.advance_source_id;
+			current.updated_at = new Date(Math.max(Date.now(), transactionTimestamp(current.updated_at) + 1)).toISOString();
+			current.sync_status = 'unsynced'; current.reclose_approved_months = approvedMonths;
+			return { state, result: [current] };
+		});
+	}
+
 	async getUnsettledAdvancePayments() {
 		const txs = await this.getTransactions();
 		return txs.filter(t =>
 			((t.type === 'transfer' && t.to_account_id === 'acc_receivable') || t.type === 'advance_payment') &&
-			t.settlement_status !== 'settled'
+			t.settlement_status !== 'settled' && !linkedRepayment(t.id, txs)
 		);
 	}
 

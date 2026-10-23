@@ -9,19 +9,7 @@
 	<link rel="icon" type="image/svg+xml" href="icon.svg">
 	<link rel="apple-touch-icon" href="icon-192.png">
 	<link rel="stylesheet" href="css/style.css">
-	<script>
-		(function() {
-			try {
-				var saved = localStorage.getItem('yose_theme_preference');
-				var theme = saved || 'system';
-				var resolved = theme;
-				if (theme === 'system') {
-					resolved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
-				}
-				document.documentElement.setAttribute('data-theme', resolved);
-			} catch (e) {}
-		})();
-	</script>
+	<script src="js/theme_bootstrap.js"></script>
 	<script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
 </head>
 <body>
@@ -564,7 +552,6 @@
 						</form>
 						<div id="pin-action-buttons" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
 							<button id="btn-lock-now" class="btn btn-secondary btn-sm" style="display: none;">🔒 今すぐ再ロック</button>
-							<button id="btn-unlock-pin" class="btn btn-success btn-sm" style="display: none;">🔓 PINでロック解除</button>
 						</div>
 					</div>
 
@@ -575,7 +562,7 @@
 						</div>
 						<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
 							端末の生体認証（Touch ID, Face ID, Windows Hello）や1Password等の同期パスキーと連携してアプリを安全にアンロックします。<br>
-							パスキーは1Password等の保存先を選択できる通常の認証です。データの復号にはPINを使用します。
+							PRF対応パスキーを登録すると、次回からPIN入力なしで解除できます。非対応の環境ではPINを使用します。端末を復旧する場合に備え、PINは保管してください。
 						</p>
 						<div id="synced-passkey-status" style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;"></div>
 						<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
@@ -808,7 +795,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.12.2</span>
+					<span class="badge badge-info" id="badge-current-version">v1.13.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
@@ -925,6 +912,7 @@
 				</div>
 
 				<div class="edit-save-actions">
+					<button type="button" id="btn-edit-link-advance" class="btn btn-secondary" hidden>立替・回収のひも付け</button>
 					<button type="button" id="btn-cancel-edit-tx" class="btn btn-secondary">キャンセル</button>
 					<button type="submit" class="btn btn-primary">💾 修正内容を保存</button>
 				</div>
@@ -932,6 +920,23 @@
 					<button type="button" id="btn-edit-delete-tx" class="btn btn-danger">🗑️ 削除</button>
 				</div>
 			</form>
+		</div>
+	</div>
+
+	<div id="modal-advance-link" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="advance-link-title">
+		<div class="modal">
+			<div class="modal-header">
+				<h3 id="advance-link-title" class="modal-title">立替・回収のひも付け</h3>
+				<button type="button" class="close-btn" id="btn-close-advance-link" aria-label="閉じる">&times;</button>
+			</div>
+			<p id="advance-link-current"></p>
+			<p>取得済みの同額・確定済み明細を1対1でひも付けます。部分回収とまとめ回収は対象外です。候補がない場合や過去分を含める場合は、先に差分同期で明細を取得してください。</p>
+			<div class="form-group" id="advance-link-candidate-group">
+				<label class="form-label" for="advance-link-candidate">ひも付け先</label>
+				<select id="advance-link-candidate" class="form-control"></select>
+			</div>
+			<button type="button" id="btn-save-advance-link" class="btn btn-primary">選択した明細をひも付け</button>
+			<button type="button" id="btn-unlink-advance" class="btn btn-secondary" hidden>ひも付けを解除</button>
 		</div>
 	</div>
 
@@ -1008,28 +1013,6 @@
 			<div style="display: flex; gap: 8px; margin-top: 14px;">
 				<button type="button" id="btn-apply-tax" class="btn btn-primary btn-block">金額欄に反映する</button>
 			</div>
-		</div>
-	</div>
-
-	<!-- ==================== MODAL: PIN UNLOCK ==================== -->
-	<div id="modal-pin-unlock" class="modal-overlay">
-		<div class="modal">
-			<div class="modal-header">
-				<h3 class="modal-title">🔐 秘密鍵のロック解除</h3>
-				<button type="button" class="close-btn" id="btn-close-pin-modal">&times;</button>
-			</div>
-			<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-				秘密鍵はPINコードで保護されています。同期や署名処理を行うためにPINを入力してください。
-			</p>
-			<form id="form-pin-unlock" onsubmit="return false;">
-				<div class="form-group">
-					<label class="form-label" for="input-unlock-pin">PINコード (4桁以上)</label>
-					<input type="password" id="input-unlock-pin" class="form-control" placeholder="PINコードを入力" autocomplete="current-password">
-				</div>
-				<div style="display: flex; gap: 8px; margin-top: 16px;">
-					<button type="button" id="btn-submit-unlock-pin" class="btn btn-primary btn-block">🔓 ロック解除</button>
-				</div>
-			</form>
 		</div>
 	</div>
 

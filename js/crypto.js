@@ -2,13 +2,13 @@
  * Yoseatsume Kakeibo - Web Crypto API (Ed25519 & PIN Encryption)
  */
 
-export function getSubtle(cryptoObj = (typeof globalThis !== 'undefined' ? globalThis.crypto : null)) {
+export function getSubtle(cryptoObj = globalThis.crypto) {
 	const s = cryptoObj?.subtle || null;
 	if (!s) throw new Error('Web Crypto subtle is not available in this environment');
 	return s;
 }
 
-export function getRandomValues(array, cryptoObj = (typeof globalThis !== 'undefined' ? globalThis.crypto : null)) {
+export function getRandomValues(array, cryptoObj = globalThis.crypto) {
 	if (!cryptoObj?.getRandomValues) throw new Error('Web Crypto getRandomValues is not available');
 	return cryptoObj.getRandomValues(array);
 }
@@ -225,7 +225,7 @@ export function canonicalJsonStringify(obj) {
 		return JSON.stringify(obj);
 	}
 	if (Array.isArray(obj)) {
-		return '[' + obj.map(item => {
+		return '[' + Array.from(obj, item => {
 			if (item === undefined || typeof item === 'function' || typeof item === 'symbol') {
 				return 'null';
 			}
@@ -467,6 +467,40 @@ export async function decryptMasterKeysWithPin(wrappedKeys, pin) {
 	} catch (err) {
 		throw new Error('PIN decryption failed: Invalid PIN or corrupted key data');
 	}
+}
+
+// The PRF is never persisted. A separate HKDF key and authenticated context protect this device's key bundle.
+async function prfWrappingKey(output, salt) {
+	if (!(output instanceof Uint8Array) || output.byteLength !== 32 || salt.byteLength !== 32) throw new Error('PRF鍵の形式が正しくありません。');
+	const subtle = getSubtle();
+	const material = await subtle.importKey('raw', Uint8Array.from(output).buffer, 'HKDF', false, ['deriveKey']);
+	return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt, info: new TextEncoder().encode('yose/passkey/master-keys/v1') }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+function prfContext(credential) {
+	return new TextEncoder().encode(canonicalJsonStringify({ version: 1, credentialId: credential.credentialId, rpId: credential.rpId, origin: credential.origin, prfSalt: credential.prfSalt }));
+}
+
+export async function encryptMasterKeysWithPrf({ dmkRaw, privateKeyPkcs8 }, output, credential) {
+	const salt = getRandomValues(new Uint8Array(32)), iv = getRandomValues(new Uint8Array(12));
+	const key = await prfWrappingKey(output, salt);
+	const plaintext = new TextEncoder().encode(JSON.stringify({ dmk: bytesToBase64(dmkRaw), privateKey: bytesToBase64(privateKeyPkcs8) }));
+	try {
+		const ciphertext = await getSubtle().encrypt({ name: 'AES-GCM', iv, additionalData: prfContext(credential) }, key, plaintext);
+		return { version: 1, salt: bytesToBase64(salt), iv: bytesToBase64(iv), ciphertext: bytesToBase64(ciphertext) };
+	} finally { plaintext.fill(0); }
+}
+
+export async function decryptMasterKeysWithPrf(wrapped, output, credential) {
+	if (wrapped?.version !== 1) throw new Error('パスキーの再登録が必要です。');
+	const salt = base64ToBytes(wrapped.salt), iv = base64ToBytes(wrapped.iv);
+	if (iv.byteLength !== 12) throw new Error('パスキー暗号化情報が正しくありません。');
+	const key = await prfWrappingKey(output, salt);
+	const plaintext = new Uint8Array(await getSubtle().decrypt({ name: 'AES-GCM', iv, additionalData: prfContext(credential) }, key, base64ToBytes(wrapped.ciphertext)));
+	try {
+		const parsed = JSON.parse(new TextDecoder().decode(plaintext));
+		return { dmkRaw: base64ToBytes(parsed.dmk), privateKeyPkcs8: base64ToBytes(parsed.privateKey) };
+	} finally { plaintext.fill(0); }
 }
 
 export { isWebAuthnSupported, registerWebAuthnCredential, authenticateWithWebAuthn } from './webauthn.js';

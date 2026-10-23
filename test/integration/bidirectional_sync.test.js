@@ -179,6 +179,7 @@ describe('Bidirectional sync and explicit month closing', () => {
 			const names = ['pending_diffs.json', 'summary_snapshot.json', 'archives/2026-08.json', 'archives/2026-09.json'];
 			const before = names.map(name => gas.loadJsonFile(name, null));
 			const changed = { ...stored, amount: 222, updated_at: '2026-10-22T00:00:00Z', reclose_approved_months: ['2026-09'] };
+			if (kind === 'push_closed') changed.reclose_approved_months = [];
 			if (kind === 'missing_source') { changed.target_month = '2026-10'; changed.reclose_approved_months = []; }
 			if (kind === 'missing_target') changed.target_month = '2026-08';
 			if (kind === 'planned') changed.status = 'planned';

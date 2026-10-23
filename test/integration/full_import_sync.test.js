@@ -420,7 +420,7 @@ describe('complete import real encrypted DB and signed GAS synchronization', () 
 		let changed = false;
 		sync.fetch = async (...args) => {
 			const request = JSON.parse(args[1].body);
-			if (request.action === 'retroactive_update') retroactive.push(request.payload.transaction.id);
+			if (request.action === 'push_diff') retroactive.push(...request.payload.transactions.filter(tx => tx.target_month <= '2026-09').map(tx => tx.id));
 			const response = await fetch(...args);
 			if (request.action === 'replace_import' && !changed) { changed = true; await db.putTransaction(transaction('edited', { target_month: '2026-09', date: '2026-09-01', amount: 999, updated_at: '2026-10-22T00:00:00Z' })); }
 			return response;

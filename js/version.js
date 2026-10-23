@@ -2,7 +2,7 @@
  * Yoseatsume Kakeibo - PWA Version & Forced Update Manager
  */
 
-export const CURRENT_APP_VERSION = '1.12.2';
+export const CURRENT_APP_VERSION = '1.13.0';
 
 const SEMVER_REGEX = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 

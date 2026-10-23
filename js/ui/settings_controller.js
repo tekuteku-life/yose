@@ -14,10 +14,7 @@ import {
 import {
 	encryptMasterKeysWithPin,
 	exportKeyRaw,
-	exportPrivateKeyPkcs8,
-	registerWebAuthnCredential,
-	bytesToBase64,
-	base64ToBytes
+	exportPrivateKeyPkcs8
 } from '../crypto.js';
 import {
 	CURRENT_APP_VERSION,
@@ -29,6 +26,9 @@ export class SettingsController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
 		this.backupImportController = new BackupImportController(coordinator);
+		this.gasUrlDirty = false;
+		this.gasUrlGeneration = 0;
+		this.savingGasUrl = false;
 	}
 
 	get db() {
@@ -49,7 +49,6 @@ export class SettingsController {
 		document.getElementById('btn-generate-key')?.addEventListener('click', async () => {
 			if (confirm('新しいEd25519鍵ペアを生成しますか？\n（GAS側の USER_PUBLIC_KEYS の更新が必要になります）')) {
 				await this.authController.generateNewKeyPair();
-				alert('新しい鍵ペアを生成しました。公開鍵をコピーしてGASに登録してください。');
 			}
 		});
 
@@ -78,19 +77,19 @@ export class SettingsController {
 				return;
 			}
 
-			const dmkRaw = await exportKeyRaw(this.db.encryptionKey);
-			const privPkcs8 = await exportPrivateKeyPkcs8(this.authController.privateKey);
-			const pkg = await encryptMasterKeysWithPin({ dmkRaw, privateKeyPkcs8: privPkcs8 }, pin);
-			await this.db.saveSecurityKey('master_keys_package', pkg);
-			this.authController.isKeyProtectedWithPin = true;
-			this.authController.isKeyLocked = false;
+			const dmk = this.db.encryptionKey, privateKey = this.authController.privateKey;
+			const generation = this.authController.authGeneration;
+			const valid = () => this.db.encryptionKey === dmk && this.authController.privateKey === privateKey && this.authController.authGeneration === generation;
+			let dmkRaw, privPkcs8;
+			try {
+				dmkRaw = await exportKeyRaw(dmk); privPkcs8 = await exportPrivateKeyPkcs8(privateKey);
+				const pkg = await encryptMasterKeysWithPin({ dmkRaw, privateKeyPkcs8: privPkcs8 }, pin);
+				await this.db.saveSecurityKey('master_keys_package', pkg, { isSessionValid: valid });
+			} catch (error) { alert(`PIN更新に失敗しました: ${error.message}`); return; }
+			finally { dmkRaw?.fill(0); privPkcs8?.fill(0); }
 			if (pinInput) pinInput.value = '';
 			this.authController.updateKeyDisplay();
 			alert('PINコードを正常に更新しました！\n秘密鍵およびDB暗号化鍵が新しいPINで保護されました。');
-		});
-
-		document.getElementById('btn-unlock-pin')?.addEventListener('click', async () => {
-			await this.authController.promptPinUnlock();
 		});
 
 		document.getElementById('btn-lock-now')?.addEventListener('click', async () => {
@@ -98,12 +97,22 @@ export class SettingsController {
 		});
 
 		// Save GAS URL
+		document.getElementById('input-gas-url')?.addEventListener('input', () => { this.gasUrlDirty = true; this.gasUrlGeneration++; });
 		document.getElementById('btn-save-gas-url')?.addEventListener('click', async () => {
+			if (this.savingGasUrl) return;
 			const urlInput = document.getElementById('input-gas-url');
 			const url = urlInput?.value.trim();
-			await this.db.setSetting('gas_url', url);
-			this.syncManager.setGasUrl(url);
-			alert('GAS URLを保存しました');
+			const generation = this.gasUrlGeneration;
+			const button = document.getElementById('btn-save-gas-url');
+			this.savingGasUrl = true; button.disabled = true;
+			try {
+				await this.db.setSetting('gas_url', url);
+				this.syncManager.setGasUrl(url);
+				if (this.gasUrlGeneration === generation) { this.gasUrlDirty = false; urlInput.value = url; }
+				this.gasUrlGeneration++;
+				alert('GAS URLを保存しました');
+			} catch (error) { alert(`GAS URLを保存できませんでした: ${error.message}`); }
+			finally { this.savingGasUrl = false; button.disabled = false; }
 		});
 
 		// Manual sync button
@@ -248,18 +257,11 @@ export class SettingsController {
 			}
 		});
 
-		// Standard passkeys authenticate; PIN remains responsible for decrypting the database.
+		// Register a verified credential and its optional device-local PRF key wrap together.
 		document.getElementById('btn-register-webauthn')?.addEventListener('click', async () => {
 			try {
-				await this.authController.ensureKeyUnlocked();
-				let handle = await this.db.getSecurityKey('webauthn_user_id');
-				if (!handle) {
-					handle = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
-					await this.db.saveSecurityKey('webauthn_user_id', handle);
-				}
-				const credential = await registerWebAuthnCredential('よせあつめ家計簿 ユーザー', undefined, { userId: base64ToBytes(handle) });
-				await this.db.saveSecurityKey('webauthn_credential', credential);
-				alert('パスキーを登録しました。データの復号にはPINを使用します。');
+				const supportsUnlock = await this.authController.registerPasskey();
+				alert(supportsUnlock ? 'パスキーを登録しました。次回からPINを入力せずに解除できます。' : 'パスキーを登録しました。この環境ではPRFに対応していないため、データの復号にはPINを使用します。');
 				await this.renderSettings();
 			} catch (error) { alert(`WebAuthn登録エラー: ${error.message}`); }
 		});
@@ -270,6 +272,7 @@ export class SettingsController {
 				return;
 			}
 			try {
+				this.authController.authGeneration++;
 				await this.db.deleteSecurityKey('webauthn_credential');
 				await this.db.deleteSecurityKey('webauthn_vault');
 				const config = await this.db.getMasterConfig();
@@ -562,6 +565,7 @@ export class SettingsController {
 	}
 
 	async renderSettings() {
+		const gasUrlGeneration = this.gasUrlGeneration;
 		await this.renderPendingImport();
 		this.authController.updateKeyDisplay();
 		const badgeVer = document.getElementById('badge-current-version');
@@ -574,16 +578,13 @@ export class SettingsController {
 
 		const gasUrl = await this.db.getSetting('gas_url', '');
 		const urlInput = document.getElementById('input-gas-url');
-		if (urlInput) urlInput.value = gasUrl;
+		if (urlInput && !this.gasUrlDirty && gasUrlGeneration === this.gasUrlGeneration) urlInput.value = gasUrl;
 
 		const detailsGasUrl = document.getElementById('details-gas-url');
 		const badgeGasUrl = document.getElementById('gas-url-status-badge');
-		if (gasUrl) {
-			if (badgeGasUrl) badgeGasUrl.textContent = '設定済';
-			if (detailsGasUrl && !detailsGasUrl.dataset.userOpened) detailsGasUrl.removeAttribute('open');
-		} else {
-			if (badgeGasUrl) badgeGasUrl.textContent = '未設定';
-			if (detailsGasUrl) detailsGasUrl.setAttribute('open', '');
+		if (gasUrlGeneration === this.gasUrlGeneration) {
+			if (badgeGasUrl) badgeGasUrl.textContent = gasUrl ? '設定済' : '未設定';
+			if (detailsGasUrl && (!gasUrl || !detailsGasUrl.dataset.userOpened)) detailsGasUrl.toggleAttribute('open', !gasUrl);
 		}
 
 		const keyConfiguredBadge = document.getElementById('key-configured-badge');
@@ -614,7 +615,7 @@ export class SettingsController {
 		const btnClearWebauthn = document.getElementById('btn-clear-webauthn');
 		if (btnClearWebauthn) btnClearWebauthn.style.display = credential ? 'inline-block' : 'none';
 		const status = document.getElementById('synced-passkey-status');
-		if (status) status.textContent = credential ? 'パスキー登録済み・データ復号はPIN併用' : 'パスキー未登録・PINで利用可能';
+		if (status) status.textContent = credential?.prfWrap ? 'パスキー登録済み・PIN入力なしで解除可能です' : credential ? '認証用パスキー登録済み・復号にはPINが必要です。PIN省略には対応パスキーを再登録してください。' : 'パスキー未登録・PINで利用可能です';
 
 		await this.renderAnnualBudgetSettings();
 		await this.coordinator.masterController.renderMasterManagement();

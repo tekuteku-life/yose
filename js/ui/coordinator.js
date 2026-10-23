@@ -6,7 +6,6 @@
 import { YoseDB } from '../db.js';
 import { SyncManager } from '../sync.js';
 import { formatDate } from '../logic.js';
-import { clearActiveSession } from '../crypto.js';
 import { CURRENT_APP_VERSION, checkAppVersion } from '../version.js';
 
 import { AuthController } from './auth_controller.js';
@@ -20,6 +19,7 @@ import { MasterController } from './master_controller.js';
 import { SettingsController } from './settings_controller.js';
 import { MaintenanceController } from './maintenance_controller.js';
 import { MasterConflictController } from './master_conflict_controller.js';
+import { AdvanceLinkController } from './advance_link_controller.js';
 
 export class AppCoordinator {
 	constructor() {
@@ -52,6 +52,7 @@ export class AppCoordinator {
 		this.settingsController = new SettingsController(this);
 		this.maintenanceController = new MaintenanceController(this);
 		this.masterConflictController = new MasterConflictController(this);
+		this.advanceLinkController = new AdvanceLinkController(this);
 	}
 
 	// Backward-compatible accessors for key states and components
@@ -61,14 +62,13 @@ export class AppCoordinator {
 	set publicKey(val) { this.authController.publicKey = val; }
 	get publicKeyBase64() { return this.authController.publicKeyBase64; }
 	set publicKeyBase64(val) { this.authController.publicKeyBase64 = val; }
-	get isKeyProtectedWithPin() { return this.authController.isKeyProtectedWithPin; }
-	set isKeyProtectedWithPin(val) { this.authController.isKeyProtectedWithPin = val; }
 	get isKeyLocked() { return this.authController.isKeyLocked; }
 	set isKeyLocked(val) { this.authController.isKeyLocked = val; }
 	get chart() { return this.chartController.chart; }
 	set chart(val) { this.chartController.chart = val; }
 
 	async init() {
+		this.setupModalInteractionGuard();
 		// 1. Initialize Database
 		await this.db.init();
 
@@ -106,6 +106,8 @@ export class AppCoordinator {
 			this.txInputController.setupInputForm();
 			this.txInputController.setupTaxModal();
 			this.txEditController.setupEditTransactionModal();
+			this.txListController.setupInteractionGuard();
+			this.advanceLinkController.setup();
 			this.summaryController.setupSummaryView();
 			this.settingsController.setupSettingsView();
 			this.maintenanceController.setup();
@@ -114,7 +116,6 @@ export class AppCoordinator {
 			this.syncStatusController.updateNetworkBadge();
 
 			this.setupDepartureGuard();
-			this.setupModalInteractionGuard();
 			this.setupSwipeNavigation();
 		}
 
@@ -185,9 +186,7 @@ export class AppCoordinator {
 			} else { restoring = true; history.forward(); }
 		});
 		window.addEventListener('pagehide', () => {
-			clearActiveSession(); this.db.clearEncryptionKey();
-			this.authController.privateKey = null; this.authController.isKeyLocked = true;
-			this.syncManager?.setPrivateKey(null);
+			this.authController.invalidateSession();
 		});
 		window.addEventListener('pageshow', event => {
 			if (event.persisted) { this.allowNavigation = false; this.authController.showLockScreen(); }
@@ -218,7 +217,7 @@ export class AppCoordinator {
 			if (authVisible) for (const overlay of overlays) {
 				if (overlay.classList.contains('active')) overlay.classList.remove('active');
 			}
-			const top = this.getTopModal();
+			const top = authVisible ? document.getElementById('auth-screen') : this.getTopModal();
 			if (top === current) return;
 			const previous = current;
 			if (top && !locked) {
@@ -248,6 +247,16 @@ export class AppCoordinator {
 		const observer = new MutationObserver(update);
 		for (const overlay of [...overlays, document.getElementById('auth-screen')]) observer.observe(overlay, { attributes: true, attributeFilter: ['class'] });
 		document.addEventListener('keydown', event => {
+			const auth = document.getElementById('auth-screen');
+			if (event.key === 'Tab' && !auth.classList.contains('hidden') && !event.defaultPrevented) {
+				const controls = Array.from(/** @type {NodeListOf<HTMLElement>} */ (auth.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))).filter(element => !('disabled' in element && element.disabled) && element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden');
+				const first = controls[0], last = controls.at(-1);
+				if (!auth.contains(document.activeElement) || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+					event.preventDefault();
+					(event.shiftKey ? last : first)?.focus();
+				}
+				return;
+			}
 			if (event.key !== 'Escape' || event.isComposing || !this.getTopModal()) return;
 			event.preventDefault();
 			this.closeTopModal();
@@ -525,10 +534,8 @@ export class AppCoordinator {
 	// Facade delegation methods for 100% backward compatibility
 	async generateNewKeyPair() { return this.authController.generateNewKeyPair(); }
 	updateKeyDisplay() { return this.authController.updateKeyDisplay(); }
-	async promptPinUnlock() { return this.authController.promptPinUnlock(); }
 	async ensureKeyUnlocked() { return this.authController.ensureKeyUnlocked(); }
 	async lockPrivateKey() { return this.authController.lockPrivateKey(); }
-	async removePinProtection() { return this.authController.removePinProtection(); }
 	updateNetworkBadge() { return this.syncStatusController.updateNetworkBadge(); }
 	async updateSyncBadge() { return this.syncStatusController.updateSyncBadge(); }
 	async handleManualSync() { return this.syncStatusController.handleManualSync(); }

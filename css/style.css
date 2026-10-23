@@ -666,12 +666,6 @@ header {
 	border: 1px solid #bbf7d0;
 }
 
-.security-banner.unprotected {
-	background: var(--bg-hover);
-	color: var(--text-muted);
-	border: 1px solid var(--border);
-}
-
 /* Auth Screen Full-Page Overlay */
 .auth-screen-overlay {
 	position: fixed;
