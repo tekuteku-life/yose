@@ -298,23 +298,10 @@ export class SyncManager {
 		const remoteMaster = await this.sendRequest('fetch_master', {}, { keepalive });
 		await this.syncSharedMaster(remoteMaster.master_config);
 		this.assertSession(isSessionValid);
-		const snapshot = await this.db.getSnapshot();
-		const retroactive = unsynced.filter(tx => (tx.is_deleted === true && tx.target_month === undefined) || tx.previous_target_month || (snapshot?.last_closed_month && tx.target_month <= snapshot.last_closed_month));
-		const ids = new Set(retroactive.map(tx => tx.id));
-		const pending = unsynced.filter(tx => !ids.has(tx.id));
-		let response = null, count = 0;
-		for (const transaction of retroactive) {
-			response = await this.sendRequest('retroactive_update', { transaction, ...(transaction.previous_target_month ? { previous_target_month: transaction.previous_target_month } : {}) }, { keepalive });
-			const committed = await this.db.commitSyncResponse([transaction], { ...response, accepted_ids: response.conflict ? [] : [transaction.id] }, { isSessionValid });
-			count += committed.synced_count;
-		}
-		if (pending.length) {
-			response = await this.sendRequest('push_diff', { transactions: pending }, { keepalive });
-			const committed = await this.db.commitSyncResponse(pending, { ...response, accepted_ids: response.accepted_ids || pending.map(tx => tx.id) }, { isSessionValid });
-			count += committed.synced_count;
-		}
+		const response = await this.sendRequest('push_diff', { transactions: unsynced }, { keepalive });
+		const committed = await this.db.commitSyncResponse(unsynced, { ...response, accepted_ids: response.accepted_ids || unsynced.map(tx => tx.id) }, { isSessionValid });
 		this.lastSyncedAt = new Date().toISOString();
-		return { status: 'synced', synced_count: count, response };
+		return { status: 'synced', synced_count: committed.synced_count, response };
 	}
 
 	async downloadTransactions(approveMasterConflict = null) {

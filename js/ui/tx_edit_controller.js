@@ -38,6 +38,12 @@ export class TransactionEditController {
 		const actCatSelect = document.getElementById('edit-tx-actual-category');
 
 		if (!modal) return;
+		document.getElementById('btn-edit-link-advance')?.addEventListener('click', async () => {
+			if (this.busy) return;
+			if (this.initialValues !== this.captureValues()) { alert('編集中の変更を先に保存するか、取消してからひも付けてください。'); return; }
+			try { await this.coordinator.advanceLinkController.open(this.originalTransaction); }
+			catch (error) { alert(`ひも付けを開始できませんでした: ${error.message}`); }
+		});
 
 		document.getElementById('edit-tx-amount')?.addEventListener('input', () => { this.currentTaxMeta = null; });
 
@@ -95,8 +101,9 @@ export class TransactionEditController {
 		const modal = document.getElementById('modal-edit-tx');
 		if (!modal) return;
 		const tx = await this.db.getTransaction(id);
-		if (!tx) return;
+		if (!tx || tx.is_deleted) return;
 		this.originalTransaction = structuredClone(tx);
+		document.getElementById('btn-edit-link-advance').hidden = !(tx.advance_source_id || tx.type === 'income' || (tx.type === 'transfer' && (tx.account_id === 'acc_receivable' || tx.to_account_id === 'acc_receivable')));
 		this.originalGroup = tx.group_id ? await this.db.getTransactions({ group_id: tx.group_id, includeDeleted: true }) : [tx];
 		this.currentTaxMeta = tx.tax_meta || null;
 
@@ -211,6 +218,7 @@ export class TransactionEditController {
 	}
 
 	close() {
+		this.coordinator.advanceLinkController.cancel();
 		document.getElementById('modal-edit-tx')?.classList.remove('active');
 		this.tagMemoInput.hide('tags');
 		this.tagMemoInput.hide('memos');

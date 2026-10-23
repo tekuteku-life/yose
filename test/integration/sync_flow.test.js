@@ -256,7 +256,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 			const fetch = syncManager.fetch;
 			syncManager.fetch = async (...args) => {
 				const response = await fetch(...args);
-				if (JSON.parse(args[1].body).action === 'retroactive_update') throw new Error('response lost');
+				if (JSON.parse(args[1].body).action === 'push_diff') throw new Error('response lost');
 				return response;
 			};
 			await assert.rejects(syncManager.syncPendingDiffs(), /response lost/);
@@ -311,7 +311,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 		assert.equal((await db.getTransaction(initial.id)).sync_status, 'synced');
 	});
 
-	for (const route of ['push_diff', 'retroactive_update']) {
+	for (const route of ['open', 'retroactive_update']) {
 		it(`does not acknowledge a concurrently edited version while ${route} is in flight`, async () => {
 			assert.equal(gas.handleUpdateMaster({ master_config: await db.getMasterConfig(), base_version: JSON.stringify({ schema_version: 2 }) }).success, true);
 			gas.saveJsonFile('summary_snapshot.json', await db.getSnapshot());
@@ -323,7 +323,7 @@ describe('Integration - Client & GAS Sync Flow', () => {
 			const requestStarted = new Promise(resolve => { started = resolve; });
 			const fetch = syncManager.fetch;
 			syncManager.fetch = async (...args) => {
-				if (JSON.parse(args[1].body).action !== route) return fetch(...args);
+				if (JSON.parse(args[1].body).action !== 'push_diff') return fetch(...args);
 				const response = await fetch(...args);
 				started();
 				await barrier;

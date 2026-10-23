@@ -18,10 +18,55 @@ export class TransactionListController {
 		this.totalPages = 1;
 		this._paginationEventsAttached = false;
 		this._renderGeneration = 0;
+		this._recentRenderGeneration = 0;
+		this._listPointers = new Map();
+		this._listWaiters = new Set();
 	}
 
 	get db() {
 		return this.coordinator.db;
+	}
+
+	setupInteractionGuard() {
+		document.addEventListener('pointerdown', event => {
+			if (!(event.target instanceof Element)) return;
+			const list = event.target.closest('#month-tx-list, #recent-tx-list');
+			if (list) this._listPointers.set(event.pointerId, { list });
+		}, true);
+		const release = event => {
+			const pointer = this._listPointers.get(event.pointerId);
+			if (!pointer) return;
+			// Keep the target alive through mouseup and its following click dispatch.
+			setTimeout(() => {
+				if (this._listPointers.get(event.pointerId) !== pointer) return;
+				this._listPointers.delete(event.pointerId);
+				this.releaseListWaiters();
+			}, 0);
+		};
+		window.addEventListener('pointerup', release, true);
+		window.addEventListener('pointercancel', release, true);
+		const clear = () => { this._listPointers.clear(); this.releaseListWaiters(); };
+		window.addEventListener('blur', clear);
+		document.addEventListener('visibilitychange', () => { if (document.hidden) clear(); });
+	}
+
+	releaseListWaiters() {
+		for (const waiter of this._listWaiters) {
+			if ([...this._listPointers.values()].some(pointer => pointer.list === waiter.list)) continue;
+			this._listWaiters.delete(waiter);
+			waiter.resolve();
+		}
+	}
+
+	async waitForListIdle(list) {
+		while ([...this._listPointers.values()].some(pointer => pointer.list === list)) {
+			await new Promise(resolve => this._listWaiters.add({ list, resolve }));
+		}
+	}
+
+	cancelPendingRenders() {
+		this._renderGeneration++; this._recentRenderGeneration++;
+		this._listPointers.clear(); this.releaseListWaiters();
 	}
 
 	populateFilterDropdowns(txs = [], masterConfig = {}) {
@@ -128,7 +173,7 @@ export class TransactionListController {
 					<div class="tx-meta">
 						<span>${escapeHtml(t.date)}</span>
 						${badges.join(' ')}
-						<span>${escapeHtml(t.type)}</span>
+						<span>${escapeHtml(({ income: '収入', expense: '支出', transfer: '振替' })[t.type] || t.type)}</span>
 					</div>
 				</div>
 				<div style="text-align: right;">
@@ -143,26 +188,28 @@ export class TransactionListController {
 
 	async renderMonthTransactions() {
 		const generation = ++this._renderGeneration;
+		const key = this.db.encryptionKey;
 		const list = document.getElementById('month-tx-list');
 		if (!list) return;
 
 		const granularity = this.coordinator.analyticsGranularity || 'monthly';
 		let txs = [];
 		const titleEl = document.getElementById('month-tx-list-title');
+		let title;
 
 		if (granularity === 'yearly') {
 			const targetYear = this.coordinator.selectedYear || new Date().getFullYear();
-			if (titleEl) titleEl.textContent = `📋 ${targetYear}年 (年間) の明細一覧`;
+			title = `📋 ${targetYear}年 (年間) の明細一覧`;
 			const all = await this.db.getTransactions({ includeDeleted: false });
 			txs = all.filter(t => t.target_month && t.target_month.startsWith(`${targetYear}-`));
 		} else if (granularity === 'daily') {
 			const targetDate = this.coordinator.selectedDate || (formatDate ? formatDate(new Date()) : new Date().toISOString().slice(0, 10));
-			if (titleEl) titleEl.textContent = `📋 ${targetDate} (日別) の明細一覧`;
+			title = `📋 ${targetDate} (日別) の明細一覧`;
 			const all = await this.db.getTransactions({ includeDeleted: false });
 			txs = all.filter(t => t.date === targetDate);
 		} else {
 			const targetMonth = this.coordinator.currentMonth || (new Date().toISOString().slice(0, 7));
-			if (titleEl) titleEl.textContent = `📋 ${targetMonth} (月別) の明細一覧`;
+			title = `📋 ${targetMonth} (月別) の明細一覧`;
 			txs = await this.db.getTransactions({ target_month: targetMonth });
 		}
 
@@ -170,7 +217,9 @@ export class TransactionListController {
 
 		if (generation !== this._renderGeneration) return;
 		const masterConfig = await this.db.getMasterConfig();
-		if (generation !== this._renderGeneration) return;
+		await this.waitForListIdle(list);
+		if (generation !== this._renderGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+		if (titleEl) titleEl.textContent = title;
 
 		this.populateFilterDropdowns(txs, masterConfig);
 
@@ -266,12 +315,15 @@ export class TransactionListController {
 	}
 
 	async renderRecentTransactions() {
+		const generation = ++this._recentRenderGeneration, key = this.db.encryptionKey;
 		const list = document.getElementById('recent-tx-list');
 		if (!list) return;
 		const [all, masterConfig] = await Promise.all([
 			this.db.getTransactions(),
 			this.db.getMasterConfig()
 		]);
+		await this.waitForListIdle(list);
+		if (generation !== this._recentRenderGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 		const sorted = all.sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 5);
 
 		if (sorted.length === 0) {

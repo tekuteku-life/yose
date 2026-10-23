@@ -15,6 +15,7 @@ import {
 } from '../logic.js';
 
 import { TagMemoInput } from './tag_memo_input.js';
+import { linkedRepayment } from '../logic/advance_links.js';
 
 export class TransactionInputController {
 	constructor(coordinator) {
@@ -26,7 +27,6 @@ export class TransactionInputController {
 		this.calcCurrentExpr = '0';
 		this.calcEvaluatedResult = 0;
 		this.calcTaxMeta = null;
-		this.currentSettlingAdvanceId = null;
 		this.submitBusy = false;
 		this.settleBusy = false;
 	}
@@ -413,7 +413,7 @@ export class TransactionInputController {
 	async settleAdvance(advanceId) {
 		const advTx = await this.db.getTransaction(advanceId);
 		if (!advTx || advTx.is_deleted || advTx.settlement_status === 'settled' || !((advTx.type === 'transfer' && advTx.to_account_id === 'acc_receivable') || advTx.type === 'advance_payment')) { alert('対象の立替明細は精算済み、削除済み、または変更されています。'); return; }
-		const original = structuredClone(advTx);
+		if (linkedRepayment(advanceId, await this.db.getTransactions())) { alert('対象の立替明細は精算済みです。'); return; }
 		if (advTx.amount_pending) { alert('金額未入力の立替は精算できません。先に金額を入力してください。'); return; }
 
 		const config = await this.db.getMasterConfig();
@@ -426,14 +426,9 @@ export class TransactionInputController {
 			memo: '立替回収'
 		});
 
-		advTx.settlement_status = 'settled';
-		advTx.updated_at = new Date().toISOString();
-		advTx.sync_status = 'unsynced';
-
-		const approved = await this.coordinator.approveClosedChanges([repayTx, advTx]);
-		if (approved === null) return;
-		for (const tx of [repayTx, advTx]) tx.reclose_approved_months = approved;
-		await this.db.putTransactions([repayTx, advTx], { expectedTransactions: [original] });
+		const approvedMonths = await this.coordinator.approveClosedChanges([repayTx], [advTx]);
+		if (approvedMonths === null) return;
+		await this.db.linkAdvanceRepayment(advTx, repayTx, { create: true, approvedMonths });
 		this.coordinator.showToast(`✅ 立替金(¥${advTx.amount.toLocaleString()})の回収を登録しました`);
 		alert(`立替金「${advTx.memo || '未回収'}」(¥${advTx.amount.toLocaleString()}) の回収・精算を完了しました`);
 		await this.coordinator.refreshAllViews();
@@ -581,7 +576,6 @@ export class TransactionInputController {
 		const actualSubcategoryId = chkSync ? subcategoryId : document.getElementById('select-actual-subcategory')?.value || null;
 
 		let txRecordsToSave = [];
-		const expectedTransactions = [];
 
 		if (this.coordinator.currentMode === 'normal') {
 			const type = document.getElementById('input-type')?.value;
@@ -657,17 +651,6 @@ export class TransactionInputController {
 			});
 			txRecordsToSave.push(repayTx);
 
-			if (this.currentSettlingAdvanceId && !amountPending) {
-				const advTx = await this.db.getTransaction(this.currentSettlingAdvanceId);
-				if (!advTx || advTx.is_deleted || advTx.settlement_status === 'settled' || !((advTx.type === 'transfer' && advTx.to_account_id === 'acc_receivable') || advTx.type === 'advance_payment')) throw new Error('対象の立替明細が変更されています。');
-				if (advTx) {
-					expectedTransactions.push(structuredClone(advTx));
-					advTx.settlement_status = 'settled';
-					advTx.updated_at = new Date().toISOString();
-					advTx.sync_status = 'unsynced';
-					txRecordsToSave.push(advTx);
-				}
-			}
 		} else if (this.coordinator.currentMode === 'prepaid') {
 			const totalAmount = Number(document.getElementById('input-prepaid-total')?.value) || 0;
 			const amortizeMonths = Number(document.getElementById('input-prepaid-months')?.value) || 12;
@@ -722,8 +705,7 @@ export class TransactionInputController {
 		const approved = await this.coordinator.approveClosedChanges(txRecordsToSave);
 		if (approved === null) return;
 		for (const tx of txRecordsToSave) tx.reclose_approved_months = approved;
-		await this.db.putTransactions(txRecordsToSave, { expectedTransactions });
-		this.currentSettlingAdvanceId = null;
+		await this.db.putTransactions(txRecordsToSave, { createOnly: true });
 		this.coordinator.showToast('✅ 登録が完了しました');
 
 		// Reset inputs

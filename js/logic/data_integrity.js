@@ -151,11 +151,20 @@ export function createDataIntegrityValidator() {
 			}
 		}
 		const transactions = list(state?.transactions, 'transactions');
-		keyed(transactions, 'transactions');
-		const natural = new Set(), settlements = new Set();
+		const transactionMap = keyed(transactions, 'transactions');
+		const natural = new Set(), settlements = new Set(), advanceRepayments = new Set();
 		for (const item of transactions) {
 			if (!object(item)) continue;
 			validateTransaction(item, `transactions.${item.id}`);
+			if (!item.is_deleted && item.advance_source_id !== undefined && item.advance_source_id !== null) {
+				const id = item.advance_source_id, source = transactionMap.get(id);
+				const path = `transactions.${item.id}.advance_source_id`;
+				const fixed = tx => tx.status === 'confirmed' && !tx.amount_pending && Number.isSafeInteger(tx.amount) && tx.amount > 0 && !tx.amortization_meta && !tx.auto_settlement_meta;
+				if (!safeId(id) || id === item.id || item.type !== 'transfer' || item.account_id !== 'acc_receivable' || item.to_account_id === 'acc_receivable' || !fixed(item)) issue('advance_link', path, 'ひも付けには確定済みで金額入力済みの回収振替が必要です。先にひも付けを解除してください', [id, item.type, item.account_id, item.amount, item.status, item.amount_pending]);
+				if (source && (source.is_deleted || source.settlement_status === 'settled' || source.type !== 'transfer' || source.to_account_id !== 'acc_receivable' || source.account_id === 'acc_receivable' || source.amount !== item.amount || !fixed(source))) issue('advance_link', path, 'ひも付けた元立替が変更されています。先にひも付けを解除してください', [id, source.type, source.account_id, source.to_account_id, source.amount, source.status, source.is_deleted, source.amount_pending, source.settlement_status]);
+				if (advanceRepayments.has(id)) issue('advance_link', path, '同じ立替へのひも付けが重複しています', id);
+				advanceRepayments.add(id);
+			}
 			if (!item.is_deleted && item.recurring_rule_id) {
 				const key = JSON.stringify([item.recurring_rule_id, item.target_month]);
 				if (natural.has(key)) issue('duplicate_recurring', `transactions.recurring.${key}`, '同じ定期設定と計上月の明細が重複しています', key);

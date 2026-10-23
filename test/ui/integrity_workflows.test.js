@@ -278,7 +278,7 @@ describe('Mutation integrity in real UI workflows', { timeout: 180000 }, () => {
 		const d = fixture.driver;
 		const timestamp = '2100-01-01T00:00:00Z';
 		await seed(d, [transaction('future_delete', { date: '2026-09-20', target_month: '2026-09', updated_at: timestamp, sync_status: 'synced' })]);
-		await d.evaluate(`(() => { const app=window.__yose_app; app.syncManager.setGasUrl('https://yose.local/future-delete'); app.syncManager.fetch=async(_url,options)=>{const request=JSON.parse(options.body);if(request.action==='retroactive_update')window.__futureDeleteSent=request.payload.transaction;return {ok:true,text:async()=>JSON.stringify({success:true})};}; })()`);
+		await d.evaluate(`(() => { const app=window.__yose_app; app.syncManager.setGasUrl('https://yose.local/future-delete'); app.syncManager.fetch=async(_url,options)=>{const request=JSON.parse(options.body);if(request.action==='push_diff')window.__futureDeleteSent=request.payload.transactions.find(tx=>tx.id==='future_delete');return {ok:true,text:async()=>JSON.stringify({success:true})};}; })()`);
 		await d.evaluate('window.__yose_app.txEditController.openEditTransactionModal("future_delete")');
 		await d.click('#btn-edit-delete-tx');
 		await d.waitFor('window.__futureDeleteSent');

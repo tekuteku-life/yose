@@ -1,4 +1,4 @@
-/** 通常WebAuthnの登録・署名検証である。暗号鍵の復号はPIN側で行う。 */
+/** WebAuthnの登録・署名検証と任意のPRF出力取得である。 */
 import { bytesToBase64, base64ToBytes } from './crypto.js';
 
 const bytes = value => new Uint8Array(value);
@@ -30,12 +30,14 @@ export async function registerWebAuthnCredential(username = 'よせあつめ家�
 	const rpId = new URL(origin).hostname;
 	const userId = options.userId || crypto.getRandomValues(new Uint8Array(32));
 	const challenge = crypto.getRandomValues(new Uint8Array(32));
+	const prfSalt = crypto.getRandomValues(new Uint8Array(32));
 	const credential = await nav.credentials.create({ publicKey: {
 		challenge, rp: { id: rpId, name: 'よせあつめ家計簿' },
 		user: { id: userId, name: username, displayName: username },
 		pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
 		authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
-		attestation: 'none', timeout: 60000
+		attestation: 'none', timeout: 60000,
+		extensions: { prf: { eval: { first: prfSalt } } }
 	} });
 	if (!credential?.rawId || credential.type !== 'public-key') throw new Error('Failed to create WebAuthn credential');
 	const response = credential.response;
@@ -43,7 +45,7 @@ export async function registerWebAuthnCredential(username = 'よせあつめ家�
 	const publicKey = response.getPublicKey?.();
 	if (![-7, -257].includes(algorithm) || !publicKey) throw new Error('WebAuthn public key is not supported');
 	await verifyResponse(response, challenge, origin, rpId, 'webauthn.create', response.getAuthenticatorData());
-	return { credentialId: bytesToBase64(bytes(credential.rawId)), publicKeySpki: bytesToBase64(bytes(publicKey)), algorithm, userHandle: bytesToBase64(userId), rpId, origin };
+	return { credentialId: bytesToBase64(bytes(credential.rawId)), publicKeySpki: bytesToBase64(bytes(publicKey)), algorithm, userHandle: bytesToBase64(userId), rpId, origin, prfSalt: bytesToBase64(prfSalt) };
 }
 
 // WebAuthn ES256 signatures use DER; Web Crypto expects a 64-byte P1363 signature.
@@ -75,7 +77,8 @@ export async function authenticateWithWebAuthn(stored, nav = globalThis.navigato
 	const challenge = crypto.getRandomValues(new Uint8Array(32));
 	const assertion = await nav.credentials.get({ publicKey: {
 		challenge, rpId: stored.rpId, userVerification: 'required', timeout: 60000,
-		allowCredentials: [{ id: base64ToBytes(stored.credentialId), type: 'public-key' }]
+		allowCredentials: [{ id: base64ToBytes(stored.credentialId), type: 'public-key' }],
+		...(stored.prfSalt ? { extensions: { prf: { eval: { first: base64ToBytes(stored.prfSalt) } } } } : {})
 	} });
 	if (!assertion?.rawId || assertion.type !== 'public-key' || bytesToBase64(bytes(assertion.rawId)) !== stored.credentialId) throw new Error('WebAuthn credential mismatch');
 	const response = assertion.response;
@@ -89,5 +92,8 @@ export async function authenticateWithWebAuthn(stored, nav = globalThis.navigato
 	const signature = stored.algorithm === -7 ? decodeDer(response.signature).buffer : response.signature;
 	const valid = await crypto.subtle.verify(stored.algorithm === -7 ? { name: 'ECDSA', hash: 'SHA-256' } : algorithm, key, signature, signed);
 	if (!valid) throw new Error('WebAuthn signature verification failed');
-	return { success: true, credentialId: stored.credentialId };
+	const output = assertion.getClientExtensionResults?.()?.prf?.results?.first;
+	const prfOutput = output ? bytes(output) : undefined;
+	if (prfOutput && prfOutput.byteLength !== 32) throw new Error('Invalid WebAuthn PRF output');
+	return { success: true, credentialId: stored.credentialId, prfOutput };
 }

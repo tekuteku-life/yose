@@ -2,12 +2,13 @@
  * Yoseatsume Kakeibo - Service Worker (Offline Cache Control & Forced Update)
  */
 
-const CACHE_NAME = 'yose-cache-v1.12.2';
+const CACHE_NAME = 'yose-cache-v1.13.0';
 const ASSETS_TO_CACHE = [
 	'./',
 	'./index.html',
 	'./css/style.css',
 	'./js/app.js',
+	'./js/theme_bootstrap.js',
 	'./js/db.js',
 	'./js/db/defaults.js',
 	'./js/db/storage_engine.js',
@@ -17,6 +18,7 @@ const ASSETS_TO_CACHE = [
 	'./js/logic.js',
 	'./js/logic/date_utils.js',
 	'./js/logic/transaction_factory.js',
+	'./js/logic/advance_links.js',
 	'./js/logic/aggregator.js',
 	'./js/logic/budget_engine.js',
 	'./js/logic/master_sync.js',
@@ -33,6 +35,7 @@ const ASSETS_TO_CACHE = [
 	'./js/ui/chart_controller.js',
 	'./js/ui/tx_list_controller.js',
 	'./js/ui/tx_edit_controller.js',
+	'./js/ui/advance_link_controller.js',
 	'./js/ui/tx_input_controller.js',
 	'./js/ui/tag_memo_input.js',
 	'./js/ui/summary_controller.js',
@@ -98,7 +101,7 @@ self.addEventListener('fetch', (event) => {
 				return cachedResponse;
 			}
 			return fetch(event.request).then((networkResponse) => {
-				if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
+				if (networkResponse.status !== 200 || networkResponse.type !== 'basic') {
 					return networkResponse;
 				}
 				const responseToCache = networkResponse.clone();

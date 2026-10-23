@@ -25,9 +25,12 @@ describe('Input mode carryover and advance settlement', { timeout: 120000 }, () 
 		assert.equal(repayment.to_account_id, 'acc_bank_main');
 		assert.equal(original.memo, source.memo);
 		assert.deepEqual(original.tags, source.tags);
-		assert.equal(original.settlement_status, 'settled');
+		assert.equal(original.settlement_status, source.settlement_status);
+		assert.equal(repayment.advance_source_id, source.id);
 		await d.evaluate('window.__yose_app.txInputController.handleSettleAdvanceDirectly("advance_short")');
 		assert.equal((await records(d)).length, 2);
+		await d.evaluate('window.__yose_app.db.deleteTransaction(' + JSON.stringify(repayment.id) + ')');
+		assert.equal(await d.evaluate('(async () => (await window.__yose_app.db.getUnsettledAdvancePayments()).length)()'), 1);
 	});
 
 	it('rejects a concurrent source edit atomically when directly settling', async () => {

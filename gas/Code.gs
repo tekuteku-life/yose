@@ -351,7 +351,7 @@ function canonicalJsonStringify(obj) {
 		return JSON.stringify(obj);
 	}
 	if (Array.isArray(obj)) {
-		return '[' + obj.map(item => {
+		return '[' + Array.from(obj, item => {
 			if (item === undefined || typeof item === 'function' || typeof item === 'symbol') {
 				return 'null';
 			}
@@ -775,28 +775,50 @@ function handlePushDiff(payload) {
 
 function applyPushDiff(payload) {
 	if (!payload || !Array.isArray(payload.transactions)) return { success: false, error: 'Missing or invalid transactions in payload' };
+	return applyTransactionBatch(payload.transactions);
+}
+
+function applyTransactionBatch(transactions) {
 	const submittedIds = new Set();
-	for (const tx of payload.transactions) {
-		if (!tx || typeof tx !== 'object' || submittedIds.has(tx.id)) return { success: false, error: 'Invalid or duplicate transaction ID' };
+	for (const tx of transactions) {
+		if (!tx || typeof tx !== 'object' || !tx.id || submittedIds.has(tx.id)) return { success: false, error: 'Invalid or duplicate transaction ID' };
 		submittedIds.add(tx.id);
 	}
 	const pending = loadJsonFile('pending_diffs.json', { transactions: [] });
-	const snapshot = loadJsonFile('summary_snapshot.json', {});
-	const archives = readArchives();
-	const all = [...(pending.transactions || []), ...archives.flatMap(archive => archive.transactions || [])];
-	const map = new Map((pending.transactions || []).map(tx => [tx.id, tx]));
-	const accepted = [], conflicts = [];
-	for (const tx of payload.transactions) {
-		const current = all.filter(item => item.id === tx.id).sort((a, b) => transactionTimestamp(b) - transactionTimestamp(a))[0];
-		if (current && newerTransaction(current, tx)) { conflicts.push(current); continue; }
-		if ((snapshot.last_closed_month && tx.target_month <= snapshot.last_closed_month) || archives.some(archive => archive.transactions.some(item => item.id === tx.id))) {
-			return { success: false, error: '再月締めの確認が必要です。手動同期で最新状態を取得してください。' };
+	const snapshot = loadJsonFile('summary_snapshot.json', { monthly_summaries: {}, account_balances: {} });
+	const archives = new Map(readArchives().map(archive => [archive.month, archive]));
+	const pendingMap = new Map((pending.transactions || []).map(tx => [tx.id, tx]));
+	const archiveMaps = new Map(), current = new Map(), locations = new Map();
+	for (const tx of pendingMap.values()) current.set(tx.id, tx);
+	for (const [month, archive] of archives) {
+		archiveMaps.set(month, new Map(archive.transactions.map(tx => [tx.id, tx])));
+		for (const tx of archive.transactions) {
+			if (!current.has(tx.id) || newerTransaction(tx, current.get(tx.id))) current.set(tx.id, tx);
+			if (!locations.has(tx.id)) locations.set(tx.id, []);
+			locations.get(tx.id).push(month);
 		}
-		map.set(tx.id, storedTransaction(tx)); accepted.push(tx.id);
 	}
-	pending.transactions = Array.from(map.values()); pending.exported_at = new Date().toISOString();
-	saveJsonFile('pending_diffs.json', pending);
-	return { success: true, updated_count: accepted.length, accepted_ids: accepted, conflicts, snapshot };
+	const changedArchives = new Set(), accepted = [], conflicts = [];
+	for (const tx of transactions) {
+		const old = current.get(tx.id);
+		if (old && newerTransaction(old, tx)) { conflicts.push(old); continue; }
+		const isClosed = snapshot.last_closed_month && tx.target_month <= snapshot.last_closed_month;
+		const required = new Set(locations.get(tx.id) || []);
+		for (const month of [tx.target_month, tx.previous_target_month]) if (month && snapshot.last_closed_month && month <= snapshot.last_closed_month) required.add(month);
+		if ([...required].some(month => !tx.reclose_approved_months?.includes(month))) return { success: false, error: '再月締めの確認が必要です。手動同期で対象月を確認してください。' };
+		if (isClosed && !tx.is_deleted && (tx.amount_pending || tx.status !== 'confirmed')) return { success: false, error: '締め済み月には金額入力済みの確定明細が必要です。' };
+		for (const month of locations.get(tx.id) || []) { archiveMaps.get(month).delete(tx.id); changedArchives.add(month); }
+		pendingMap.delete(tx.id);
+		if (isClosed) {
+			if (!archiveMaps.has(tx.target_month)) { archives.set(tx.target_month, { transactions: [] }); archiveMaps.set(tx.target_month, new Map()); }
+			archiveMaps.get(tx.target_month).set(tx.id, storedTransaction(tx)); changedArchives.add(tx.target_month);
+		} else pendingMap.set(tx.id, storedTransaction(tx));
+		accepted.push(tx.id);
+	}
+	for (const month of changedArchives) saveJsonFile(`archives/${month}.json`, { ...archives.get(month), transactions: [...archiveMaps.get(month).values()] });
+	if (accepted.length) saveJsonFile('pending_diffs.json', { ...pending, transactions: [...pendingMap.values()], exported_at: new Date().toISOString() });
+	if (changedArchives.size) { snapshot.monthly_summaries = snapshot.monthly_summaries || {}; recalculateArchiveCascade(snapshot); }
+	return { success: true, updated_count: accepted.length, accepted_ids: accepted, conflicts, snapshot: loadJsonFile('summary_snapshot.json', snapshot) };
 }
 
 function handleCloseMonth(payload) {
@@ -848,35 +870,9 @@ function handleRetroactiveUpdate(payload) {
 function applyRetroactiveUpdate(payload) {
 	const tx = payload?.transaction;
 	if (!tx?.id || (!(tx.is_deleted === true && tx.target_month === undefined) && !/^\d{4}-\d{2}$/.test(tx.target_month || ''))) return { success: false, error: 'Missing transaction or target_month' };
-	const snapshot = loadJsonFile('summary_snapshot.json', { monthly_summaries: {}, account_balances: {} });
-	const archives = readArchives();
-	const pending = loadJsonFile('pending_diffs.json', { transactions: [] });
-	const all = [...archives.flatMap(archive => archive.transactions || []), ...(pending.transactions || [])];
-	const newer = all.filter(item => item.id === tx.id && newerTransaction(item, tx)).sort((a, b) => transactionTimestamp(b) - transactionTimestamp(a))[0];
-	if (newer) return { success: true, conflict: true, transaction: newer, snapshot };
-	const isClosed = snapshot.last_closed_month && tx.target_month <= snapshot.last_closed_month;
-	const required = new Set(archives.filter(archive => archive.transactions.some(item => item.id === tx.id)).map(archive => archive.month));
-	for (const month of [tx.target_month, tx.previous_target_month, payload.previous_target_month]) if (month && snapshot.last_closed_month && month <= snapshot.last_closed_month) required.add(month);
-	if ([...required].some(month => !tx.reclose_approved_months?.includes(month))) return { success: false, error: '再月締めの確認が必要です。手動同期で対象月を確認してください。' };
-	if (isClosed && !tx.is_deleted && (tx.amount_pending || tx.status !== 'confirmed')) return { success: false, error: '締め済み月には金額入力済みの確定明細が必要です。' };
-	let changed = false;
-	for (const archive of archives) {
-		if (isClosed && archive.month === tx.target_month) continue;
-		const remaining = archive.transactions.filter(item => item.id !== tx.id);
-		if (remaining.length !== archive.transactions.length) { archive.transactions = remaining; saveJsonFile(`archives/${archive.month}.json`, archive); changed = true; }
-	}
-	pending.transactions = (pending.transactions || []).filter(item => item.id !== tx.id);
-	if (isClosed) {
-		const archive = loadJsonFile(`archives/${tx.target_month}.json`, { transactions: [] });
-		archive.transactions = [...archive.transactions.filter(item => item.id !== tx.id), storedTransaction(tx)];
-		saveJsonFile(`archives/${tx.target_month}.json`, archive);
-		snapshot.monthly_summaries = snapshot.monthly_summaries || {};
-		if (!snapshot.monthly_summaries[tx.target_month]) snapshot.monthly_summaries[tx.target_month] = {};
-		changed = true;
-	} else pending.transactions.push(storedTransaction(tx));
-	saveJsonFile('pending_diffs.json', pending);
-	if (changed) recalculateArchiveCascade(snapshot);
-	return { success: true, snapshot: loadJsonFile('summary_snapshot.json') };
+	const result = applyTransactionBatch([{ ...tx, ...(payload.previous_target_month ? { previous_target_month: payload.previous_target_month } : {}) }]);
+	if (!result.success) return result;
+	return { success: true, snapshot: result.snapshot, ...(result.conflicts.length ? { conflict: true, transaction: result.conflicts[0] } : {}) };
 }
 
 function recalculateArchiveCascade(snapshot) {
@@ -1130,11 +1126,20 @@ function createDataIntegrityValidator() {
 			}
 		}
 		const transactions = list(state?.transactions, 'transactions');
-		keyed(transactions, 'transactions');
-		const natural = new Set(), settlements = new Set();
+		const transactionMap = keyed(transactions, 'transactions');
+		const natural = new Set(), settlements = new Set(), advanceRepayments = new Set();
 		for (const item of transactions) {
 			if (!object(item)) continue;
 			validateTransaction(item, `transactions.${item.id}`);
+			if (!item.is_deleted && item.advance_source_id !== undefined && item.advance_source_id !== null) {
+				const id = item.advance_source_id, source = transactionMap.get(id);
+				const path = `transactions.${item.id}.advance_source_id`;
+				const fixed = tx => tx.status === 'confirmed' && !tx.amount_pending && Number.isSafeInteger(tx.amount) && tx.amount > 0 && !tx.amortization_meta && !tx.auto_settlement_meta;
+				if (!safeId(id) || id === item.id || item.type !== 'transfer' || item.account_id !== 'acc_receivable' || item.to_account_id === 'acc_receivable' || !fixed(item)) issue('advance_link', path, 'ひも付けには確定済みで金額入力済みの回収振替が必要です。先にひも付けを解除してください', [id, item.type, item.account_id, item.amount, item.status, item.amount_pending]);
+				if (source && (source.is_deleted || source.settlement_status === 'settled' || source.type !== 'transfer' || source.to_account_id !== 'acc_receivable' || source.account_id === 'acc_receivable' || source.amount !== item.amount || !fixed(source))) issue('advance_link', path, 'ひも付けた元立替が変更されています。先にひも付けを解除してください', [id, source.type, source.account_id, source.to_account_id, source.amount, source.status, source.is_deleted, source.amount_pending, source.settlement_status]);
+				if (advanceRepayments.has(id)) issue('advance_link', path, '同じ立替へのひも付けが重複しています', id);
+				advanceRepayments.add(id);
+			}
 			if (!item.is_deleted && item.recurring_rule_id) {
 				const key = JSON.stringify([item.recurring_rule_id, item.target_month]);
 				if (natural.has(key)) issue('duplicate_recurring', `transactions.recurring.${key}`, '同じ定期設定と計上月の明細が重複しています', key);

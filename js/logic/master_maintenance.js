@@ -39,12 +39,12 @@ export function buildMasterMigration(records, config, source, target) {
 	if (!archivedMasterSources(config).some(item => item.kind === source.kind && item.id === source.id && item.parentId === source.parentId)) throw new Error('移行元はアーカイブ済み設定を指定する必要があります。');
 	let destination;
 	if (source.kind === 'account') {
-		const origin = (config.accounts || []).find(item => item.id === source.id);
-		destination = (config.accounts || []).find(item => item.id === target.id);
+		const origin = config.accounts.find(item => item.id === source.id);
+		destination = config.accounts.find(item => item.id === target.id);
 		if (!destination || destination.is_archived || destination.type !== origin.type || Boolean(destination.is_asset) !== Boolean(origin.is_asset)) throw new Error('移行先口座は有効かつ同じ種別・資産区分である必要があります。');
 	} else {
-		const origin = (config.categories || []).find(item => item.id === (source.parentId || source.id));
-		destination = (config.categories || []).find(item => item.id === target.id);
+		const origin = config.categories.find(item => item.id === (source.parentId || source.id));
+		destination = config.categories.find(item => item.id === target.id);
 		if (!destination || destination.is_archived || (destination.type || 'expense') !== (origin.type || 'expense')) throw new Error('移行先費目は有効かつ同じ収支種別である必要があります。');
 		if (target.subcategoryId && !(destination.subcategories || []).some(item => item.id === target.subcategoryId && !item.is_archived)) throw new Error('移行先中項目は選択した有効費目の配下である必要があります。');
 	}

@@ -146,7 +146,8 @@ describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 		await d.click('.btn-settle-advance');
 		await d.waitFor('document.getElementById("unsettled-advance-count").textContent === "0件"');
 		const txs = await records(d);
-		assert.equal(txs.find(t => t.id === advance.id).settlement_status, 'settled');
+		assert.deepEqual(txs.find(t => t.id === advance.id), advance);
+		assert.ok(txs.some(t => t.advance_source_id === advance.id));
 		assert.ok(txs.some(t => t.account_id === 'acc_receivable' && t.amount === 2000 && t.to_account_id === 'acc_bank_main'));
 	});
 
@@ -249,6 +250,7 @@ describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 		const initial = await prepaid(d);
 		const child = initial.find(t => t.type === 'expense' && t.target_month === '2026-10');
 		await d.click(`#month-tx-list .tx-item[data-id="${child.id}"]`);
+		await d.waitFor(`document.getElementById('modal-edit-tx').classList.contains('active') && document.getElementById('edit-tx-id').value === ${JSON.stringify(child.id)} && document.querySelector('#edit-tx-form button[type="submit"]').checkVisibility()`);
 		await d.fill('#edit-tx-amount', '400');
 		await submit(d, '#edit-tx-form');
 		await d.waitFor('!document.getElementById("modal-edit-tx").classList.contains("active")');
@@ -257,6 +259,12 @@ describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 		assert.deepEqual(txs.filter(t => t.type === 'expense').map(t => t.amount), [400, 400, 400]);
 		assert.ok(txs.every(t => t.amortization_meta.total_amount === 1200));
 		await d.click(`#month-tx-list .tx-item[data-id="${child.id}"]`);
+		try {
+			await d.waitFor(`document.getElementById('modal-edit-tx').classList.contains('active') && document.getElementById('edit-tx-id').value === ${JSON.stringify(child.id)} && document.getElementById('edit-tx-amount').value === '400' && document.querySelector('#edit-tx-form button[type="submit"]').checkVisibility()`);
+		} catch (error) {
+			const state = await d.evaluate(`({modal:document.getElementById('modal-edit-tx').className, id:document.getElementById('edit-tx-id').value, amount:document.getElementById('edit-tx-amount').value, original:window.__yose_app.txEditController.originalTransaction, inert:document.querySelector('main').inert, rows:document.getElementById('month-tx-list').innerText})`);
+			throw new Error(`${error.message}\nReopen state: ${JSON.stringify(state)}`);
+		}
 		await d.setConfirm(false);
 		await d.fill('#edit-tx-memo', '単独変更');
 		await submit(d, '#edit-tx-form');
@@ -420,7 +428,7 @@ describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 		assert.deepEqual(txs.filter(t => t.type === 'expense').map(t => [t.date, t.account_id, t.status]), initial.filter(t => t.type === 'expense').map(t => [t.date, t.account_id, t.status]));
 	});
 
-	it('sends retroactive requests for the closed members of an edited prepaid group', async () => {
+	it('sends closed and open prepaid members in one approved batch', async () => {
 		const d = fixture.driver;
 		const gasUrl = 'https://yose.local/mock-gas';
 		const snapshot = { schema_version: 2, last_closed_month: '2026-09', account_balances: {}, monthly_summaries: { '2026-09': { expense_total: 400 } } };
@@ -440,13 +448,14 @@ describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 		await d.waitFor('!document.getElementById("modal-edit-tx").classList.contains("active")');
 		await d.waitFor(async () => {
 			const sent = d.requests.filter(r => r.url === gasUrl && r.method === 'POST').map(r => JSON.parse(r.body));
-			return sent.filter(r => r.action === 'retroactive_update').length === 2 && sent.at(-1)?.action === 'push_diff' && !(await d.evaluate('window.__yose_app.syncManager.isSyncing'));
+			return sent.filter(r => r.action === 'push_diff').length === 1 && sent.at(-1)?.action === 'push_diff' && !(await d.evaluate('window.__yose_app.syncManager.isSyncing'));
 		});
 		assert.equal((await d.evaluate('window.__yose_app.db.getSnapshot()')).monthly_summaries['2026-09'].expense_total, 400);
 		const requests = d.requests.filter(r => r.url === gasUrl && r.method === 'POST').map(r => JSON.parse(r.body));
-		const retro = requests.filter(r => r.action === 'retroactive_update');
-		assert.deepEqual(retro.map(r => r.payload.transaction.id).sort(), txs.filter(t => t.target_month === '2026-09').map(t => t.id).sort());
-		assert.ok(retro.every(r => r.signature && r.payload.transaction.sync_status === 'unsynced'));
+		const batch = requests.find(r => r.action === 'push_diff');
+		assert.deepEqual(batch.payload.transactions.map(t => t.id).sort(), txs.map(t => t.id).sort());
+		assert.ok(batch.signature && batch.payload.transactions.every(t => t.sync_status === 'unsynced'));
+		assert.ok(batch.payload.transactions.filter(t => t.target_month === '2026-09').every(t => t.reclose_approved_months.includes('2026-09')));
 	});
 
 });

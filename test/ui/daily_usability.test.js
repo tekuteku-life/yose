@@ -81,7 +81,7 @@ describe('Daily usability improvements', { timeout: 120000 }, () => {
 		if (!await d.isVisible('#btn-register-webauthn')) await d.click('#btn-toggle-key-details');
 		await d.click('#btn-register-webauthn');
 		await waitForDialog(d, '登録しました');
-		assert.equal(await d.evaluate('window.__passkeyOptions.publicKey.extensions'), undefined);
+		assert.equal(await d.evaluate('window.__passkeyOptions.publicKey.extensions.prf.eval.first.byteLength'), 32);
 		assert.ok(await d.evaluate('(async () => (await window.__yose_app.db.getSecurityKey("webauthn_credential")).publicKeySpki)()'));
 		assert.equal(await d.evaluate('window.__yose_app.db.getSecurityKey("webauthn_vault")'), null);
 		if (!await d.isVisible('#btn-lock-now')) await d.click('#btn-toggle-key-details');
@@ -94,6 +94,33 @@ describe('Daily usability improvements', { timeout: 120000 }, () => {
 		await d.waitFor('document.getElementById("auth-screen").classList.contains("hidden")');
 	});
 
+	for (const saveBeforeResponse of [false,true]) it(`preserves the entered GAS URL against a delayed settings read (${saveBeforeResponse ? 'after save' : 'before save'})`, async () => {
+		const d=fixture.driver; await settings(d); await d.evaluate('window.__yose_app.settingsController.renderSettings()');
+		await d.evaluate(`const app=window.__yose_app,db=app.db,read=db.getSetting.bind(db);let delay=true;
+			db.getSetting=async(...args)=>{const value=await read(...args);if(args[0]==='gas_url'&&delay){delay=false;await new Promise(resolve=>window.__releaseUrlRead=resolve);}return value;};
+			window.__delayedSettings=app.settingsController.renderSettings(); void 0;`);
+		await d.waitFor('typeof window.__releaseUrlRead === "function"');
+		await d.fill('#input-gas-url',gasUrl);
+		if (saveBeforeResponse) { await d.click('#btn-save-gas-url'); await waitForDialog(d,'URLを保存'); }
+		await d.evaluate('window.__releaseUrlRead();window.__delayedSettings');
+		assert.equal(await value(d,'#input-gas-url'),gasUrl);
+		if (!saveBeforeResponse) { await d.click('#btn-save-gas-url'); await waitForDialog(d,'URLを保存'); }
+		assert.equal(await d.evaluate('window.__yose_app.db.getSetting("gas_url")'),gasUrl);
+		assert.equal(await d.evaluate('window.__yose_app.syncManager.gasUrl'),gasUrl);
+		await d.evaluate('window.__yose_app.settingsController.renderSettings()');
+		assert.equal(await value(d,'#input-gas-url'),gasUrl);
+	});
+	it('keeps a new unsaved URL while an earlier submitted URL finishes saving', async () => {
+		const d=fixture.driver; await settings(d); await d.evaluate('window.__yose_app.settingsController.renderSettings()');
+		await d.evaluate(`const db=window.__yose_app.db,save=db.setSetting.bind(db);db.setSetting=async(...args)=>{if(args[0]==='gas_url')await new Promise(resolve=>window.__finishUrlSave=resolve);return save(...args);};`);
+		await d.fill('#input-gas-url',gasUrl); await d.click('#btn-save-gas-url'); await d.waitFor('typeof window.__finishUrlSave === "function"');
+		await d.fill('#input-gas-url',gasUrl+'-new'); await d.evaluate('window.__finishUrlSave()'); await waitForDialog(d,'URLを保存');
+		assert.equal(await d.evaluate('window.__yose_app.db.getSetting("gas_url")'),gasUrl);
+		assert.equal(await d.evaluate('window.__yose_app.syncManager.gasUrl'),gasUrl);
+		assert.equal(await value(d,'#input-gas-url'),gasUrl+'-new');
+		await d.evaluate('window.__yose_app.settingsController.renderSettings()');
+		assert.equal(await value(d,'#input-gas-url'),gasUrl+'-new');
+	});
 	it('downloads remote records from manual sync while preserving local uploads', async () => {
 		const d = fixture.driver;
 		await seed(d, [transaction('local_upload')]);
@@ -189,7 +216,7 @@ describe('Daily usability improvements', { timeout: 120000 }, () => {
 		const d = fixture.driver;
 		const original = transaction('delete_conflict', { date: '2026-09-20', target_month: '2026-09', sync_status: 'synced' });
 		await seed(d, [original]);
-		await gas(d, { success: true, conflict: true, transaction: { ...original, amount: 999, is_deleted: false, updated_at: '2026-10-22T00:00:00Z' } });
+		await gas(d, { success: true, accepted_ids: [], conflicts: [{ ...original, amount: 999, is_deleted: false, updated_at: '2026-10-22T00:00:00Z' }] });
 		await cashflow(d); await d.fill('#input-period-picker', '2026-09');
 		await d.waitFor('document.querySelector("#month-tx-list [data-id=delete_conflict]") !== null');
 		await d.click('#month-tx-list [data-id="delete_conflict"]'); await d.click('#btn-edit-delete-tx');

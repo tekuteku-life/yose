@@ -9,6 +9,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { randomUUID, createHash } from 'node:crypto';
+import { instrumentOriginal, writeCoverageChunk } from '../../scripts/coverage_tools.js';
 
 const MIME_TYPES = {
 	'.html': 'text/html; charset=utf-8',
@@ -41,6 +43,8 @@ window.Chart = class Chart {
 window.Chart.defaults = {};
 `;
 
+export class CdpProtocolError extends Error {}
+
 export class HeadlessBrowserDriver {
 	constructor(options = {}) {
 		this.chromeBin = options.chromeBin || process.env.CHROME_BIN || '/usr/bin/chromium';
@@ -62,6 +66,12 @@ export class HeadlessBrowserDriver {
 		this.pageErrors = [];
 		this.consoleErrors = [];
 		this._readBuffer = '';
+		this.coverageDir = options.coverageDir || process.env.YOSE_BROWSER_COVERAGE || null;
+		this.coverageOriginals = new Map();
+		this.coverageError = null;
+		this.coverageAcknowledgements = new Set();
+		this.coverageChunks = new Map();
+		this.coverageStorageKey = '__yose_test_coverage_' + randomUUID();
 	}
 
 	async launch() {
@@ -110,6 +120,34 @@ export class HeadlessBrowserDriver {
 		await this.send('Page.enable', {}, this.sessionId);
 		await this.send('Runtime.enable', {}, this.sessionId);
 		await this.send('DOM.enable', {}, this.sessionId);
+		if (this.coverageDir) {
+			fs.mkdirSync(this.coverageDir, { recursive: true });
+			await this.send('Runtime.addBinding', { name: '__yoseWriteCoverage' }, this.sessionId);
+			await this.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+				const coverageKey = ${JSON.stringify(this.coverageStorageKey)};
+				const coverageOrigin = ${JSON.stringify(this.origin)};
+				const resetCoverage = () => {
+					for (const file of Object.values(globalThis.__coverage__ || {})) {
+						for (const key of Object.keys(file.s)) file.s[key] = 0;
+						for (const key of Object.keys(file.f)) file.f[key] = 0;
+						for (const key of Object.keys(file.b)) file.b[key].fill(0);
+					}
+				};
+				const persistCoverage = (acknowledgements = []) => {
+					if (location.origin !== coverageOrigin) return;
+					const pending = JSON.parse(sessionStorage.getItem(coverageKey) || '[]').filter(chunk => !acknowledgements.includes(chunk.id));
+					pending.push({ id: crypto.randomUUID(), coverage: JSON.stringify(globalThis.__coverage__ || {}) });
+					sessionStorage.setItem(coverageKey, JSON.stringify(pending));
+					resetCoverage();
+					return pending;
+				};
+				window.__yoseCoverageFlush = acknowledgements => {
+					for (const chunk of persistCoverage(acknowledgements) || []) window.__yoseWriteCoverage(JSON.stringify(chunk));
+				};
+				window.__yoseCoveragePageHide = () => { persistCoverage(); };
+				window.__yoseCoverageFlush();
+			` }, this.sessionId);
+		}
 		await this.send('Page.addScriptToEvaluateOnNewDocument', {
 			source: `
 				if (${JSON.stringify(this.now)}) {
@@ -163,7 +201,7 @@ export class HeadlessBrowserDriver {
 				const { resolve, reject } = this.pending.get(msg.id);
 				this.pending.delete(msg.id);
 				if (msg.error) {
-					reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+					reject(new CdpProtocolError(msg.error.message || JSON.stringify(msg.error)));
 				} else {
 					resolve(msg.result);
 				}
@@ -176,7 +214,21 @@ export class HeadlessBrowserDriver {
 	async _handleEvent(msg) {
 		const { method, params, sessionId } = msg;
 
-		if (method === 'Fetch.requestPaused') {
+		if (method === 'Runtime.bindingCalled' && params.name === '__yoseWriteCoverage' && this.coverageDir) {
+			try {
+				const chunk = JSON.parse(params.payload);
+				if (typeof chunk.id !== 'string' || typeof chunk.coverage !== 'string') throw new Error('Invalid coverage chunk');
+				const digest = createHash('sha256').update(params.payload).digest('hex');
+				if (this.coverageChunks.has(chunk.id)) {
+					if (this.coverageChunks.get(chunk.id) !== digest) throw new Error('Duplicate coverage chunk has different payload');
+				} else {
+					writeCoverageChunk(this.coverageDir, JSON.parse(chunk.coverage), this.coverageOriginals);
+					this.coverageChunks.set(chunk.id, digest);
+				}
+				this.coverageAcknowledgements.add(chunk.id);
+			}
+			catch (error) { this.coverageError = error; throw error; }
+		} else if (method === 'Fetch.requestPaused') {
 			const reqUrl = new URL(params.request.url);
 			this.requests.push({ url: params.request.url, method: params.request.method, body: params.request.postData });
 			const configured = this.responses.get(reqUrl.href) || this.responses.get(reqUrl.pathname);
@@ -195,6 +247,10 @@ export class HeadlessBrowserDriver {
 				return;
 			}
 			if (reqUrl.origin === this.origin) {
+				if (this.coverageDir && reqUrl.pathname === '/__yose_coverage_drain__') {
+					await this._send('Fetch.fulfillRequest', { requestId: params.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'text/html' }], body: Buffer.from('<!doctype html><title>Coverage drain</title>').toString('base64') }, sessionId);
+					return;
+				}
 				let relPath = decodeURIComponent(reqUrl.pathname);
 				if (relPath === '/' || relPath === '') {
 					relPath = '/index.html';
@@ -205,7 +261,13 @@ export class HeadlessBrowserDriver {
 				if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
 					const ext = path.extname(fullPath).toLowerCase();
 					const mime = MIME_TYPES[ext] || 'application/octet-stream';
-					const body = fs.readFileSync(fullPath).toString('base64');
+					let content = fs.readFileSync(fullPath);
+					if (this.coverageDir && ((relPath.startsWith('/js/') && ext === '.js') || relPath === '/sw.js')) {
+						const original = instrumentOriginal(fullPath);
+						this.coverageOriginals.set(path.resolve(fullPath), original.hash);
+						content = Buffer.from(original.code);
+					}
+					const body = content.toString('base64');
 					await this.send('Fetch.fulfillRequest', {
 						requestId: params.requestId,
 						responseCode: 200,
@@ -260,7 +322,46 @@ export class HeadlessBrowserDriver {
 		}
 	}
 
-	send(method, params = {}, sessionId = undefined) {
+	async send(method, params = {}, sessionId = undefined) {
+		if (this.coverageDir && sessionId === this.sessionId && ['Page.navigate', 'Page.reload', 'Runtime.evaluate', 'Input.dispatchMouseEvent', 'Input.dispatchKeyEvent'].includes(method)) {
+			if (method === 'Page.navigate' || method === 'Page.reload') await this.flushCoverage();
+			await this._evaluateCoverage(`if (window.__yoseCoveragePageHide) { window.removeEventListener('pagehide', window.__yoseCoveragePageHide); window.addEventListener('pagehide', window.__yoseCoveragePageHide); }`);
+		}
+		return this._send(method, params, sessionId);
+	}
+
+	async flushCoverage() {
+		if (!this.coverageDir || !this.proc || this.proc.killed) return;
+		for (const [file, sourceHash] of this.coverageOriginals) {
+			if (instrumentOriginal(file).hash !== sourceHash) throw new Error(`Coverage source differs from original: ${file}`);
+		}
+		const acknowledgements = [...this.coverageAcknowledgements];
+		await this._evaluateCoverage(`window.__yoseCoverageFlush?.(${JSON.stringify(acknowledgements)})`);
+		for (const id of acknowledgements) this.coverageAcknowledgements.delete(id);
+		if (this.coverageError) {
+			const error = this.coverageError; this.coverageError = null; throw error;
+		}
+	}
+
+	async _evaluateCoverage(expression) {
+		const deadline = Date.now() + this.commandTimeoutMs;
+		while (true) {
+			try {
+				const result = await this._send('Runtime.evaluate', { expression, returnByValue: true }, this.sessionId);
+				if (result.exceptionDetails) throw new Error(`Browser coverage evaluation failed: ${result.exceptionDetails.exception?.description || result.exceptionDetails.text}`);
+				return result;
+			} catch (error) {
+				if (Date.now() >= deadline || !this._isNavigationContextError(error)) throw error;
+				await new Promise(resolve => setTimeout(resolve, 10));
+			}
+		}
+	}
+
+	_isNavigationContextError(error) {
+		return error instanceof CdpProtocolError && /Inspected target navigated or closed|Execution context was destroyed|Cannot find default execution context/.test(error.message);
+	}
+
+	_send(method, params = {}, sessionId = undefined) {
 		if (!this.proc || this.proc.killed || this.proc.exitCode !== null) {
 			return Promise.reject(new Error(`Chromium process is not running: ${this.stderr}`));
 		}
@@ -315,7 +416,8 @@ export class HeadlessBrowserDriver {
 	async waitFor(expression, timeoutMs = 5000) {
 		const started = Date.now();
 		while (Date.now() - started < timeoutMs) {
-			if (typeof expression === 'function' ? await expression() : await this.evaluate(expression)) return;
+			try { if (typeof expression === 'function' ? await expression() : await this.evaluate(expression)) return; }
+			catch (error) { if (!this._isNavigationContextError(error)) throw error; }
 			await new Promise(resolve => setTimeout(resolve, 25));
 		}
 		throw new Error(`Timed out waiting for: ${expression}`);
@@ -434,6 +536,17 @@ export class HeadlessBrowserDriver {
 	}
 
 	async close() {
+		let coverageError;
+		try {
+			if (this.coverageDir && this.coverageOriginals.size && this.proc && !this.proc.killed) {
+				const state = await this._evaluateCoverage('location.origin');
+				if (state.result.value !== this.origin) {
+					await this._send('Page.navigate', { url: this.origin + '/__yose_coverage_drain__' }, this.sessionId);
+					await this.waitFor(`location.origin === ${JSON.stringify(this.origin)} && document.readyState === 'complete'`);
+				}
+			}
+			await this.flushCoverage();
+		} catch (error) { coverageError = error; }
 		for (const [, p] of this.pending) {
 			p.reject(new Error('Browser closed'));
 		}
@@ -444,5 +557,6 @@ export class HeadlessBrowserDriver {
 				this.proc.kill('SIGKILL');
 			});
 		}
+		if (coverageError) throw coverageError;
 	}
 }

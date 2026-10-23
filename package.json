@@ -1,6 +1,6 @@
 {
 	"name": "yose",
-	"version": "1.12.2",
+	"version": "1.13.0",
 	"description": "よせあつめ家計簿 - 脱ベンダーロックイン・複式簿記ライクなPWA家計・資産管理システム",
 	"type": "module",
 	"scripts": {
@@ -14,6 +14,7 @@
 		"test:integration": "node --test test/integration/*.test.js",
 		"test:system": "node --test test/system/*.test.js",
 		"test:ui": "node --test --test-concurrency=4 test/ui/*.test.js",
+		"test:coverage": "node scripts/test_coverage.mjs",
 		"setup:gas": "node scripts/setup_gas.js"
 	},
 	"keywords": [
@@ -25,6 +26,10 @@
 	"author": "",
 	"license": "MIT",
 	"devDependencies": {
+		"istanbul-lib-coverage": "^3.2.2",
+		"istanbul-lib-instrument": "^6.0.3",
+		"istanbul-lib-report": "^3.0.1",
+		"istanbul-reports": "^3.2.0",
 		"typescript": "^7.0.2"
 	}
 }
