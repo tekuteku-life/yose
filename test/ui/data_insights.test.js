@@ -32,7 +32,7 @@ describe('metadata, bulk editing, donations, and investment UI', () => {
 	});
 	it('shows a donation-year allowance, saves tax inputs and displays the official estimate and remainder', async () => {
 		const d = fixture.driver; await seed(d, [transaction('gift', { amount: 20000, tags: ['ふるさと納税'] })]);
-		await d.click('[data-analytics-target="budget"]'); await d.waitFor('document.querySelector("#furusato-card").style.display!=="none"');
+		await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]'); await d.waitFor('document.querySelector("#furusato-card").style.display!=="none"');
 		assert.ok((await d.textContent('#furusato-summary')).includes('20,000'));
 		await d.fill('#furusato-resident-tax', '200000'); await d.select('#furusato-tax-rate', '20'); await d.click('#btn-save-furusato');
 		await d.waitFor('document.querySelector("#furusato-summary").textContent.includes("59,487")');
@@ -110,7 +110,7 @@ describe('investment and donation correction UI', () => {
 	});
 	it('shows pending-only donation years and distinguishes zero from absent tax inputs', async () => {
 		const d = fixture.driver; await seed(d, [transaction('pendingGift', { tags: ['ふるさと納税'], status: 'planned', amount_pending: true, amount: 0 })]);
-		await d.click('[data-analytics-target="budget"]'); await d.waitFor('document.querySelector("#furusato-summary").textContent.includes("金額未入力 1件")');
+		await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]'); await d.waitFor('document.querySelector("#furusato-summary").textContent.includes("金額未入力 1件")');
 		assert.ok((await d.textContent('#furusato-summary')).includes('未算出'));
 		await d.fill('#furusato-resident-tax', '0'); await d.select('#furusato-tax-rate', '0'); await d.click('#btn-save-furusato');
 		await d.waitFor('document.querySelector("#furusato-summary").textContent.includes("概算上限 ¥0")');
@@ -143,13 +143,13 @@ describe('draft and validation UI boundaries', () => {
 		assert.equal(await d.evaluate('(async()=> (await window.__yose_app.db.getTransaction("a")).category_id)()'), 'cat_food');
 	});
 	it('keeps donation inputs when normal annual budgets are saved and vice versa', async () => {
-		const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]');
+		const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]');
 		await d.fill('#furusato-resident-tax', '200000'); await d.select('#furusato-tax-rate', '20'); await d.click('#btn-save-furusato');
 		await d.waitFor('document.querySelector("#furusato-summary").textContent.includes("59,487")'); await settings(d);
 		await d.fill('#setting-expense-budget', '500000'); await d.click('#btn-save-annual-budget');
 		await d.waitFor('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].expense_budget===500000)()');
 		assert.equal(await d.evaluate('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_estimate.resident_tax)()'), 200000);
-		await d.click('[data-analytics-target="budget"]'); await d.fill('#furusato-resident-tax', '300000'); await d.click('#btn-save-furusato');
+		await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]'); await d.fill('#furusato-resident-tax', '300000'); await d.click('#btn-save-furusato');
 		await d.waitFor('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_estimate.resident_tax===300000)()');
 		assert.equal(await d.evaluate('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].expense_budget)()'), 500000);
 	});
@@ -244,7 +244,7 @@ it('freezes bulk controls while saving and restores applicable controls after fa
 });
 for (const kind of ['tax', 'investment']) it(`freezes ${kind} form fields during a save and restores them after failure`, async () => {
 	const d = fixture.driver;
-	if (kind === 'tax') { await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]'); await d.fill('#furusato-resident-tax', '200000'); await d.select('#furusato-tax-rate', '20'); }
+	if (kind === 'tax') { await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]'); await d.fill('#furusato-resident-tax', '200000'); await d.select('#furusato-tax-rate', '20'); }
 	else { await d.click('[data-analytics-target="assets"]'); await d.fill('#investment-acquisition-cost', '100'); await d.fill('#investment-valuation', '150'); }
 	const method = kind === 'tax' ? 'saveMasterConfig' : 'saveInvestmentObservation';
 	await d.evaluate(`window.__yose_app.db.${method}=async()=>{await new Promise(r=>window.__insightRelease=r);throw new Error('save failure');}`);
@@ -283,7 +283,7 @@ describe('bulk financial fields and failed reads', () => {
 
 describe('donation and investment error and draft operations', () => {
 	it('validates missing tax inputs, retains dirty values through redraw, and displays an excess rather than negative remaining', async () => {
-		const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'], amount: 100000 })]); await d.click('[data-analytics-target="budget"]');
+		const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'], amount: 100000 })]); await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]');
 		await d.click('#btn-save-furusato'); await d.waitFor('document.querySelector("#furusato-error").textContent.includes("入力")');
 		await d.fill('#furusato-resident-tax', '200000'); await d.select('#furusato-tax-rate', '20');
 		await d.evaluate('window.__yose_app.summaryController.renderSummary()');
@@ -292,8 +292,8 @@ describe('donation and investment error and draft operations', () => {
 	});
 	it('reports an unsupported donation tax year and preserves its input', async () => {
 		const d = fixture.driver; await seed(d, [transaction('oldGift', { date: '2014-01-01', target_month: '2014-01', tags: ['ふるさと納税'] })]);
-		await d.evaluate('window.__yose_app.selectedYear="2014"'); await d.click('[data-analytics-target="budget"]');
-		await d.waitFor('window.__yose_app.insightsController.taxDraft?.year==="2014"');
+		await d.evaluate('window.__yose_app.selectedYear="2014"'); await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]');
+		await d.waitFor('window.__yose_app.furusatoController.taxDraft?.year==="2014"');
 		await d.fill('#furusato-resident-tax', '200000'); await d.select('#furusato-tax-rate', '20'); await d.click('#btn-save-furusato');
 		await d.waitFor('document.querySelector("#furusato-error").textContent.includes("2015")');
 		assert.equal(await d.evaluate('document.querySelector("#furusato-resident-tax").value'), '200000');
@@ -339,7 +339,7 @@ it('collects explicitly selected gross salary and tax expenses while preserving 
 	const d = fixture.driver;
 	await d.evaluate('window.__yose_app.db.mutateMasterConfig(c=>{c.categories.push({id:"salary",name:"税引前給与",type:"income",subcategories:[]},{id:"tax",name:"税・保険",type:"expense",subcategories:[{id:"resident",name:"住民税"},{id:"social",name:"社会保険料"}]});})');
 	await seed(d, [transaction('donation', { tags: ['ふるさと納税'] }), transaction('gross', { type: 'income', category_id: 'salary', actual_category_id: 'salary', date: '2025-12-31', amount: 6000000 }), transaction('resident', { category_id: 'tax', subcategory_id: 'resident', actual_category_id: 'tax', date: '2025-12-31', amount: 200000 }), transaction('insurance', { category_id: 'tax', subcategory_id: 'social', actual_category_id: 'tax', date: '2025-12-31', amount: 800000 })]);
-	await d.click('[data-analytics-target="budget"]'); await d.waitFor('document.querySelector("#furusato-source-salary option")');
+	await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]'); await d.waitFor('document.querySelector("#furusato-source-salary option")');
 	await d.evaluate('for(const [field,category,sub] of [["salary","salary",null],["resident_tax","tax","resident"],["social_insurance","tax","social"]]){const s=document.getElementById("furusato-source-"+field);for(const o of s.options){const v=JSON.parse(o.value);o.selected=v.category_id===category&&v.subcategory_id===sub;}s.dispatchEvent(new Event("change",{bubbles:true}));}');
 	await d.fill('#furusato-resident-tax', '190000'); await d.select('#furusato-tax-rate', '20');
 	await d.click('#btn-save-furusato-sources'); await d.waitFor('(async()=> Boolean((await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_sources))()');
@@ -361,30 +361,30 @@ it('shows legacy contributions as an unknown holding cost until explicitly corre
 });
 
 it('keeps payroll source drafts during refresh, freezes them while saving and restores selections on failure', async () => {
-	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]');
+	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]');
 	await d.evaluate('{const s=document.querySelector("#furusato-source-salary");s.options[0].selected=true;s.dispatchEvent(new Event("change",{bubbles:true}));}');
 	const selected = await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)');
 	await d.evaluate('window.__yose_app.summaryController.renderSummary()');
 	assert.deepEqual(await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)'), selected);
 	await d.evaluate('window.__yose_app.db.saveMasterConfig=async()=>{await new Promise(r=>window.__sourceRelease=r);throw new Error("source failure")};');
 	await d.click('#btn-save-furusato-sources'); await d.waitFor('typeof window.__sourceRelease==="function"');
-	assert.equal(await d.evaluate('[...document.querySelectorAll("#furusato-card input,#furusato-card select,#furusato-card button")].every(e=>e.disabled)'), true);
+	assert.equal(await d.evaluate('[...document.querySelectorAll("#tab-tax input,#tab-tax select,#tab-tax button")].every(e=>e.disabled)'), true);
 	await d.evaluate('window.__sourceRelease()'); await d.waitFor('document.querySelector("#furusato-error").textContent.includes("source failure")');
-	assert.equal(await d.evaluate('[...document.querySelectorAll("#furusato-card input,#furusato-card select,#furusato-card button")].every(e=>!e.disabled)'), true);
+	assert.equal(await d.evaluate('[...document.querySelectorAll("#tab-tax input,#tab-tax select,#tab-tax button")].every(e=>!e.disabled)'), true);
 	assert.deepEqual(await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)'), selected);
 });
 it('does not clear another year payroll draft when an earlier year save finishes', async () => {
-	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] }), transaction('nextGift', { date: '2027-01-01', target_month: '2027-01', tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]');
+	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] }), transaction('nextGift', { date: '2027-01-01', target_month: '2027-01', tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]');
 	await d.evaluate('const app=window.__yose_app,save=app.db.saveMasterConfig.bind(app.db);app.db.saveMasterConfig=async(...args)=>{await new Promise(r=>window.__yearRelease=r);return save(...args);};');
 	await d.click('#btn-save-furusato-sources'); await d.waitFor('typeof window.__yearRelease==="function"');
-	await d.evaluate('window.__yose_app.selectedYear="2027";window.__yose_app.summaryController.renderSummary()'); await d.waitFor('window.__yose_app.insightsController.sourceDraft?.year==="2027"');
+	await d.evaluate('window.__yose_app.selectedYear="2027";window.__yose_app.summaryController.renderSummary()'); await d.waitFor('window.__yose_app.furusatoController.sourceDraft?.year==="2027"');
 	await d.evaluate('window.__yearRelease()'); await d.waitFor('!document.querySelector("#btn-save-furusato-sources").disabled');
-	assert.equal(await d.evaluate('window.__yose_app.insightsController.sourceDraft.year'), '2027');
+	assert.equal(await d.evaluate('window.__yose_app.furusatoController.sourceDraft.year'), '2027');
 	assert.equal(await d.evaluate('document.querySelector("#furusato-resident-tax").value'), '');
 	assert.equal(await d.evaluate('(async()=> Boolean((await window.__yose_app.db.getMasterConfig()).annual_budgets[2027]?.furusato_sources))()'), false);
 });
 it('saves payroll sources with blank notice inputs and preserves an unsaved source when saving notice only', async () => {
-	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]');
+	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]');
 	await d.evaluate('{const s=document.querySelector("#furusato-source-salary");s.options[0].selected=true;s.dispatchEvent(new Event("change",{bubbles:true}));}');
 	await d.click('#btn-save-furusato-sources'); await d.waitFor('(async()=> Boolean((await window.__yose_app.db.getMasterConfig()).annual_budgets[2026]?.furusato_sources))()');
 	await d.waitFor('!document.querySelector("#btn-save-furusato-sources").disabled');
@@ -397,14 +397,14 @@ it('saves payroll sources with blank notice inputs and preserves an unsaved sour
 	assert.deepEqual(await d.evaluate('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_sources)()'), saved);
 });
 it('discards a payroll save held in encryption after lock and leaves a newly unlocked draft intact', async () => {
-	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]');
-	await d.evaluate('const app=window.__yose_app,db=app.db,encrypt=db.encryptRecord.bind(db);window.__sourceRawBefore=db.captureImportState();let once=true;db.encryptRecord=async(...args)=>{if(once){once=false;await new Promise(r=>window.__encryptRelease=r);}return encrypt(...args);};const c=app.insightsController,save=c.saveFurusatoSources.bind(c);c.saveFurusatoSources=async()=>{try{return await save();}finally{window.__sourceOldDone=true;}};');
+	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]');
+	await d.evaluate('const app=window.__yose_app,db=app.db,encrypt=db.encryptRecord.bind(db);window.__sourceRawBefore=db.captureImportState();let once=true;db.encryptRecord=async(...args)=>{if(once){once=false;await new Promise(r=>window.__encryptRelease=r);}return encrypt(...args);};const c=app.furusatoController,save=c.saveFurusatoSources.bind(c);c.saveFurusatoSources=async()=>{try{return await save();}finally{window.__sourceOldDone=true;}};');
 	await d.click('#btn-save-furusato-sources'); await d.waitFor('typeof window.__encryptRelease==="function"');
 	await d.evaluate('window.__yose_app.authController.showLockScreen()');
 	assert.equal(await d.evaluate('document.querySelector("#furusato-source-salary").selectedOptions.length'), 0);
 	assert.equal(await d.evaluate('(async()=> JSON.stringify(await window.__yose_app.db.captureImportState())===JSON.stringify(await window.__sourceRawBefore))()'), true);
 	await d.fill('#auth-pin-input', '1234'); await d.click('#btn-auth-pin'); await d.waitFor('document.querySelector("#auth-screen").classList.contains("hidden") && !document.querySelector("main").inert');
-	await d.click('[data-analytics-target="budget"]'); await d.waitFor('window.__yose_app.insightsController.sourceDraft?.year==="2026"');
+	await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]'); await d.waitFor('window.__yose_app.furusatoController.sourceDraft?.year==="2026"');
 	await d.evaluate('{const s=document.querySelector("#furusato-source-salary");s.options[0].selected=true;s.dispatchEvent(new Event("change",{bubbles:true}));}');
 	const draft = await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)');
 	await d.evaluate('window.__encryptRelease()'); await d.waitFor('window.__sourceOldDone===true');

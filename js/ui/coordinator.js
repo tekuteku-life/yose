@@ -20,6 +20,7 @@ import { SettingsController } from './settings_controller.js';
 import { MaintenanceController } from './maintenance_controller.js';
 import { MasterConflictController } from './master_conflict_controller.js';
 import { BulkEditController } from './bulk_edit_controller.js';
+import { FurusatoController } from './furusato_controller.js';
 import { InsightsController } from './insights_controller.js';
 import { AdvanceLinkController } from './advance_link_controller.js';
 
@@ -57,6 +58,7 @@ export class AppCoordinator {
 		this.advanceLinkController = new AdvanceLinkController(this);
 		this.bulkEditController = new BulkEditController(this);
 		this.insightsController = new InsightsController(this);
+		this.furusatoController = new FurusatoController(this);
 	}
 
 	// Backward-compatible accessors for key states and components
@@ -114,6 +116,7 @@ export class AppCoordinator {
 			this.advanceLinkController.setup();
 			this.bulkEditController.setup();
 			this.insightsController.setup();
+			this.furusatoController.setup();
 			this.summaryController.setupSummaryView();
 			this.settingsController.setupSettingsView();
 			this.maintenanceController.setup();
@@ -159,6 +162,7 @@ export class AppCoordinator {
 				} else {
 					const targetPanel = document.getElementById(targetId);
 					if (targetPanel) targetPanel.classList.add('active');
+					if (targetId === 'tab-tax') void this.furusatoController.render();
 					if (targetId === 'tab-settings') {
 						this.settingsController.renderSettings();
 					}
@@ -470,6 +474,7 @@ export class AppCoordinator {
 		await this.txListController.renderRecentTransactions();
 		await this.summaryController.renderSummary();
 		await this.settingsController.renderSettings();
+		if (document.getElementById('tab-tax').classList.contains('active')) await this.furusatoController.render();
 		await this.syncStatusController.updateSyncBadge();
 		await this.maintenanceController.refresh();
 	}

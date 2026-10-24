@@ -210,16 +210,51 @@ export function createDataIntegrityValidator() {
 					const selected = [];
 					for (const [field, values] of Object.entries(sources)) {
 						const location = `${sourcePath}.${field}`;
-						if (!['salary', 'income_tax', 'resident_tax', 'social_insurance'].includes(field)) { issue('shape', location, '集計項目が不正です'); continue; }
+						if (!['salary', 'other_income', 'social_insurance', 'other_deductions', 'personal_gap', 'other_gap', 'salary_deduction', 'resident_basic', 'income_basic', 'adjustment_credit', 'life_general_new', 'life_general_old', 'life_care', 'life_pension_new', 'life_pension_old', 'donation', 'income_tax', 'resident_tax'].includes(field)) { issue('shape', location, '集計項目が不正です'); continue; }
 						for (const value of list(values, location)) {
 							if (!object(value)) { issue('shape', location, '計上費目と中項目の参照が必要です'); continue; }
 							ref(value.category_id, categories, `${location}.category_id`, true);
 							if (value.subcategory_id !== null) ref(value.subcategory_id, children.get(value.category_id) || new Map(), `${location}.subcategory_id`, true);
 							const category = categories.get(value.category_id);
-							if (category && category.type !== (field === 'salary' ? 'income' : 'expense')) issue('category_type', location, '集計項目と費目の収支種別が一致しません', value.category_id);
+							if (category && category.type !== (['salary', 'other_income'].includes(field) ? 'income' : 'expense')) issue('category_type', location, '集計項目と費目の収支種別が一致しません', value.category_id);
 							if (selected.some(other => other.field !== field && other.category_id === value.category_id && (other.subcategory_id === null || value.subcategory_id === null || other.subcategory_id === value.subcategory_id))) issue('shape', sourcePath, '異なる集計項目に同じ費目・中項目を重複指定できません');
 							selected.push({ ...value, field });
 						}
+					}
+				}
+			}
+			if (entry.furusato_calculation !== undefined) {
+				const p = `${path}.furusato_calculation`, calc = entry.furusato_calculation;
+				if (!object(calc)) issue('shape', p, '税計算の設定が必要です');
+				else {
+					const fields = ['salary', 'other_income', 'social_insurance', 'other_deductions', 'personal_gap', 'other_gap', 'salary_deduction', 'resident_basic', 'income_basic', 'adjustment_credit', 'life_general_new', 'life_general_old', 'life_care', 'life_pension_new', 'life_pension_old', 'donation', 'income_tax', 'resident_tax'];
+					const autos = ['salary_deduction', 'resident_basic', 'income_basic', 'adjustment_credit'];
+					for (const key of Object.keys(calc)) if (!['mode', 'base_year', 'tax_status', 'input_modes', 'manual', 'life_enabled', 'young_dependent', 'housing', 'ledger_confirmation'].includes(key)) issue('shape', `${p}.${key}`, '税計算の設定項目が不正です');
+					if (!['income', 'notice'].includes(calc.mode)) issue('enum', `${p}.mode`, '計算方式が不正です');
+					number(calc.base_year, `${p}.base_year`, { required: true, integer: true, min: 1900, max: 9999 });
+					if (!['unknown', 'taxable', 'exempt'].includes(calc.tax_status)) issue('enum', `${p}.tax_status`, '課税区分が不正です');
+					if (calc.ledger_confirmation !== undefined && (typeof calc.ledger_confirmation !== 'string' || !/^[a-f0-9]{64}$/.test(calc.ledger_confirmation))) issue('shape', `${p}.ledger_confirmation`, '年額確認の形式が不正です');
+					for (const flag of ['life_enabled', 'young_dependent']) if (typeof calc[flag] !== 'boolean') issue('boolean', `${p}.${flag}`, '真偽値が必要です');
+					for (const kind of ['manual', 'input_modes']) {
+						if (!object(calc[kind])) { issue('shape', `${p}.${kind}`, '項目別の設定が必要です'); continue; }
+						for (const [field, value] of Object.entries(calc[kind])) {
+							if (!fields.includes(field)) { issue('shape', `${p}.${kind}.${field}`, '計算項目が不正です'); continue; }
+							if (kind === 'manual') number(value, `${p}.manual.${field}`, { required: true, integer: true, min: field === 'other_gap' ? -Number.MAX_SAFE_INTEGER : 0 });
+							else if (!['ledger', 'manual', ...(autos.includes(field) ? ['auto'] : []), ...(field === 'donation' ? ['legacy'] : [])].includes(value)) issue('enum', `${p}.input_modes.${field}`, '採用方法が不正です');
+						}
+					}
+					const h = calc.housing, hp = `${p}.housing`;
+					if (!object(h)) issue('shape', hp, '住宅控除の設定が必要です');
+					else {
+						for (const key of Object.keys(h)) if (!['enabled', 'applicable', 'first_year', 'balance', 'price', 'limit', 'rate', 'method', 'carry_rate', 'carry_limit'].includes(key)) issue('shape', `${hp}.${key}`, '住宅控除の設定項目が不正です');
+						if (typeof h.enabled !== 'boolean') issue('boolean', `${hp}.enabled`, '真偽値が必要です');
+						bools(h, hp, ['applicable', 'first_year']);
+						const required = h.enabled && h.applicable !== false;
+						if (required && typeof h.applicable !== 'boolean') issue('boolean', `${hp}.applicable`, '適用確認が必要です');
+						for (const field of ['balance', 'price', 'limit']) number(h[field], `${hp}.${field}`, { required, integer: true, min: 0 });
+						number(h.rate, `${hp}.rate`, { required, min: 0, max: 2 });
+						if ((required || h.method !== undefined) && !['one_stop', 'return'].includes(h.method)) issue('enum', `${hp}.method`, '申告方式が不正です');
+						if ((required || h.carry_rate !== undefined || h.carry_limit !== undefined) && !((h.carry_rate === 5 && h.carry_limit === 97500) || (h.carry_rate === 7 && h.carry_limit === 136500))) issue('enum', `${hp}.carry_rate`, '住宅控除の移行区分が不正です');
 					}
 				}
 			}

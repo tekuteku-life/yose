@@ -71,6 +71,7 @@
 		<button class="tab-btn" data-tab="tab-cashflow" data-analytics-target="cashflow">💰 収支</button>
 		<button class="tab-btn" data-tab="tab-budget" data-analytics-target="budget">🎯 予算・実績</button>
 		<button class="tab-btn" data-tab="tab-assets" data-analytics-target="assets">🏦 資産</button>
+		<button class="tab-btn" data-tab="tab-tax">🧾 税・控除</button>
 		<button class="tab-btn" data-tab="tab-settings">⚙️ 設定・マスタ</button>
 	</nav>
 
@@ -406,26 +407,7 @@
 			<div class="card" id="furusato-card" style="display:none;">
 				<h3 class="card-title">ふるさと納税枠</h3>
 				<div id="furusato-summary" aria-live="polite"></div>
-				<p>寄附額と前年収入は家計簿から自動集計します。取得済みの支出を取引年で集計します。タグまたは計上費目・中項目の名称が「ふるさと納税」の明細が対象です。前年の家計簿収入は手取入金等を含む参考値で、給与年収・課税所得ではありません。</p>
-				<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;">
-					<label>住民税所得割額（調整控除後・円）<input id="furusato-resident-tax" class="form-control" type="number" min="0" step="1"></label>
-					<label>特例控除用税率<select id="furusato-tax-rate" class="form-control"><option value="">未入力</option><option value="0">0%</option><option value="5">5%</option><option value="10">10%</option><option value="20">20%</option><option value="23">23%</option><option value="33">33%</option><option value="40">40%</option><option value="45">45%</option></select></label>
-					<button type="button" id="btn-save-furusato" class="btn btn-primary">概算条件を保存</button>
-				</div>
-				<details open><summary>家計簿からの給与・税・社会保険料集計</summary>
-					<p>税引前給与と控除を別明細で記録している場合、集計元の計上費目・中項目を指定してください。複数選択できます。前年・当年の取得済み確定明細を自動集計します。通常の住民税支払額や源泉所得税額は、上限計算用の所得割額・税率とは異なります。所得割額と税率は通知書等で確認して上の欄へ入力してください。</p>
-					<div style="display:flex;gap:12px;flex-wrap:wrap;">
-						<label>給与・賞与（税引前）の集計元<select multiple size="4" id="furusato-source-salary" class="form-control"></select></label>
-						<label>所得税の集計元<select multiple size="4" id="furusato-source-income_tax" class="form-control"></select></label>
-						<label>住民税の集計元<select multiple size="4" id="furusato-source-resident_tax" class="form-control"></select></label>
-						<label>社会保険料の集計元<select multiple size="4" id="furusato-source-social_insurance" class="form-control"></select></label>
-					</div>
-					<button type="button" id="btn-save-furusato-sources" class="btn btn-secondary">集計元を保存</button>
-					<div id="furusato-ledger-summary" aria-live="polite"></div>
-				</details>
-				<p id="furusato-error" role="alert"></p>
-				<details><summary>概算の条件・計算式</summary><p>前年の通知書等を参考に、当年も同条件と仮定します。特例控除用税率は住民税の課税所得から人的控除差を調整して求め、通常の所得税率と異なる場合があります。所得割額×20%÷（90%−税率×1.021）＋2,000円を円未満切捨てで求めます。所得割額0円は概算上限0円です。対応する税制年は2015〜2037年です。所得や控除の変動、住宅ローン控除、他の寄附・分離課税等を反映した確定上限ではありません。</p><p><a href="https://www.nta.go.jp/taxes/shiraberu/taxanswer/shotoku/1155.htm" target="_blank" rel="noopener noreferrer">国税庁の制度説明</a> / <a href="https://www.4894.call.city.niigata.jp/Faq/X0309701?logid=0&amp;sugtype=6" target="_blank" rel="noopener noreferrer">新潟市の計算説明</a></p></details>
-				<div id="furusato-records"></div>
+				<button type="button" id="btn-open-tax" class="btn btn-secondary">税・控除で設定</button>
 			</div>
 
 			<!-- Interactive Chart Container -->
@@ -564,6 +546,65 @@
 		</section>
 
 		<!-- ==================== TAB 3: SETTINGS & MASTER ==================== -->
+		<section id="tab-tax" class="tab-panel">
+			<div class="card">
+				<h2 class="card-title">税・控除</h2>
+				<label>寄附年<input id="furusato-donation-year" type="number" min="1900" max="9999" step="1" class="form-control"></label>
+				<p>給与・控除・寄附の集計元を費目と内訳から選べます。未記録の項目は年額を入力してください。前年の金額を参照する場合も、寄附年の税制で概算します。</p>
+				<div id="furusato-tax-summary" aria-live="polite"></div>
+			</div>
+			<div class="card">
+				<h3 class="card-title">計算方法・年額</h3>
+				<label>計算方法<select id="furusato-calculation-mode" class="form-control"><option value="income">給与・控除から概算</option><option value="notice">通知書の所得割額・税率から概算</option></select></label>
+				<label>金額参照年<input id="furusato-base-year" type="number" min="1900" max="9999" step="1" class="form-control"></label>
+				<label>所得割の課税区分<select id="furusato-tax-status" class="form-control"><option value="unknown">未確認</option><option value="taxable">所得割課税</option><option value="exempt">所得割非課税</option></select></label>
+				<p>「なし」の項目は0円を入力してください。その他の住民税所得控除には基礎控除・社会保険・生命保険を含めません。人的控除差は扶養等の公定差、その他の所得税控除差は実際の差から人的差を除いた額です。</p>
+				<div id="furusato-input-fields" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;"></div>
+				<details><summary>自動計算する控除の上書き</summary><p>給与所得控除・基礎控除の自動計算は寄附年2025〜2027年に対応します。所得金額調整控除などがある場合は実額で上書きしてください。</p><div id="furusato-auto-fields"></div></details>
+				<label><input id="furusato-confirm-ledger" type="checkbox">取得済みの給与・控除明細が金額参照年の年額を満たすことを確認しました</label>
+				<p>明細の金額・分類・状態や集計年を変更すると確認は失効します。手入力は年額として扱います。寄附は当年の現時点実績です。</p>
+			</div>
+			<div class="card">
+				<h3 class="card-title">生命保険料控除</h3>
+				<label><input id="furusato-life-enabled" type="checkbox">生命保険料控除を利用する</label>
+				<div id="furusato-life-fields" hidden></div>
+				<label><input id="furusato-young-dependent" type="checkbox">寄附年に23歳未満の扶養親族がいる</label>
+				<p>証明書の対象保険料（割戻金等差引後）を指定してください。新契約は2012年1月1日以降です。未割当・未入力の区分は契約なしとして扱います。</p>
+			</div>
+			<div class="card">
+				<h3 class="card-title">申告方式・住宅ローン控除</h3>
+				<label>寄附の申告方式<select id="furusato-housing-method" class="form-control"><option value="one_stop">ワンストップ特例</option><option value="return">確定申告</option></select></label>
+				<label><input id="furusato-housing-enabled" type="checkbox">住宅ローン控除を利用する</label>
+				<div id="furusato-housing-fields" hidden>
+					<label><input id="furusato-housing-applicable" type="checkbox">寄附年の適用条件を満たす</label>
+					<label><input id="furusato-housing-first_year" type="checkbox">住宅ローン控除の初年度</label>
+					<label>本人分の年末残高（円）<input id="furusato-housing-balance" class="form-control" type="number" min="0" step="1"></label>
+					<label>本人分の取得対価（補助金等差引後・円）<input id="furusato-housing-price" class="form-control" type="number" min="0" step="1"></label>
+					<label>借入限度額（円）<input id="furusato-housing-limit" class="form-control" type="number" min="0" step="1"></label>
+					<label>控除率（%）<input id="furusato-housing-rate" class="form-control" type="number" min="0" max="2" step="0.01"></label>
+					<label>住民税移行区分<select id="furusato-housing-carry" class="form-control"><option value="5">5%・上限97,500円</option><option value="7">7%・上限136,500円</option></select></label>
+					<p>率・限度額・移行区分は入居年や住宅区分に応じた通知書等の値を使ってください。年間返済額を年末残高へ読み替えず、本人持分だけを入力してください。初年度は確定申告が必要です。</p>
+				</div>
+			</div>
+			<div class="card">
+				<h3 class="card-title">導出値・ふるさと納税枠</h3>
+				<div id="furusato-calculation-preview" aria-live="polite"></div>
+				<button id="btn-save-furusato-sources" type="button" class="btn btn-primary">計算設定・集計元を保存</button>
+				<p>上限は総合課税・標準所得割10%の参考値です。所得割額×20%÷（90%−特例税率×1.021）＋2,000円を基に、申告方式・住宅ローン控除との競合を比較します。税額端数・他の税額控除・分離課税・損失繰越等を含む確定申告額ではありません。</p>
+				<p><a href="https://www.nta.go.jp/taxes/shiraberu/taxanswer/shotoku/1155.htm" target="_blank" rel="noopener noreferrer">国税庁の制度説明</a></p>
+				<details><summary>支払税額等の参考集計</summary><div id="furusato-reference-fields"></div><div id="furusato-ledger-summary"></div></details>
+			</div>
+			<div class="card">
+				<h3 class="card-title">通知書から直接入力</h3>
+				<p>通知書方式は2015〜2037年の制度式による参考値です。支払住民税や源泉所得税をそのまま入れず、調整控除後所得割額と特例控除用税率を確認してください。給与・控除からの住宅併用比較はこの方式には含みません。</p>
+				<label>住民税所得割額（調整控除後・円）<input id="furusato-resident-tax" class="form-control" type="number" min="0" step="1"></label>
+				<label>特例控除用税率<select id="furusato-tax-rate" class="form-control"><option value="">未入力</option><option value="0">0%</option><option value="5">5%</option><option value="10">10%</option><option value="20">20%</option><option value="23">23%</option><option value="33">33%</option><option value="40">40%</option><option value="45">45%</option></select></label>
+				<button type="button" id="btn-save-furusato" class="btn btn-secondary">通知書の条件を保存・使用</button>
+			</div>
+			<p id="furusato-error" role="alert"></p>
+			<div class="card" id="furusato-records"></div>
+		</section>
+
 		<section id="tab-settings" class="tab-panel">
 			<div class="card" id="card-data-metadata">
 				<h3 class="card-title">データ情報</h3>
@@ -847,7 +888,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.15.0</span>
+					<span class="badge badge-info" id="badge-current-version">v1.16.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。

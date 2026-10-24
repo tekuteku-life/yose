@@ -27,7 +27,7 @@ export class BackupMerger {
 		// 採用されない既存日・既存年の不正値も、非破壊マージ前に拒否する。
 		const incomingMasters = [data.master_config, data.annual_budgets ? { annual_budgets: data.annual_budgets } : null].filter(Boolean);
 		for (const incomingMaster of incomingMasters) {
-			const invalid = dataIntegrity.issues({ master_config: candidateCategories === undefined ? incomingMaster : { ...incomingMaster, categories: candidateCategories } }).filter(item => item.path.includes('.investment_history') || item.path.includes('.furusato_estimate') || (item.path.includes('.furusato_sources') && (!['reference', 'category_type'].includes(item.code) || candidateCategories !== undefined)));
+			const invalid = dataIntegrity.issues({ master_config: candidateCategories === undefined ? incomingMaster : { ...incomingMaster, categories: candidateCategories } }).filter(item => item.path.includes('.investment_history') || item.path.includes('.furusato_estimate') || item.path.includes('.furusato_calculation') || (item.path.includes('.furusato_sources') && (!['reference', 'category_type'].includes(item.code) || candidateCategories !== undefined)));
 			requireType(!invalid.length, invalid.map(item => item.message).join(' / '));
 		}
 		const requiredFields = {
@@ -169,6 +169,7 @@ export class BackupMerger {
 			savings_target_amount: Math.max(0, Number(entry.savings_target_amount) || 0),
 			savings_target_rate: Math.max(0, Number(entry.savings_target_rate ?? entry.target_savings_rate) || 0),
 			category_budgets: BackupMerger.sanitizeCategoryBudgets(entry.category_budgets),
+			...(entry.furusato_calculation !== undefined ? { furusato_calculation: structuredClone(entry.furusato_calculation) } : {}),
 			...(entry.furusato_sources !== undefined ? { furusato_sources: structuredClone(entry.furusato_sources) } : {}),
 			...(entry.furusato_estimate !== undefined ? { furusato_estimate: structuredClone(entry.furusato_estimate) } : {})
 		};
@@ -258,6 +259,7 @@ export class BackupMerger {
 					localConfig.annual_budgets[yKey] = normalized;
 					stats.addedBudgets++;
 				} else {
+					if (localConfig.annual_budgets[yKey].furusato_calculation === undefined && normalized.furusato_calculation !== undefined) localConfig.annual_budgets[yKey].furusato_calculation = normalized.furusato_calculation;
 					if (localConfig.annual_budgets[yKey].furusato_sources === undefined && normalized.furusato_sources !== undefined) localConfig.annual_budgets[yKey].furusato_sources = normalized.furusato_sources;
 					if (localConfig.annual_budgets[yKey].furusato_estimate === undefined && normalized.furusato_estimate !== undefined) localConfig.annual_budgets[yKey].furusato_estimate = normalized.furusato_estimate;
 					if (!localConfig.annual_budgets[yKey].category_budgets || typeof localConfig.annual_budgets[yKey].category_budgets !== 'object') {

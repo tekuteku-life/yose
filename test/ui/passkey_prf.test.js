@@ -24,7 +24,7 @@ async function lock(d) {
 }
 async function pin(d, value = '1234') {
 	await d.fill('#auth-pin-input', value); await d.click('#btn-auth-pin');
-	await d.waitFor('document.getElementById("auth-screen").classList.contains("hidden")');
+	await d.waitFor('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")');
 }
 
 describe('PRF passkey unlock in Chromium', () => {
@@ -36,7 +36,7 @@ describe('PRF passkey unlock in Chromium', () => {
 		assert.deepEqual(await d.evaluate('window.__yose_app.db.getAllRaw("security_keys")'),before);
 		const alerts=(await d.evaluate('window.__dialogs')).filter(dialog=>dialog.type==='alert');
 		assert.equal(alerts.some(dialog=>/新しい.*鍵ペアを生成/.test(dialog.message)),false,'an unsuccessful attempt must not display success');
-		await lock(d); await d.click('#btn-auth-webauthn'); await d.waitFor('document.getElementById("auth-screen").classList.contains("hidden")');
+		await lock(d); await d.click('#btn-auth-webauthn'); await d.waitFor('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")');
 		assert.equal((await records(d))[0].id,'kept');
 	});
 	it('unlocks encrypted records without entering PIN, including after a reload, and removes the passkey cleanly', async () => {
@@ -44,15 +44,15 @@ describe('PRF passkey unlock in Chromium', () => {
 		const saved = await d.evaluate('window.__yose_app.db.getSecurityKey("webauthn_credential")');
 		assert.ok(saved.prfWrap?.ciphertext); assert.equal(saved.prfOutput, undefined);
 		await lock(d); assert.match(await d.textContent('#btn-auth-webauthn'), /解除/);
-		await d.click('#btn-auth-webauthn'); await d.waitFor('document.getElementById("auth-screen").classList.contains("hidden")');
+		await d.click('#btn-auth-webauthn'); await d.waitFor('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")');
 		assert.equal((await records(d))[0].id, 'encrypted_record');
 		assert.equal(await d.evaluate('document.getElementById("auth-pin-input").value'), '');
 		await d.evaluate('window.__passkeyReloadPending=true');
 		await d.send('Page.reload', {}, d.sessionId); await d.waitFor('!window.__passkeyReloadPending && !document.getElementById("auth-screen")?.classList.contains("hidden") && document.getElementById("auth-webauthn-container")?.style.display === "block"');
 		await nativeCredentials(d); await d.click('#btn-auth-webauthn');
-		await d.waitFor('document.getElementById("auth-screen").classList.contains("hidden")');
+		await d.waitFor('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")');
 		assert.equal((await records(d))[0].amount, 100);
-		await settings(d); await d.click('#btn-toggle-key-details'); await d.click('#btn-clear-webauthn'); await waitForDialog(d, '解除しました');
+		await settings(d); await d.waitFor('document.querySelector("#tab-settings").classList.contains("active") && document.querySelector("#btn-toggle-key-details").checkVisibility({checkVisibilityCSS:true}) && !document.querySelector("#btn-toggle-key-details").disabled'); await d.click('#btn-toggle-key-details'); await d.click('#btn-clear-webauthn'); await waitForDialog(d, '解除しました');
 		assert.equal(await d.evaluate('window.__yose_app.db.getSecurityKey("webauthn_credential")'), null);
 		await lock(d); assert.equal(await d.isVisible('#btn-auth-webauthn'), false); await pin(d);
 	});
@@ -86,7 +86,7 @@ describe('PRF passkey unlock in Chromium', () => {
 		assert.deepEqual(await d.evaluate('window.__yose_app.db.getSecurityKey("webauthn_credential")'), original);
 		assert.notEqual(await d.evaluate('btoa(String.fromCharCode(...window.__createdUserHandles[0]))'),original.userHandle);
 		await nativeCredentials(d); await d.click('#btn-auth-webauthn');
-		await d.waitFor('document.getElementById("auth-screen").classList.contains("hidden")');
+		await d.waitFor('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")');
 	});
 	it('recovers the committed signing keys with PIN after locking immediately after their transaction commits', async () => {
 		const d=fixture.driver; await authenticator(d); await register(d);
@@ -115,7 +115,7 @@ describe('PRF passkey unlock in Chromium', () => {
 		assert.deepEqual(await d.evaluate('window.__yose_app.db.getSecurityKey("webauthn_credential")'),original);
 		if (failure==='save-failure') await d.evaluate('window.__yose_app.db.saveSecurityKey=window.__saveSecurityKey');
 		await nativeCredentials(d); await lock(d); await d.click('#btn-auth-webauthn');
-		await d.waitFor('document.getElementById("auth-screen").classList.contains("hidden")');
+		await d.waitFor('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")');
 	});
 	for (const action of ['relock','unregister']) it(`rejects a delayed assertion after ${action}`, async () => {
 		const d=fixture.driver; await authenticator(d); await register(d); await lock(d);
@@ -148,7 +148,7 @@ describe('PRF passkey unlock in Chromium', () => {
 	it('preserves PRF unlock after PIN changes and invalidates it on signing key regeneration', async () => {
 		const d=fixture.driver; await authenticator(d); await register(d);
 		await d.fill('#input-pin','5678'); await d.click('#btn-save-pin'); await waitForDialog(d,'PINコードを正常に更新');
-		await lock(d); await d.click('#btn-auth-webauthn'); await d.waitFor('document.getElementById("auth-screen").classList.contains("hidden")');
+		await lock(d); await d.click('#btn-auth-webauthn'); await d.waitFor('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")');
 		await settings(d); if (!await d.isVisible('#btn-generate-key')) await d.click('#btn-toggle-key-details');
 		await d.evaluate('window.__nextPromptText="5678"');
 		await d.click('#btn-generate-key'); await waitForDialog(d,'新しいEd25519鍵ペアを生成し、PINで保護しました。');

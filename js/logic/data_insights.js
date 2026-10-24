@@ -1,3 +1,5 @@
+import { FURUSATO_FIELDS, calculateFurusatoFromLedger, getFurusatoDonationData } from './furusato_calculator.js';
+export { FURUSATO_TAX_RATES, estimateFurusatoLimit } from './furusato_calculator.js';
 import { sharedMasterConfig } from './master_sync.js';
 
 /** 取得済み業務JSONの論理サイズと、非削除明細の暦期間平均である。 */
@@ -15,36 +17,15 @@ export function buildDataMetadata(state) {
 		bytes: new TextEncoder().encode(JSON.stringify(business)).length };
 }
 
-export const FURUSATO_TAX_RATES = [0, 5, 10, 20, 23, 33, 40, 45];
-/** 住民税特例控除の20%上限から求める参考値（2015〜2037年）である。 */
-export function estimateFurusatoLimit(input, year) {
-	if (input == null || Number(year) < 2015 || Number(year) > 2037) return null;
-	if (!Number.isSafeInteger(input.resident_tax) || input.resident_tax < 0 || !FURUSATO_TAX_RATES.includes(input.income_tax_rate)) throw new Error('住民税所得割額と特例控除用税率を確認してください。');
-	return input.resident_tax === 0 ? 0 : Math.floor(input.resident_tax * 0.2 / (0.9 - input.income_tax_rate / 100 * 1.021) + 2000);
-}
-
-export function buildFurusatoSummary(transactions, config, year) {
-	const name = 'ふるさと納税';
-	const categories = config.categories || [];
-	const records = transactions.filter(tx => {
-		if (tx.is_deleted || tx.type !== 'expense' || !tx.date.startsWith(`${year}-`)) return false;
-		const category = categories.find(c => c.id === tx.category_id);
-		return tx.tags?.includes(name) || category?.name === name || category?.subcategories?.some(s => s.id === tx.subcategory_id && s.name === name);
-	}).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
-	const sum = status => records.filter(tx => tx.status === status && !tx.amount_pending).reduce((total, tx) => total + tx.amount, 0);
+export function buildFurusatoSummary(transactions, config, year, options = {}) {
+	const donations = getFurusatoDonationData(transactions, config, year);
 	const previous = transactions.filter(tx => !tx.is_deleted && !tx.amount_pending && tx.type === 'income' && tx.status === 'confirmed' && tx.date.startsWith(`${Number(year) - 1}-`));
-	const limit = estimateFurusatoLimit(config.annual_budgets?.[year]?.furusato_estimate, year);
-	return { records, confirmed: sum('confirmed'), planned: sum('planned'), pending: records.filter(tx => tx.amount_pending).length,
-		previousIncome: previous.reduce((total, tx) => total + tx.amount, 0), previousCount: previous.length, limit, remaining: limit === null ? null : limit - sum('confirmed') };
+	const limit = (options.calculation || calculateFurusatoFromLedger(transactions, config, year)).limit;
+	return { ...donations, previousIncome: previous.reduce((total, tx) => total + tx.amount, 0), previousCount: previous.length, limit, remaining: limit === null || donations.confirmed === null ? null : limit - donations.confirmed };
 }
 
 
-export const FURUSATO_SOURCE_FIELDS = {
-	salary: { label: '給与・賞与（税引前）', type: 'income' },
-	income_tax: { label: '所得税', type: 'expense' },
-	resident_tax: { label: '住民税', type: 'expense' },
-	social_insurance: { label: '社会保険料', type: 'expense' }
-};
+export const FURUSATO_SOURCE_FIELDS = FURUSATO_FIELDS;
 /** 本人が明示した計上分類から、通知書確認用の取得済み明細だけを集計する。 */
 export function buildFurusatoLedgerSummary(transactions, config, year, sources = config.annual_budgets?.[year]?.furusato_sources || {}) {
 	return Object.fromEntries(Object.entries(FURUSATO_SOURCE_FIELDS).map(([field, definition]) => {

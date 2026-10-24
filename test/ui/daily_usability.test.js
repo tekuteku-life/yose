@@ -219,7 +219,9 @@ describe('Daily usability improvements', { timeout: 120000 }, () => {
 		await gas(d, { success: true, accepted_ids: [], conflicts: [{ ...original, amount: 999, is_deleted: false, updated_at: '2026-10-22T00:00:00Z' }] });
 		await cashflow(d); await d.fill('#input-period-picker', '2026-09');
 		await d.waitFor('document.querySelector("#month-tx-list [data-id=delete_conflict]") !== null');
-		await d.click('#month-tx-list [data-id="delete_conflict"]'); await d.click('#btn-edit-delete-tx');
+		await d.click('#month-tx-list [data-id="delete_conflict"]');
+		await d.waitFor('document.querySelector("#modal-edit-tx").classList.contains("active") && document.querySelector("#edit-tx-id").value==="delete_conflict" && window.__yose_app.txEditController.originalTransaction?.id==="delete_conflict" && document.querySelector("#btn-edit-delete-tx").checkVisibility({checkVisibilityCSS:true})');
+		await d.click('#btn-edit-delete-tx');
 		await d.waitFor('!window.__yose_app.syncManager.isSyncing && !document.getElementById("modal-edit-tx").classList.contains("active")');
 		const [latest] = await records(d);
 		assert.equal(latest.amount, 999); assert.equal(latest.is_deleted, false);

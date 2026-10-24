@@ -233,7 +233,7 @@ export class SummaryController {
 	}
 
 	async renderSummary() {
-		const renderId = ++this.renderVersion;
+		const renderId = ++this.renderVersion, key = this.db.encryptionKey;
 		const target = this.coordinator.analyticsTarget || 'cashflow';
 		const granularity = this.coordinator.analyticsGranularity || 'monthly';
 
@@ -252,11 +252,11 @@ export class SummaryController {
 			}
 		}
 
-		const assetState = target === 'assets' ? await this.db.getAnalyticsState() : null;
+		const assetState = ['assets', 'budget'].includes(target) ? await this.db.getAnalyticsState() : null;
 		const snapshot = assetState ? assetState.summary_snapshot : await this.db.getSnapshot();
 		const config = assetState ? assetState.master_config : await this.db.getMasterConfig();
 		const transactions = assetState ? assetState.transactions.filter(tx => !tx.is_deleted) : await this.db.getTransactions({ includeDeleted: false });
-		if (renderId !== this.renderVersion) return;
+		if (renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 
 		const summary = calculateBalancesAndSummaries(snapshot, target === 'assets' ? transactions.filter(tx => tx.status !== 'confirmed' || tx.date <= formatDate(new Date())) : transactions, this.coordinator.currentMonth);
 		if (target === 'assets') {
@@ -299,9 +299,10 @@ export class SummaryController {
 		const historyCard = document.getElementById('asset-history-card');
 		if (historyCard) historyCard.style.display = target === 'assets' ? 'block' : 'none';
 		document.getElementById('investment-record-card').style.display = target === 'assets' ? 'block' : 'none';
-		this.coordinator.insightsController.renderFurusato(transactions, config);
+		document.getElementById('furusato-card').style.display = 'none';
+		if (target === 'budget') await this.coordinator.furusatoController.render(assetState);
 		if (target === 'assets') { this.coordinator.insightsController.renderInvestment(config); await this.renderAssetHistory(assetState); }
-		if (renderId !== this.renderVersion) return;
+		if (renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 		const cardPeriodControls = document.getElementById('card-period-controls');
 		const granularityRow = document.getElementById('granularity-control-row');
 		const catCard = document.getElementById('card-category-breakdown');
@@ -371,7 +372,7 @@ export class SummaryController {
 
 		// Render Account Balances / Expenses / Budget Breakdown
 		await this.renderAccountBalances(summary, transactions, config);
-		if (renderId !== this.renderVersion) return;
+		if (renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 
 		// Render Tag Analytics & Breakdown (when in cashflow)
 		if (target === 'cashflow') {
@@ -1165,11 +1166,12 @@ export class SummaryController {
 	}
 
 	async renderCategoryBreakdownList(categoriesData, config = null, renderId = this.renderVersion) {
+		const key = this.db.encryptionKey;
 		const list = document.getElementById('category-breakdown-list');
 		if (!list) return;
 
 		config = config || await this.db.getMasterConfig();
-		if (renderId !== this.renderVersion) return;
+		if (renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 		const catMap = new Map();
 		for (const c of config?.categories || []) {
 			catMap.set(c.id, c.name);

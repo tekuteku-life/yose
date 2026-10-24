@@ -100,6 +100,7 @@ export class AuthController {
 		this.coordinator.advanceLinkController?.cancel();
 		this.coordinator.bulkEditController?.cancel();
 		this.coordinator.insightsController?.cancel();
+		this.coordinator.furusatoController?.cancel();
 		if (this.coordinator.summaryController) {
 			this.coordinator.summaryController.renderVersion++;
 			this.coordinator.summaryController.assetHistoryGeneration = (this.coordinator.summaryController.assetHistoryGeneration || 0) + 1;

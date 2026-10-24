@@ -18,7 +18,7 @@ it('roundtrips bulk changes, investment observations, and donation settings thro
 		await db.putTransactions([transaction('a'), transaction('b')]); await sync.syncBidirectional();
 		await db.bulkEditTransactions(await db.getTransactions(), { tags: ['ふるさと納税'] }, []);
 		await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { acquisition_cost: 1000, market_value: 1500 }, null);
-		await db.mutateMasterConfig(c => { c.annual_budgets[2026] = { furusato_estimate: { resident_tax: 200000, income_tax_rate: 20 }, furusato_sources: { salary: [{ category_id: 'cat_income_main', subcategory_id: null }] } }; });
+		await db.mutateMasterConfig(c => { c.annual_budgets[2026] = { furusato_calculation: { mode: 'income', base_year: 2025, tax_status: 'taxable', input_modes: {}, manual: { salary: 6000000 }, life_enabled: false, young_dependent: false, housing: { enabled: false } }, furusato_estimate: { resident_tax: 200000, income_tax_rate: 20 }, furusato_sources: { salary: [{ category_id: 'cat_income_main', subcategory_id: null }] } }; });
 		await sync.syncBidirectional();
 		const remote = gas.handleAction('fetch_state', {});
 		assert.deepEqual(remote.pending_diffs.map(t => t.id).sort(), ['a', 'b']); assert.ok(remote.pending_diffs.every(t => t.tags.includes('ふるさと納税')));
@@ -35,6 +35,9 @@ it('roundtrips bulk changes, investment observations, and donation settings thro
 		const copy = new YoseDB(); await copy.init(); const download = new SyncManager({ db: copy, privateKey: kp.privateKey, gasUrl: 'https://gas.test', customFetch });
 		await download.syncBidirectional(); assert.deepEqual((await copy.getMasterConfig()).accounts.find(a=>a.id==='acc_investment_main').investment_history, remote.master_config.accounts.find(a=>a.id==='acc_investment_main').investment_history);
 		assert.deepEqual((await copy.getMasterConfig()).annual_budgets[2026].furusato_sources, remote.master_config.annual_budgets[2026].furusato_sources);
+		assert.deepEqual((await copy.getMasterConfig()).annual_budgets[2026].furusato_calculation, remote.master_config.annual_budgets[2026].furusato_calculation);
+		const badCalculation = structuredClone(remote.master_config); badCalculation.annual_budgets[2026].furusato_calculation.manual.salary = -1;
+		assert.equal(gas.handleAction('update_master', { master_config: badCalculation, base_version: canonicalJsonStringify(remote.master_config) }).success, false); assert.deepEqual(gas.handleAction('fetch_state', {}), remote);
 		const originalObservation = { acquisition_cost: 1000, market_value: 1500 };
 		await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { acquisition_cost: 1000, market_value: 1800 }, originalObservation); await sync.syncBidirectional(); await download.syncBidirectional();
 		assert.equal((await copy.getMasterConfig()).accounts.find(a=>a.id==='acc_investment_main').investment_history['2026-10-20'].market_value, 1800);

@@ -551,3 +551,8 @@ bulk_edit純関数は選択明細と全関連明細から共通能力を導出�
 InsightsControllerは通知書入力のdirtyと集計元選択のdirtyを分離する。再描画では変更中の片方を上書きせず、成功した保存だけ原本を更新する。年変更・ロックで破棄し、旧保存完了が別年の入力を変更しない。年度別設定は既存の三者マージ・暗号化・GAS共有検証・取込を通す。非破壊取込は未設定のfurusato_sourcesのみ補完する。全入力の構造不正は採用されない値も含めて拒否し、取込時は構造検証を先に行い、候補統合後にBackupMerger.validateImportData(data,type,candidate.categories)を再度呼ぶ。第三引数の分類集合でmaster_config内/単独annual_budgets内の全集計元参照・種別を検証し、既存値保持で採用しない入力も対象とする。検証はmutateBusinessの再試行内で行い、並行する分類変更後も再評価する。通知書が無くても集計元の保存は可能である。
 
 取得原価系列はChart.jsのstepped='before'を用い、前の点から次の記録日まで水平に保持する。観測日を年/月の間引き系列にも追加する。実Chart.jsの描画命令ではtarget.x/previous.yを経由する方式である（[公式canvas helper](https://github.com/chartjs/Chart.js/blob/master/src/helpers/helpers.canvas.ts)、2026-10-24確認）。
+
+
+### review58 ふるさと納税の費目割当と自動控除
+
+ふるさと納税について、上記review56/57時点の「給与・控除は参考表示のみ」を変更する。[ふるさと納税計算設計](furusato_calculation.md)を新たな表示・データ・計算の正本とし、費目割当/手入力/自動導出を区別して上限へ使用する。投資・一括編集・メタ情報は変更しない。
