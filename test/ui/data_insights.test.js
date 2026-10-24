@@ -41,12 +41,12 @@ describe('metadata, bulk editing, donations, and investment UI', () => {
 	});
 	it('records end-of-day investment values and reflects them in history and asset KPI without adding transactions', async () => {
 		const d = fixture.driver; await d.click('[data-analytics-target="assets"]');
-		await d.fill('#investment-date', '2026-10-20'); await d.fill('#investment-invested', '1000000'); await d.fill('#investment-valuation', '1300000');
+		await d.fill('#investment-date', '2026-10-20'); await d.fill('#investment-acquisition-cost', '1000000'); await d.fill('#investment-valuation', '1300000');
 		await d.click('#btn-save-investment');
 		await d.waitFor('document.querySelector("#investment-observations").textContent.includes("1,300,000")');
 		const data = await d.evaluate('window.__yose_app.chartController.assetHistoryChart.data');
-		assert.equal(data.datasets.find(x => x.label === '投資評価額').data.at(-1), 1300000);
-		assert.equal(data.datasets.find(x => x.label === '投資額（差引拠出額）').data.at(-1), 1000000);
+		assert.equal(data.datasets.find(x => x.label === '口座評価額（預り金込・参考）').data.at(-1), 1300000);
+		assert.equal(data.datasets.find(x => x.label === '取得原価（直近記録）').data.at(-1), 1000000);
 		assert.ok((await d.textContent('#stat-external-assets')).includes('1,300,000'));
 		assert.equal(await d.evaluate('(async()=> (await window.__yose_app.db.getTransactions()).length)()'), 0);
 	});
@@ -95,7 +95,7 @@ describe('bulk editing browser boundaries', () => {
 describe('investment and donation correction UI', () => {
 	it('updates and deletes an observation, keeps account/asset totals coherent, and provides a fallback table', async () => {
 		const d = fixture.driver; await d.click('[data-analytics-target="assets"]');
-		await d.fill('#investment-invested', '1000000'); await d.fill('#investment-valuation', '1300000'); await d.click('#btn-save-investment');
+		await d.fill('#investment-acquisition-cost', '1000000'); await d.fill('#investment-valuation', '1300000'); await d.click('#btn-save-investment');
 		await d.waitFor('document.querySelector("#investment-observations").textContent.includes("1,300,000")');
 		await d.fill('#investment-valuation', '1400000'); await d.click('#btn-save-investment');
 		await d.waitFor('document.querySelector("#stat-external-assets").textContent.includes("1,400,000")');
@@ -165,17 +165,17 @@ describe('insight rendering and observation concurrency', () => {
 	});
 	it('selects a single investment account without changing total asset series', async () => {
 		const d = fixture.driver;
-		await d.evaluate('window.__yose_app.db.mutateMasterConfig(c=>{c.accounts.push({id:"stock2",name:"証券2",type:"investment",is_asset:true,initial_balance:0,investment_history:{"2026-10-20":{invested_amount:50,market_value:70}}});})');
+		await d.evaluate('window.__yose_app.db.mutateMasterConfig(c=>{c.accounts.push({id:"stock2",name:"証券2",type:"investment",is_asset:true,initial_balance:0,investment_history:{"2026-10-20":{acquisition_cost:50,market_value:70}}});})');
 		await d.click('[data-analytics-target="assets"]');
 		await d.waitFor('Boolean(document.querySelector("#asset-investment-account option[value=stock2]"))');
 		const total = await d.evaluate('window.__yose_app.chartController.assetHistoryChart.data.datasets[0].data');
 		await d.select('#asset-investment-account', 'stock2');
-		await d.waitFor('window.__yose_app.chartController.assetHistoryChart.data.datasets.find(x=>x.label==="投資額（差引拠出額）").data.at(-1)===50');
+		await d.waitFor('window.__yose_app.chartController.assetHistoryChart.data.datasets.find(x=>x.label==="取得原価（直近記録）").data.at(-1)===50');
 		assert.deepEqual(await d.evaluate('window.__yose_app.chartController.assetHistoryChart.data.datasets[0].data'), total);
 	});
 	it('rejects a stale same-day observation instead of overwriting it', async () => {
-		const d = fixture.driver; await d.click('[data-analytics-target="assets"]'); await d.fill('#investment-invested', '100'); await d.fill('#investment-valuation', '150');
-		await d.evaluate('window.__yose_app.db.saveInvestmentObservation("acc_investment_main","2026-10-20",{invested_amount:200,market_value:250},null)');
+		const d = fixture.driver; await d.click('[data-analytics-target="assets"]'); await d.fill('#investment-acquisition-cost', '100'); await d.fill('#investment-valuation', '150');
+		await d.evaluate('window.__yose_app.db.saveInvestmentObservation("acc_investment_main","2026-10-20",{acquisition_cost:200,market_value:250},null)');
 		await d.click('#btn-save-investment'); await d.waitFor('document.querySelector("#investment-error").textContent.includes("変更")');
 		assert.equal(await d.evaluate('(async()=> (await window.__yose_app.db.getMasterConfig()).accounts.find(a=>a.id==="acc_investment_main").investment_history["2026-10-20"].market_value)()'), 250);
 	});
@@ -211,7 +211,7 @@ it('keeps a new bulk dialog intact when an old committed save completes after PI
 });
 it('escapes hostile investment account names in the numeric fallback table', async () => {
 	const d = fixture.driver;
-	await d.evaluate('window.__yose_app.db.mutateMasterConfig(c=>{const a=c.accounts.find(x=>x.id==="acc_investment_main");a.name="<img src=x onerror=window.__investmentXss=1>";a.investment_history={"2026-10-20":{invested_amount:100,market_value:150}};})');
+	await d.evaluate('window.__yose_app.db.mutateMasterConfig(c=>{const a=c.accounts.find(x=>x.id==="acc_investment_main");a.name="<img src=x onerror=window.__investmentXss=1>";a.investment_history={"2026-10-20":{acquisition_cost:100,market_value:150}};})');
 	await d.click('[data-analytics-target="assets"]'); await d.evaluate('window.Chart=undefined;window.__yose_app.summaryController.renderAssetHistory()');
 	await d.waitFor('document.querySelector("#asset-history-fallback").textContent.includes("150")');
 	assert.equal(await d.evaluate('Boolean(window.__investmentXss)||Boolean(document.querySelector("#asset-history-fallback img,#investment-observations img"))'), false);
@@ -221,7 +221,7 @@ it('applies valuation gains once to net assets and preserves the projected cashf
 	const d = fixture.driver; await seed(d, [transaction('plannedInvest', { type: 'transfer', account_id: 'acc_bank_main', to_account_id: 'acc_investment_main', category_id: null, actual_category_id: null, amount: 50000, status: 'planned' })]);
 	await d.click('[data-analytics-target="assets"]'); await d.waitFor('Boolean(window.__yose_app.chartController.assetHistoryChart)');
 	const before = await d.evaluate('Number(document.querySelector("#stat-total-assets").textContent.replace(/[^0-9-]/g,""))');
-	await d.fill('#investment-invested', '1000000'); await d.fill('#investment-valuation', '1300000'); await d.click('#btn-save-investment');
+	await d.fill('#investment-acquisition-cost', '1000000'); await d.fill('#investment-valuation', '1300000'); await d.click('#btn-save-investment');
 	await d.waitFor('document.querySelector("#stat-external-assets").textContent.includes("1,300,000")');
 	const after = await d.evaluate('Number(document.querySelector("#stat-total-assets").textContent.replace(/[^0-9-]/g,""))');
 	assert.equal(after - before, 75000);
@@ -245,11 +245,11 @@ it('freezes bulk controls while saving and restores applicable controls after fa
 for (const kind of ['tax', 'investment']) it(`freezes ${kind} form fields during a save and restores them after failure`, async () => {
 	const d = fixture.driver;
 	if (kind === 'tax') { await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]'); await d.fill('#furusato-resident-tax', '200000'); await d.select('#furusato-tax-rate', '20'); }
-	else { await d.click('[data-analytics-target="assets"]'); await d.fill('#investment-invested', '100'); await d.fill('#investment-valuation', '150'); }
+	else { await d.click('[data-analytics-target="assets"]'); await d.fill('#investment-acquisition-cost', '100'); await d.fill('#investment-valuation', '150'); }
 	const method = kind === 'tax' ? 'saveMasterConfig' : 'saveInvestmentObservation';
 	await d.evaluate(`window.__yose_app.db.${method}=async()=>{await new Promise(r=>window.__insightRelease=r);throw new Error('save failure');}`);
 	await d.click(kind === 'tax' ? '#btn-save-furusato' : '#btn-save-investment'); await d.waitFor('typeof window.__insightRelease==="function"');
-	const selector = kind === 'tax' ? '#furusato-resident-tax,#furusato-tax-rate' : '#investment-account,#investment-date,#investment-invested,#investment-valuation';
+	const selector = kind === 'tax' ? '#furusato-resident-tax,#furusato-tax-rate' : '#investment-account,#investment-date,#investment-acquisition-cost,#investment-valuation';
 	assert.equal(await d.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].every(el=>el.disabled)`), true);
 	await d.evaluate('window.__insightRelease()'); await d.waitFor(`document.querySelector('${kind === 'tax' ? '#furusato-error' : '#investment-error'}').textContent.includes('save failure')`);
 	assert.equal(await d.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].every(el=>!el.disabled)`), true);
@@ -307,14 +307,14 @@ describe('donation and investment error and draft operations', () => {
 	it('validates blank investment fields, preserves a dirty draft through refresh and cancels deletion', async () => {
 		const d = fixture.driver; await d.click('[data-analytics-target="assets"]'); await d.click('#btn-save-investment');
 		await d.waitFor('document.querySelector("#investment-error").textContent.includes("入力")');
-		await d.fill('#investment-invested', '100'); await d.fill('#investment-valuation', '150'); await d.evaluate('window.__yose_app.summaryController.renderSummary()');
+		await d.fill('#investment-acquisition-cost', '100'); await d.fill('#investment-valuation', '150'); await d.evaluate('window.__yose_app.summaryController.renderSummary()');
 		assert.equal(await d.evaluate('document.querySelector("#investment-valuation").value'), '150');
 		await d.click('#btn-save-investment'); await d.waitFor('document.querySelector("#investment-observations [data-delete-observation]") && !document.querySelector("#investment-observations [data-delete-observation]").disabled');
 		await d.evaluate('window.confirm=()=>false'); await d.click('#investment-observations [data-delete-observation]');
 		assert.ok((await d.textContent('#investment-observations')).includes('150'));
 	});
 	it('retains acquired observation history while all investment accounts are archived', async () => {
-		const d = fixture.driver; await d.evaluate('window.__yose_app.db.mutateMasterConfig(c=>{for(const a of c.accounts.filter(a=>a.type==="investment")){a.is_archived=true;a.investment_history={"2026-10-20":{invested_amount:100,market_value:150}};}})');
+		const d = fixture.driver; await d.evaluate('window.__yose_app.db.mutateMasterConfig(c=>{for(const a of c.accounts.filter(a=>a.type==="investment")){a.is_archived=true;a.investment_history={"2026-10-20":{acquisition_cost:100,market_value:150}};}})');
 		await d.click('[data-analytics-target="assets"]'); await d.waitFor('document.querySelector("#investment-observations").textContent.includes("アーカイブ済み")');
 		assert.equal(await d.evaluate('document.querySelector("#btn-save-investment").disabled'), true);
 		assert.equal(await d.evaluate('Boolean(document.querySelector("#investment-observations [data-delete-observation]"))'), false);
@@ -322,15 +322,106 @@ describe('donation and investment error and draft operations', () => {
 });
 it('edits a past observation by date without changing a later observation or the current valuation', async () => {
 	const d = fixture.driver; await d.click('[data-analytics-target="assets"]');
-	await d.fill('#investment-date', '2026-10-19'); await d.fill('#investment-invested', '100'); await d.fill('#investment-valuation', '150'); await d.click('#btn-save-investment');
+	await d.fill('#investment-date', '2026-10-19'); await d.fill('#investment-acquisition-cost', '100'); await d.fill('#investment-valuation', '150'); await d.click('#btn-save-investment');
 	await d.waitFor('document.querySelector("#investment-observations").textContent.includes("2026-10-19") && !document.querySelector("#btn-save-investment").disabled');
 	await d.fill('#investment-date', '2026-10-20'); assert.equal(await d.evaluate('document.querySelector("#investment-valuation").value'), '');
-	await d.fill('#investment-invested', '120'); await d.fill('#investment-valuation', '180'); await d.click('#btn-save-investment');
+	await d.fill('#investment-acquisition-cost', '120'); await d.fill('#investment-valuation', '180'); await d.click('#btn-save-investment');
 	await d.waitFor('document.querySelector("#stat-external-assets").textContent.includes("180") && !document.querySelector("#btn-save-investment").disabled');
 	await d.fill('#investment-date', '2026-10-19'); assert.equal(await d.evaluate('document.querySelector("#investment-valuation").value'), '150');
 	await d.fill('#investment-valuation', '160'); await d.click('#btn-save-investment'); await d.waitFor('!document.querySelector("#btn-save-investment").disabled');
 	assert.equal(await d.textContent('#stat-external-assets'), '¥180');
 	const chart = await d.evaluate('window.__yose_app.chartController.assetHistoryChart.data');
-	assert.equal(chart.datasets.find(x=>x.label==='投資評価額').data[chart.labels.indexOf('2026-10-19')], 160);
-	assert.equal(chart.datasets.find(x=>x.label==='投資評価額').data.at(-1), 180);
+	assert.equal(chart.datasets.find(x=>x.label==='口座評価額（預り金込・参考）').data[chart.labels.indexOf('2026-10-19')], 160);
+	assert.equal(chart.datasets.find(x=>x.label==='口座評価額（預り金込・参考）').data.at(-1), 180);
+});
+
+it('collects explicitly selected gross salary and tax expenses while preserving notice inputs', async () => {
+	const d = fixture.driver;
+	await d.evaluate('window.__yose_app.db.mutateMasterConfig(c=>{c.categories.push({id:"salary",name:"税引前給与",type:"income",subcategories:[]},{id:"tax",name:"税・保険",type:"expense",subcategories:[{id:"resident",name:"住民税"},{id:"social",name:"社会保険料"}]});})');
+	await seed(d, [transaction('donation', { tags: ['ふるさと納税'] }), transaction('gross', { type: 'income', category_id: 'salary', actual_category_id: 'salary', date: '2025-12-31', amount: 6000000 }), transaction('resident', { category_id: 'tax', subcategory_id: 'resident', actual_category_id: 'tax', date: '2025-12-31', amount: 200000 }), transaction('insurance', { category_id: 'tax', subcategory_id: 'social', actual_category_id: 'tax', date: '2025-12-31', amount: 800000 })]);
+	await d.click('[data-analytics-target="budget"]'); await d.waitFor('document.querySelector("#furusato-source-salary option")');
+	await d.evaluate('for(const [field,category,sub] of [["salary","salary",null],["resident_tax","tax","resident"],["social_insurance","tax","social"]]){const s=document.getElementById("furusato-source-"+field);for(const o of s.options){const v=JSON.parse(o.value);o.selected=v.category_id===category&&v.subcategory_id===sub;}s.dispatchEvent(new Event("change",{bubbles:true}));}');
+	await d.fill('#furusato-resident-tax', '190000'); await d.select('#furusato-tax-rate', '20');
+	await d.click('#btn-save-furusato-sources'); await d.waitFor('(async()=> Boolean((await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_sources))()');
+	await d.waitFor('!document.querySelector("#btn-save-furusato").disabled');
+	assert.equal(await d.evaluate('document.querySelector("#furusato-resident-tax").value'), '190000');
+	const text = await d.textContent('#furusato-ledger-summary'); for (const amount of ['6,000,000', '200,000', '800,000']) assert.ok(text.includes(amount));
+	assert.ok((await d.textContent('#furusato-summary')).includes('概算上限 未算出'));
+	await d.click('#btn-save-furusato'); await d.waitFor('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_estimate?.resident_tax===190000)()');
+	assert.equal(await d.evaluate('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_sources.salary[0].category_id)()'), 'salary');
+});
+it('shows legacy contributions as an unknown holding cost until explicitly corrected', async () => {
+	const d = fixture.driver;
+	await d.evaluate('window.__yose_app.db.mutateMasterConfig(c=>{c.accounts.find(a=>a.id==="acc_investment_main").investment_history={"2026-10-20":{invested_amount:500,market_value:1000}};})');
+	await d.click('[data-analytics-target="assets"]'); await d.waitFor('document.querySelector("#investment-observations").textContent.includes("旧形式")');
+	assert.equal(await d.evaluate('document.querySelector("#investment-acquisition-cost").value'), '');
+	assert.equal(await d.evaluate('window.__yose_app.chartController.assetHistoryChart.data.datasets.find(x=>x.label==="取得原価（直近記録）").data.at(-1)'), null);
+	await d.fill('#investment-acquisition-cost', '600'); await d.click('#btn-save-investment');
+	await d.waitFor('window.__yose_app.chartController.assetHistoryChart.data.datasets.find(x=>x.label==="取得原価（直近記録）").data.at(-1)===600');
+});
+
+it('keeps payroll source drafts during refresh, freezes them while saving and restores selections on failure', async () => {
+	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]');
+	await d.evaluate('{const s=document.querySelector("#furusato-source-salary");s.options[0].selected=true;s.dispatchEvent(new Event("change",{bubbles:true}));}');
+	const selected = await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)');
+	await d.evaluate('window.__yose_app.summaryController.renderSummary()');
+	assert.deepEqual(await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)'), selected);
+	await d.evaluate('window.__yose_app.db.saveMasterConfig=async()=>{await new Promise(r=>window.__sourceRelease=r);throw new Error("source failure")};');
+	await d.click('#btn-save-furusato-sources'); await d.waitFor('typeof window.__sourceRelease==="function"');
+	assert.equal(await d.evaluate('[...document.querySelectorAll("#furusato-card input,#furusato-card select,#furusato-card button")].every(e=>e.disabled)'), true);
+	await d.evaluate('window.__sourceRelease()'); await d.waitFor('document.querySelector("#furusato-error").textContent.includes("source failure")');
+	assert.equal(await d.evaluate('[...document.querySelectorAll("#furusato-card input,#furusato-card select,#furusato-card button")].every(e=>!e.disabled)'), true);
+	assert.deepEqual(await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)'), selected);
+});
+it('does not clear another year payroll draft when an earlier year save finishes', async () => {
+	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] }), transaction('nextGift', { date: '2027-01-01', target_month: '2027-01', tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]');
+	await d.evaluate('const app=window.__yose_app,save=app.db.saveMasterConfig.bind(app.db);app.db.saveMasterConfig=async(...args)=>{await new Promise(r=>window.__yearRelease=r);return save(...args);};');
+	await d.click('#btn-save-furusato-sources'); await d.waitFor('typeof window.__yearRelease==="function"');
+	await d.evaluate('window.__yose_app.selectedYear="2027";window.__yose_app.summaryController.renderSummary()'); await d.waitFor('window.__yose_app.insightsController.sourceDraft?.year==="2027"');
+	await d.evaluate('window.__yearRelease()'); await d.waitFor('!document.querySelector("#btn-save-furusato-sources").disabled');
+	assert.equal(await d.evaluate('window.__yose_app.insightsController.sourceDraft.year'), '2027');
+	assert.equal(await d.evaluate('document.querySelector("#furusato-resident-tax").value'), '');
+	assert.equal(await d.evaluate('(async()=> Boolean((await window.__yose_app.db.getMasterConfig()).annual_budgets[2027]?.furusato_sources))()'), false);
+});
+it('saves payroll sources with blank notice inputs and preserves an unsaved source when saving notice only', async () => {
+	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]');
+	await d.evaluate('{const s=document.querySelector("#furusato-source-salary");s.options[0].selected=true;s.dispatchEvent(new Event("change",{bubbles:true}));}');
+	await d.click('#btn-save-furusato-sources'); await d.waitFor('(async()=> Boolean((await window.__yose_app.db.getMasterConfig()).annual_budgets[2026]?.furusato_sources))()');
+	await d.waitFor('!document.querySelector("#btn-save-furusato-sources").disabled');
+	const saved = await d.evaluate('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_sources)()');
+	assert.equal(await d.evaluate('document.querySelector("#furusato-resident-tax").value'), ''); assert.ok((await d.textContent('#furusato-summary')).includes('概算上限 未算出'));
+	await d.evaluate('{const s=document.querySelector("#furusato-source-salary");for(const o of s.options)o.selected=false;s.options[1].selected=true;s.dispatchEvent(new Event("change",{bubbles:true}));}');
+	const draft = await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)');
+	await d.fill('#furusato-resident-tax', '200000'); await d.select('#furusato-tax-rate', '20'); await d.click('#btn-save-furusato'); await d.waitFor('document.querySelector("#furusato-summary").textContent.includes("59,487")');
+	assert.deepEqual(await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)'), draft);
+	assert.deepEqual(await d.evaluate('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_sources)()'), saved);
+});
+it('discards a payroll save held in encryption after lock and leaves a newly unlocked draft intact', async () => {
+	const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]');
+	await d.evaluate('const app=window.__yose_app,db=app.db,encrypt=db.encryptRecord.bind(db);window.__sourceRawBefore=db.captureImportState();let once=true;db.encryptRecord=async(...args)=>{if(once){once=false;await new Promise(r=>window.__encryptRelease=r);}return encrypt(...args);};const c=app.insightsController,save=c.saveFurusatoSources.bind(c);c.saveFurusatoSources=async()=>{try{return await save();}finally{window.__sourceOldDone=true;}};');
+	await d.click('#btn-save-furusato-sources'); await d.waitFor('typeof window.__encryptRelease==="function"');
+	await d.evaluate('window.__yose_app.authController.showLockScreen()');
+	assert.equal(await d.evaluate('document.querySelector("#furusato-source-salary").selectedOptions.length'), 0);
+	assert.equal(await d.evaluate('(async()=> JSON.stringify(await window.__yose_app.db.captureImportState())===JSON.stringify(await window.__sourceRawBefore))()'), true);
+	await d.fill('#auth-pin-input', '1234'); await d.click('#btn-auth-pin'); await d.waitFor('document.querySelector("#auth-screen").classList.contains("hidden") && !document.querySelector("main").inert');
+	await d.click('[data-analytics-target="budget"]'); await d.waitFor('window.__yose_app.insightsController.sourceDraft?.year==="2026"');
+	await d.evaluate('{const s=document.querySelector("#furusato-source-salary");s.options[0].selected=true;s.dispatchEvent(new Event("change",{bubbles:true}));}');
+	const draft = await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)');
+	await d.evaluate('window.__encryptRelease()'); await d.waitFor('window.__sourceOldDone===true');
+	assert.deepEqual(await d.evaluate('[...document.querySelector("#furusato-source-salary").selectedOptions].map(o=>o.value)'), draft);
+	assert.equal(await d.evaluate('document.querySelector("#btn-save-furusato-sources").disabled'), false);
+	assert.equal(await d.evaluate('(async()=> Boolean((await window.__yose_app.db.getMasterConfig()).annual_budgets[2026]?.furusato_sources))()'), false);
+});
+
+it('holds acquisition costs until the next observation using a stepped yearly chart', async () => {
+	const d = fixture.driver;
+	await d.evaluate('window.__yose_app.db.mutateMasterConfig(c=>{c.accounts.find(a=>a.id==="acc_investment_main").investment_history={"2026-01-10":{acquisition_cost:100,market_value:150},"2026-06-15":{acquisition_cost:120,market_value:180}};})');
+	await d.click('[data-analytics-target="assets"]'); await d.select('#select-asset-period', 'year');
+	await d.waitFor('window.__yose_app.chartController.assetHistoryChart.data.labels.includes("2026-06-15")');
+	const data = await d.evaluate('window.__yose_app.chartController.assetHistoryChart.data');
+	const cost = data.datasets.find(series => series.label === '取得原価（直近記録）');
+	assert.equal(cost.stepped, 'before');
+	assert.equal(cost.data[data.labels.indexOf('2026-01-10')], 100);
+	assert.equal(cost.data[data.labels.indexOf('2026-05-31')], 100);
+	assert.equal(cost.data[data.labels.indexOf('2026-06-15')], 120);
 });

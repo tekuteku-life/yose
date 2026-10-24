@@ -397,7 +397,7 @@ export class SummaryController {
 				...historyOptions, investmentAccountId: document.getElementById('asset-investment-account').value
 			});
 			this.chartController.renderAssetHistory(history);
-			document.getElementById('asset-history-notice').textContent = history.notice + (history.points.some(point => point.investment_contributions === null) ? ' 投資額は元本・履歴不足のため未算出の期間があります。評価記録を登録してください。' : '');
+			document.getElementById('asset-history-notice').textContent = history.notice + (history.points.some(point => point.investment_acquisition_cost === null) ? ' 保有商品の取得原価が未記録の期間・口座があります。取得原価を記録してください。' : '');
 			document.getElementById('asset-history-card').dataset.period = this.assetPeriod;
 		} catch (error) { if (generation === this.assetHistoryGeneration && !this.coordinator.isKeyLocked) alert(error.message); }
 	}

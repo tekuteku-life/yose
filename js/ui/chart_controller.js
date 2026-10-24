@@ -44,8 +44,8 @@ export class ChartController {
 			{ label: '純資産', data: history.points.map(point => point.net_assets), borderColor: '#2563eb' },
 			{ label: '流動資産', data: history.points.map(point => point.liquid_assets), borderColor: '#10b981' },
 			{ label: '投資資産（全口座）', data: history.points.map(point => point.investment_assets), borderColor: '#8b5cf6' },
-			{ label: '投資額（差引拠出額）', data: history.points.map(point => point.investment_contributions), borderColor: '#d97706', borderDash: [5, 3], spanGaps: false },
-			{ label: '投資評価額', data: history.points.map(point => point.investment_valuation), borderColor: '#db2777' },
+			{ label: '取得原価（直近記録）', data: history.points.map(point => point.investment_acquisition_cost), borderColor: '#d97706', borderDash: [5, 3], spanGaps: false, stepped: 'before' },
+			{ label: '口座評価額（預り金込・参考）', data: history.points.map(point => point.investment_valuation), borderColor: '#db2777' },
 			{ label: '負債', data: history.points.map(point => point.liabilities), borderColor: '#ef4444' }
 		] };
 		if (window.Chart) {

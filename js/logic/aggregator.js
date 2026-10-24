@@ -39,13 +39,17 @@ export function buildAssetHistory(snapshot = {}, transactions = [], accounts = [
 		if (end >= start) dates.add(end);
 	}
 	for (const date of observationDates) if (date >= start && date <= end) dates.add(date);
+	const investments = accounts.filter(account => account.type === 'investment' && account.is_asset !== false && (!options.investmentAccountId || options.investmentAccountId === 'all' || account.id === options.investmentAccountId));
 	let missing = false;
 	const points = [];
 	for (const date of [...dates].sort()) {
 		const target = date.slice(0, 7);
 		const exact = date === monthEnd(target) && histories[target]?.closing_balances;
 		const ledgerKnown = Boolean(exact || !snapshot.last_closed_month || target > snapshot.last_closed_month || options.archiveMonths?.includes(target));
-		if (!ledgerKnown) { missing = true; if (!observationDates.includes(date)) continue; }
+		if (!ledgerKnown) {
+			missing = true;
+			if (!observationDates.includes(date) && !investments.some(account => investmentAtDate(account, knownTransactions, date, snapshot, options).acquisitionCost !== null)) continue;
+		}
 		const anchor = anchors.filter(key => monthEnd(key) <= date).at(-1);
 		const balances = exact ? { ...exact } : anchor ? { ...histories[anchor].closing_balances } : Object.fromEntries(accounts.map(account => [account.id, Number(account.initial_balance) || 0]));
 		if (!exact) for (const tx of knownTransactions) {
@@ -53,10 +57,9 @@ export function buildAssetHistory(snapshot = {}, transactions = [], accounts = [
 		}
 		const valued = applyInvestmentValuations(balances, accounts, knownTransactions, date, snapshot, options);
 		const totals = ledgerKnown ? calculateTotalAssetSummary(valued, accounts) : { net_assets: null, liquid_assets: null, investment_assets: null, liabilities: null };
-		const investments = accounts.filter(account => account.type === 'investment' && account.is_asset !== false && (!options.investmentAccountId || options.investmentAccountId === 'all' || account.id === options.investmentAccountId));
-		const contributed = investments.map(account => investmentAtDate(account, knownTransactions, date, snapshot, options).invested);
+		const costs = investments.map(account => investmentAtDate(account, knownTransactions, date, snapshot, options).acquisitionCost);
 		points.push({ date, net_assets: totals.net_assets, liquid_assets: totals.liquid_assets, investment_assets: totals.investment_assets, liabilities: totals.liabilities,
-			investment_contributions: contributed.some(value => value === null) ? null : contributed.reduce((sum, value) => sum + value, 0),
+			investment_acquisition_cost: costs.some(value => value === null) ? null : costs.reduce((sum, value) => sum + value, 0),
 			investment_valuation: investments.reduce((sum, account) => {
 				const value = investmentAtDate(account, knownTransactions, date, snapshot, options).valuation;
 				return sum === null || (value === null && !ledgerKnown) ? null : sum + (value ?? valued[account.id] ?? 0);

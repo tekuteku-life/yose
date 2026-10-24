@@ -73,8 +73,11 @@ export function createDataIntegrityValidator() {
 				else for (const [day, value] of Object.entries(item.investment_history)) {
 					const location = `${path}.investment_history.${day}`;
 					if (!date(day)) issue('date', location, '評価日が不正です', day);
-					if (!object(value)) { issue('shape', location, '拠出額と評価額が必要です'); continue; }
-					number(value.invested_amount, `${location}.invested_amount`, { required: true, integer: true });
+					if (!object(value)) { issue('shape', location, '取得原価と評価額が必要です'); continue; }
+					if (value.acquisition_cost !== undefined) {
+						number(value.acquisition_cost, `${location}.acquisition_cost`, { required: true, integer: true, min: 0 });
+						if (value.invested_amount !== undefined) issue('shape', location, '取得原価と旧拠出額は同時に指定できません');
+					} else number(value.invested_amount, `${location}.invested_amount`, { required: true, integer: true });
 					number(value.market_value, `${location}.market_value`, { required: true, integer: true, min: 0 });
 				}
 			}
@@ -198,6 +201,26 @@ export function createDataIntegrityValidator() {
 				else {
 					number(estimate.resident_tax, `${path}.furusato_estimate.resident_tax`, { required: true, integer: true, min: 0 });
 					if (![0, 5, 10, 20, 23, 33, 40, 45].includes(estimate.income_tax_rate)) issue('enum', `${path}.furusato_estimate.income_tax_rate`, '特例控除用税率が不正です', estimate.income_tax_rate);
+				}
+			}
+			if (entry.furusato_sources !== undefined) {
+				const sourcePath = `${path}.furusato_sources`, sources = entry.furusato_sources;
+				if (!object(sources)) issue('shape', sourcePath, '給与・税・保険の集計元が必要です');
+				else {
+					const selected = [];
+					for (const [field, values] of Object.entries(sources)) {
+						const location = `${sourcePath}.${field}`;
+						if (!['salary', 'income_tax', 'resident_tax', 'social_insurance'].includes(field)) { issue('shape', location, '集計項目が不正です'); continue; }
+						for (const value of list(values, location)) {
+							if (!object(value)) { issue('shape', location, '計上費目と中項目の参照が必要です'); continue; }
+							ref(value.category_id, categories, `${location}.category_id`, true);
+							if (value.subcategory_id !== null) ref(value.subcategory_id, children.get(value.category_id) || new Map(), `${location}.subcategory_id`, true);
+							const category = categories.get(value.category_id);
+							if (category && category.type !== (field === 'salary' ? 'income' : 'expense')) issue('category_type', location, '集計項目と費目の収支種別が一致しません', value.category_id);
+							if (selected.some(other => other.field !== field && other.category_id === value.category_id && (other.subcategory_id === null || value.subcategory_id === null || other.subcategory_id === value.subcategory_id))) issue('shape', sourcePath, '異なる集計項目に同じ費目・中項目を重複指定できません');
+							selected.push({ ...value, field });
+						}
+					}
 				}
 			}
 			for (const field of ['savings_target_rate', 'target_savings_rate']) number(entry[field], `${path}.${field}`, { min: 0, max: 100 });

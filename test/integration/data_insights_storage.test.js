@@ -45,16 +45,16 @@ describe('insights and bulk updates at the repository boundary', () => {
 	});
 	it('stores and compares investment observations by account/date without overwriting another date', async () => {
 		const id = 'acc_investment_main';
-		await db.saveInvestmentObservation(id, '2026-10-20', { invested_amount: 100, market_value: 150 }, null);
-		await db.saveInvestmentObservation(id, '2026-10-21', { invested_amount: 120, market_value: 175 }, null);
-		await assert.rejects(db.saveInvestmentObservation(id, '2026-10-20', { invested_amount: 200, market_value: 300 }, null), /変更/);
-		await db.saveInvestmentObservation(id, '2026-10-20', null, { invested_amount: 100, market_value: 150 });
+		await db.saveInvestmentObservation(id, '2026-10-20', { acquisition_cost: 100, market_value: 150 }, null);
+		await db.saveInvestmentObservation(id, '2026-10-21', { acquisition_cost: 120, market_value: 175 }, null);
+		await assert.rejects(db.saveInvestmentObservation(id, '2026-10-20', { acquisition_cost: 200, market_value: 300 }, null), /変更/);
+		await db.saveInvestmentObservation(id, '2026-10-20', null, { acquisition_cost: 100, market_value: 150 });
 		const account = (await db.getMasterConfig()).accounts.find(a => a.id === id);
-		assert.deepEqual(account.investment_history, { '2026-10-21': { invested_amount: 120, market_value: 175 } });
+		assert.deepEqual(account.investment_history, { '2026-10-21': { acquisition_cost: 120, market_value: 175 } });
 	});
 	it('preserves new data through backups and non-destructive imports', async () => {
 		const config = await db.getMasterConfig();
-		config.accounts.find(a => a.id === 'acc_investment_main').investment_history = { '2026-10-20': { invested_amount: 100, market_value: 150 } };
+		config.accounts.find(a => a.id === 'acc_investment_main').investment_history = { '2026-10-20': { acquisition_cost: 100, market_value: 150 } };
 		config.annual_budgets = { 2026: { furusato_estimate: { resident_tax: 200000, income_tax_rate: 20 } } };
 		await db.saveMasterConfig(config);
 		const copy = new YoseDB(); await copy.init(); await copy.importFullData(await db.exportFullData());
@@ -63,7 +63,7 @@ describe('insights and bulk updates at the repository boundary', () => {
 	});
 	it('validates observations and tax settings at the shared ingress boundary', async () => {
 		const original = await db.getMasterConfig();
-		for (const history of [{ '2026-02-30': { invested_amount: 0, market_value: 1 } }, { '2026-10-20': { invested_amount: 1.5, market_value: -1 } }, []]) {
+		for (const history of [{ '2026-02-30': { acquisition_cost: 0, market_value: 1 } }, { '2026-10-20': { acquisition_cost: 1.5, market_value: -1 } }, []]) {
 			const config = structuredClone(original); config.accounts.find(a => a.id === 'acc_investment_main').investment_history = history;
 			assert.throws(() => dataIntegrity.assertChange({}, { master_config: config }, { strict: true }));
 		}
@@ -82,13 +82,13 @@ describe('insights concurrency and failure boundaries', () => {
 				const db = await make(); const state = await db.captureImportState(); const encrypt = db.encryptRecord.bind(db); let calls = 0;
 				db.encryptRecord = async (...args) => { if (++calls === (operation === 'bulk' && race === 'encryptFailure' ? 2 : 1)) { if (race === 'lock') db.clearEncryptionKey(); else throw new Error('encryption failure'); } return encrypt(...args); };
 				const originals = await db.getTransactions();
-				await assert.rejects(operation === 'bulk' ? db.bulkEditTransactions(originals, { memo: 'change' }, []) : db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { invested_amount: 100, market_value: 120 }, null));
+				await assert.rejects(operation === 'bulk' ? db.bulkEditTransactions(originals, { memo: 'change' }, []) : db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { acquisition_cost: 100, market_value: 120 }, null));
 				assert.deepEqual(await db.captureImportState(), state);
 			});
 		}
 	}
 	it('rejects an archived or changed investment account and stale same-day deletion', async () => {
-		const db = await make(); const value = { invested_amount: 100, market_value: 120 };
+		const db = await make(); const value = { acquisition_cost: 100, market_value: 120 };
 		await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', value, null);
 		await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { ...value, market_value: 130 }, value);
 		await assert.rejects(db.saveInvestmentObservation('acc_investment_main', '2026-10-20', null, value), /変更/);
@@ -96,10 +96,10 @@ describe('insights concurrency and failure boundaries', () => {
 		await assert.rejects(db.saveInvestmentObservation('acc_investment_main', '2026-10-21', value, null));
 	});
 	it('keeps local same-day observations and estimates while importing missing dates and years', async () => {
-		const db = await make(); const value = { invested_amount: 100, market_value: 120 };
+		const db = await make(); const value = { acquisition_cost: 100, market_value: 120 };
 		await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', value, null);
 		await db.mutateMasterConfig(c => { c.annual_budgets[2026] = { furusato_estimate: { resident_tax: 200000, income_tax_rate: 20 } }; });
-		const config = await db.getMasterConfig(); config.accounts.find(a => a.id === 'acc_investment_main').investment_history = { '2026-10-20': { invested_amount: 999, market_value: 999 }, '2026-10-21': value };
+		const config = await db.getMasterConfig(); config.accounts.find(a => a.id === 'acc_investment_main').investment_history = { '2026-10-20': { acquisition_cost: 999, market_value: 999 }, '2026-10-21': value };
 		config.annual_budgets[2026].furusato_estimate.resident_tax = 999; config.annual_budgets[2027] = { furusato_estimate: { resident_tax: 300000, income_tax_rate: 20 } };
 		await db.importFullData({ master_config: config }); const after = await db.getMasterConfig();
 		assert.deepEqual(after.accounts.find(a => a.id === 'acc_investment_main').investment_history, { '2026-10-20': value, '2026-10-21': value });
@@ -137,32 +137,32 @@ it('rejects a newly archived target and a newly closed month without partially w
 	await assert.rejects(db.bulkEditTransactions(originals, { memo: 'closed' }, []), /承認/);
 	assert.equal((await db.getTransaction('a')).memo, 'a'); assert.equal((await db.getTransaction('b')).memo, 'b');
 });
-it('validates observation invariants independently and accepts a negative contributed amount and zero valuation', async () => {
+it('validates observation invariants independently and rejects negative acquisition costs and accepts zero valuation', async () => {
 	const db = new YoseDB(); await db.init(); const config = await db.getMasterConfig();
-	for (const [id, value] of [['acc_investment_main', { invested_amount: 1.5, market_value: 0 }], ['acc_investment_main', { invested_amount: 0, market_value: -1 }], ['acc_investment_main', { invested_amount: Number.MAX_SAFE_INTEGER + 1, market_value: 0 }], ['acc_wallet', { invested_amount: 0, market_value: 0 }]]) {
+	for (const [id, value] of [['acc_investment_main', { acquisition_cost: -100, market_value: 0 }], ['acc_investment_main', { acquisition_cost: 1.5, market_value: 0 }], ['acc_investment_main', { acquisition_cost: 0, market_value: -1 }], ['acc_investment_main', { acquisition_cost: Number.MAX_SAFE_INTEGER + 1, market_value: 0 }], ['acc_wallet', { acquisition_cost: 0, market_value: 0 }]]) {
 		const bad = structuredClone(config); bad.accounts.find(a => a.id === id).investment_history = { '2026-10-20': value };
 		await assert.rejects(db.saveMasterConfig(bad));
 	}
-	await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { invested_amount: -100, market_value: 0 }, null);
-	assert.equal((await db.getMasterConfig()).accounts.find(a => a.id === 'acc_investment_main').investment_history['2026-10-20'].invested_amount, -100);
+	await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { acquisition_cost: 0, market_value: 0 }, null);
+	assert.equal((await db.getMasterConfig()).accounts.find(a => a.id === 'acc_investment_main').investment_history['2026-10-20'].acquisition_cost, 0);
 });
 for (const race of ['sameDate', 'otherDate', 'removedAccount', 'changedType']) {
 	it(`compares investment observations after encryption races: ${race}`, async () => {
 		const db = new YoseDB(); await db.init(); db.setEncryptionKey(await generateDatabaseMasterKey());
 		await db.mutateMasterConfig(c => { c.accounts.push({ id: 'newStock', name: '証券2', type: 'investment', is_asset: true, initial_balance: 0 }); });
-		const value = { invested_amount: 100, market_value: 120 }; const encrypt = db.encryptRecord.bind(db); let once = true;
+		const value = { acquisition_cost: 100, market_value: 120 }; const encrypt = db.encryptRecord.bind(db); let once = true;
 		db.encryptRecord = async (...args) => { if (once) { once = false;
-			if (race === 'sameDate' || race === 'otherDate') await db.saveInvestmentObservation('newStock', race === 'sameDate' ? '2026-10-20' : '2026-10-21', { invested_amount: 200, market_value: 250 }, null);
+			if (race === 'sameDate' || race === 'otherDate') await db.saveInvestmentObservation('newStock', race === 'sameDate' ? '2026-10-20' : '2026-10-21', { acquisition_cost: 200, market_value: 250 }, null);
 			else await db.mutateMasterConfig(c => { if (race === 'removedAccount') c.accounts = c.accounts.filter(a => a.id !== 'newStock'); else c.accounts.find(a => a.id === 'newStock').type = 'bank'; });
 		} return encrypt(...args); };
 		const save = db.saveInvestmentObservation('newStock', '2026-10-20', value, null);
-		if (race === 'otherDate') { await save; assert.deepEqual((await db.getMasterConfig()).accounts.find(a => a.id === 'newStock').investment_history, { '2026-10-20': value, '2026-10-21': { invested_amount: 200, market_value: 250 } }); }
+		if (race === 'otherDate') { await save; assert.deepEqual((await db.getMasterConfig()).accounts.find(a => a.id === 'newStock').investment_history, { '2026-10-20': value, '2026-10-21': { acquisition_cost: 200, market_value: 250 } }); }
 		else { await assert.rejects(save); const current = (await db.getMasterConfig()).accounts.find(a => a.id === 'newStock'); if (race === 'sameDate') assert.equal(current.investment_history['2026-10-20'].market_value, 250); if (race === 'removedAccount') assert.equal(current, undefined); if (race === 'changedType') assert.equal(current.type, 'bank'); }
 	});
 }
 it('rejects malformed observations and tax inputs before a non-destructive merge can hide them', async () => {
 	const db = new YoseDB(); await db.init();
-	await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { invested_amount: 100, market_value: 150 }, null);
+	await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { acquisition_cost: 100, market_value: 150 }, null);
 	await db.mutateMasterConfig(c => { c.annual_budgets[2026] = { furusato_estimate: { resident_tax: 200000, income_tax_rate: 20 } }; });
 	const before = await db.captureImportState(); const config = await db.getMasterConfig();
 	const bad = structuredClone(config); bad.accounts.find(a => a.id === 'acc_investment_main').investment_history['2026-10-20'].market_value = -1;
@@ -205,7 +205,7 @@ it('retries a coherent analytics read when complete transaction replacement chan
 });
 it('never trusts an archive-completeness flag supplied inside a backup snapshot', async () => {
 	const db = new YoseDB(); await db.init(); db.setEncryptionKey(await generateDatabaseMasterKey());
-	await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { invested_amount: 100, market_value: 150 }, null);
+	await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { acquisition_cost: 100, market_value: 150 }, null);
 	const backup = await db.exportFullData(); backup.summary_snapshot.archiveHistoryComplete = true;
 	await db.importFullData({ summary_snapshot: backup.summary_snapshot });
 	assert.equal((await db.getAnalyticsState()).historyOptions.historyComplete, false);
@@ -217,4 +217,69 @@ it('validates both master-config and top-level annual budgets even when the latt
 	const db = new YoseDB(); await db.init(); const before = await db.captureImportState();
 	await assert.rejects(db.importFullData({ master_config: { accounts: [] }, annual_budgets: { 2026: { furusato_estimate: { resident_tax: 200000, income_tax_rate: 19 } } } }));
 	assert.deepEqual(await db.captureImportState(), before);
+});
+
+it('persists explicit payroll sources without notification inputs and rejects wrong, overlapping and malformed references', async () => {
+	const db = new YoseDB(); await db.init(); db.setEncryptionKey(await generateDatabaseMasterKey());
+	const config = await db.getMasterConfig();
+	config.categories.push({ id: 'salary', name: '給与', type: 'income', subcategories: [] }, { id: 'tax', name: '税', type: 'expense', subcategories: [{ id: 'resident', name: '住民税' }, { id: 'income', name: '所得税' }] });
+	const sources = { salary: [{ category_id: 'salary', subcategory_id: null }], income_tax: [{ category_id: 'tax', subcategory_id: 'income' }], resident_tax: [{ category_id: 'tax', subcategory_id: 'resident' }], social_insurance: [] };
+	config.annual_budgets[2026] = { furusato_sources: sources }; await db.saveMasterConfig(config);
+	const before = await db.captureImportState();
+	for (const bad of [[], { salary: 'salary' }, { salary: [null] }, { salary: [{ category_id: 'missing', subcategory_id: null }] }, { salary: [{ category_id: 'tax', subcategory_id: null }] }, { resident_tax: [{ category_id: 'tax', subcategory_id: 'missing' }] }, { income_tax: [{ category_id: 'tax', subcategory_id: null }], resident_tax: [{ category_id: 'tax', subcategory_id: 'resident' }] }]) {
+		const value = await db.getMasterConfig(); value.annual_budgets[2026].furusato_sources = bad;
+		await assert.rejects(db.saveMasterConfig(value)); assert.deepEqual(await db.captureImportState(), before);
+	}
+	const copy = new YoseDB(); await copy.init(); await copy.importFullData(await db.exportFullData());
+	assert.deepEqual((await copy.getMasterConfig()).annual_budgets[2026].furusato_sources, sources);
+	const badBackup = await db.exportFullData(); badBackup.master_config.annual_budgets[2026].furusato_sources.salary = 'wrong';
+	await assert.rejects(db.importFullData(badBackup)); assert.deepEqual(await db.captureImportState(), before);
+});
+it('retains legacy contribution records without treating them as acquisition costs, then explicitly replaces them', async () => {
+	const db = new YoseDB(); await db.init(); const legacy = { invested_amount: -100, market_value: 150 };
+	await db.mutateMasterConfig(c => { c.accounts.find(a => a.id === 'acc_investment_main').investment_history = { '2026-10-20': legacy }; });
+	assert.equal(investmentAtDate((await db.getMasterConfig()).accounts.find(a => a.id === 'acc_investment_main'), [], '2026-10-20', {}).acquisitionCost, null);
+	await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { acquisition_cost: 120, market_value: 150 }, legacy);
+	assert.deepEqual((await db.getMasterConfig()).accounts.find(a => a.id === 'acc_investment_main').investment_history['2026-10-20'], { acquisition_cost: 120, market_value: 150 });
+});
+it('imports standalone payroll sources once, preserves existing mappings, and rejects malformed unadopted input', async () => {
+	const db = new YoseDB(); await db.init(); const source = { salary: [{ category_id: 'cat_income_main', subcategory_id: 'sub_salary' }] };
+	await db.importFullData({ annual_budgets: { 2026: { furusato_sources: source } } });
+	assert.deepEqual((await db.getMasterConfig()).annual_budgets[2026].furusato_sources, source);
+	await db.importFullData({ annual_budgets: { 2026: { furusato_sources: {} }, 2027: { furusato_sources: source } } });
+	assert.deepEqual((await db.getMasterConfig()).annual_budgets[2026].furusato_sources, source);
+	assert.deepEqual((await db.getMasterConfig()).annual_budgets[2027].furusato_sources, source);
+	const before = await db.captureImportState();
+	await assert.rejects(db.importFullData({ master_config: await db.getMasterConfig(), annual_budgets: { 2026: { furusato_sources: { salary: 'wrong' } } } }));
+	assert.deepEqual(await db.captureImportState(), before);
+});
+it('rejects simultaneous acquisition cost and legacy contributions at normal save and non-destructive import', async () => {
+	const db = new YoseDB(); await db.init(); const value = { acquisition_cost: 100, market_value: 150 };
+	await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', value, null); const before = await db.captureImportState();
+	await assert.rejects(db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { ...value, invested_amount: 80 }, value));
+	const bad = await db.getMasterConfig(); bad.accounts.find(a => a.id === 'acc_investment_main').investment_history['2026-10-20'].invested_amount = 80;
+	await assert.rejects(db.importFullData({ master_config: bad })); assert.deepEqual(await db.captureImportState(), before);
+});
+
+it('validates even unadopted standalone payroll references against candidate categories', async () => {
+	const db = new YoseDB(); await db.init();
+	await db.importFullData({ annual_budgets: { 2026: { furusato_sources: { salary: [{ category_id: 'cat_income_main', subcategory_id: null }] } } } });
+	const before = await db.captureImportState();
+	for (const source of [{ category_id: 'missing', subcategory_id: null }, { category_id: 'cat_food', subcategory_id: null }, { category_id: 'cat_income_main', subcategory_id: 'missing' }]) {
+		await assert.rejects(db.importFullData({ annual_budgets: { 2026: { furusato_sources: { salary: [source] } } } }));
+		assert.deepEqual(await db.captureImportState(), before);
+		await assert.rejects(db.importFullData({ master_config: await db.getMasterConfig(), annual_budgets: { 2026: { furusato_sources: { salary: [source] } } } }));
+		assert.deepEqual(await db.captureImportState(), before);
+	}
+});
+it('rechecks payroll source references when category type changes during import encryption', async () => {
+	const db = new YoseDB(); await db.init(); db.setEncryptionKey(await generateDatabaseMasterKey());
+	await db.importFullData({ annual_budgets: { 2026: { furusato_sources: { salary: [{ category_id: 'cat_income_main', subcategory_id: null }] } } } });
+	const encrypt = db.encryptRecord.bind(db); let once = true, afterCategoryChange;
+	db.encryptRecord = async (...args) => {
+		if (once) { once = false; await db.mutateMasterConfig(c => { c.categories.find(category => category.id === 'cat_point_income').type = 'expense'; }); afterCategoryChange = await db.captureImportState(); }
+		return encrypt(...args);
+	};
+	await assert.rejects(db.importFullData({ annual_budgets: { 2026: { furusato_sources: { salary: [{ category_id: 'cat_point_income', subcategory_id: null }] } }, 2027: { expense_budget: 100 } } }));
+	assert.deepEqual(await db.captureImportState(), afterCategoryChange);
 });

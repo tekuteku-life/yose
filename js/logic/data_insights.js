@@ -37,3 +37,22 @@ export function buildFurusatoSummary(transactions, config, year) {
 	return { records, confirmed: sum('confirmed'), planned: sum('planned'), pending: records.filter(tx => tx.amount_pending).length,
 		previousIncome: previous.reduce((total, tx) => total + tx.amount, 0), previousCount: previous.length, limit, remaining: limit === null ? null : limit - sum('confirmed') };
 }
+
+
+export const FURUSATO_SOURCE_FIELDS = {
+	salary: { label: '給与・賞与（税引前）', type: 'income' },
+	income_tax: { label: '所得税', type: 'expense' },
+	resident_tax: { label: '住民税', type: 'expense' },
+	social_insurance: { label: '社会保険料', type: 'expense' }
+};
+/** 本人が明示した計上分類から、通知書確認用の取得済み明細だけを集計する。 */
+export function buildFurusatoLedgerSummary(transactions, config, year, sources = config.annual_budgets?.[year]?.furusato_sources || {}) {
+	return Object.fromEntries(Object.entries(FURUSATO_SOURCE_FIELDS).map(([field, definition]) => {
+		const selected = sources[field] || [];
+		const total = target => {
+			const rows = transactions.filter(tx => !tx.is_deleted && !tx.amount_pending && tx.status === 'confirmed' && tx.type === definition.type && tx.date.startsWith(`${target}-`) && selected.some(source => source.category_id === tx.category_id && (source.subcategory_id === null || source.subcategory_id === tx.subcategory_id)));
+			return { amount: rows.reduce((sum, tx) => sum + tx.amount, 0), count: rows.length };
+		};
+		return [field, { configured: selected.length > 0, previous: total(Number(year) - 1), current: total(year) }];
+	}));
+}

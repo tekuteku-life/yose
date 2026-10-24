@@ -58,7 +58,7 @@ export class YoseDB extends StorageEngine {
 		}
 	}
 
-	async saveMasterConfig(config, { expectedConfig = null } = {}) {
+	async saveMasterConfig(config, { expectedConfig = null, isSessionValid = null } = {}) {
 		const requested = structuredClone(config);
 		return this.mutateBusiness(state => {
 			let updated = requested;
@@ -69,7 +69,7 @@ export class YoseDB extends StorageEngine {
 			}
 			state.master_config = { ...updated, updated_at: new Date().toISOString() };
 			return { state, result: state.master_config };
-		});
+		}, { isSessionValid });
 	}
 
 	async mutateMasterConfig(mutator) {
@@ -449,6 +449,7 @@ export class YoseDB extends StorageEngine {
 			state.transactions = [...map.values()];
 			if (data.master_config) BackupMerger.mergeMasterConfig(state.master_config, data.master_config, stats);
 			else if (data.annual_budgets) BackupMerger.mergeMasterConfig(state.master_config, { annual_budgets: data.annual_budgets }, stats);
+			BackupMerger.validateImportData(data, detectedType, state.master_config.categories);
 			if (data.summary_snapshot) BackupMerger.mergeSummarySnapshot(state.summary_snapshot, data.summary_snapshot);
 			return { state, result: { success: true, stats, detectedType } };
 		}, { allowArchivedReferences: true });
@@ -497,6 +498,7 @@ export class YoseDB extends StorageEngine {
 
 	async saveInvestmentObservation(accountId, date, value, expectedValue, { isSessionValid = null } = {}) {
 		if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) throw new Error('評価記録の日付を確認してください。');
+		if (value !== null && !Number.isSafeInteger(value?.acquisition_cost)) throw new Error('保有商品の取得原価を入力してください。');
 		const requested = structuredClone(value), expected = structuredClone(expectedValue);
 		return this.mutateBusiness(state => {
 			const account = state.master_config.accounts.find(a => a.id === accountId);

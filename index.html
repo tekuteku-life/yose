@@ -333,7 +333,7 @@
 					<button type="button" id="btn-apply-asset-period" class="btn btn-secondary">期間を適用</button>
 				</div>
 				<label>投資推移の対象口座<select id="asset-investment-account" class="form-control"><option value="all">全投資口座</option></select></label>
-				<p>投資額は入金から出金を引いた差引拠出額です。評価額は日末の評価記録と、それ以後の確定入出金による参考推移です。市場価格の自動取得は行いません。元本・過去明細が不足する場合は未算出と表示します。</p>
+				<p>投資額は保有商品の取得原価です。直近の記録値を次の記録まで据え置きます。口座評価額は預り金を含む口座全体の日末記録と、その後の確定入出金による参考値です。市場価格は自動反映しません。取得原価との差額は含み損益を表しません。</p>
 				<p id="asset-history-notice" aria-live="polite"></p>
 				<div style="height:280px;position:relative;"><canvas id="asset-history-chart"></canvas></div>
 				<div id="asset-history-fallback" style="display:none;"></div>
@@ -344,11 +344,11 @@
 				<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;">
 					<label>投資口座<select id="investment-account" class="form-control"></select></label>
 					<label>評価日（日末）<input type="date" id="investment-date" class="form-control"></label>
-					<label>投資額（差引拠出額・円）<input type="number" step="1" id="investment-invested" class="form-control"></label>
-					<label>評価額（円）<input type="number" min="0" step="1" id="investment-valuation" class="form-control"></label>
+					<label>取得原価（保有商品合計・円）<input type="number" min="0" step="1" id="investment-acquisition-cost" class="form-control"></label>
+					<label>口座評価額（預り金込・円）<input type="number" min="0" step="1" id="investment-valuation" class="form-control"></label>
 					<button type="button" class="btn btn-primary" id="btn-save-investment">評価記録を保存</button>
 				</div>
-				<p>同日の記録がある場合は訂正します。投資額は開始時点の累計拠出額を入力してください。月末予測は現在評価額に予定入出金等の差を加えた参考値です。</p>
+				<p>同日の記録がある場合は訂正します。証券会社の保有商品一覧等を確認し、買付・売却後は残存する商品の取得原価合計を記録してください。月末予測は現在評価額に予定入出金等の差を加えた参考値です。</p>
 				<p id="investment-error" role="alert"></p>
 				<div id="investment-observations"></div>
 			</div>
@@ -406,12 +406,23 @@
 			<div class="card" id="furusato-card" style="display:none;">
 				<h3 class="card-title">ふるさと納税枠</h3>
 				<div id="furusato-summary" aria-live="polite"></div>
-				<p>取得済みの支出を取引年で集計します。タグまたは計上費目・中項目の名称が「ふるさと納税」の明細が対象です。前年の家計簿収入は手取入金等を含む参考値で、給与年収・課税所得ではありません。</p>
+				<p>寄附額と前年収入は家計簿から自動集計します。取得済みの支出を取引年で集計します。タグまたは計上費目・中項目の名称が「ふるさと納税」の明細が対象です。前年の家計簿収入は手取入金等を含む参考値で、給与年収・課税所得ではありません。</p>
 				<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;">
 					<label>住民税所得割額（調整控除後・円）<input id="furusato-resident-tax" class="form-control" type="number" min="0" step="1"></label>
 					<label>特例控除用税率<select id="furusato-tax-rate" class="form-control"><option value="">未入力</option><option value="0">0%</option><option value="5">5%</option><option value="10">10%</option><option value="20">20%</option><option value="23">23%</option><option value="33">33%</option><option value="40">40%</option><option value="45">45%</option></select></label>
 					<button type="button" id="btn-save-furusato" class="btn btn-primary">概算条件を保存</button>
 				</div>
+				<details open><summary>家計簿からの給与・税・社会保険料集計</summary>
+					<p>税引前給与と控除を別明細で記録している場合、集計元の計上費目・中項目を指定してください。複数選択できます。前年・当年の取得済み確定明細を自動集計します。通常の住民税支払額や源泉所得税額は、上限計算用の所得割額・税率とは異なります。所得割額と税率は通知書等で確認して上の欄へ入力してください。</p>
+					<div style="display:flex;gap:12px;flex-wrap:wrap;">
+						<label>給与・賞与（税引前）の集計元<select multiple size="4" id="furusato-source-salary" class="form-control"></select></label>
+						<label>所得税の集計元<select multiple size="4" id="furusato-source-income_tax" class="form-control"></select></label>
+						<label>住民税の集計元<select multiple size="4" id="furusato-source-resident_tax" class="form-control"></select></label>
+						<label>社会保険料の集計元<select multiple size="4" id="furusato-source-social_insurance" class="form-control"></select></label>
+					</div>
+					<button type="button" id="btn-save-furusato-sources" class="btn btn-secondary">集計元を保存</button>
+					<div id="furusato-ledger-summary" aria-live="polite"></div>
+				</details>
 				<p id="furusato-error" role="alert"></p>
 				<details><summary>概算の条件・計算式</summary><p>前年の通知書等を参考に、当年も同条件と仮定します。特例控除用税率は住民税の課税所得から人的控除差を調整して求め、通常の所得税率と異なる場合があります。所得割額×20%÷（90%−税率×1.021）＋2,000円を円未満切捨てで求めます。所得割額0円は概算上限0円です。対応する税制年は2015〜2037年です。所得や控除の変動、住宅ローン控除、他の寄附・分離課税等を反映した確定上限ではありません。</p><p><a href="https://www.nta.go.jp/taxes/shiraberu/taxanswer/shotoku/1155.htm" target="_blank" rel="noopener noreferrer">国税庁の制度説明</a> / <a href="https://www.4894.call.city.niigata.jp/Faq/X0309701?logid=0&amp;sugtype=6" target="_blank" rel="noopener noreferrer">新潟市の計算説明</a></p></details>
 				<div id="furusato-records"></div>
@@ -836,7 +847,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.14.0</span>
+					<span class="badge badge-info" id="badge-current-version">v1.15.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
