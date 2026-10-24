@@ -561,3 +561,8 @@ InsightsControllerは通知書入力のdirtyと集計元選択のdirtyを分離�
 ### I-3.59 グラフ操作と年間目標の連動
 
 chart_geometryの純関数、ChartViewportのイベント管理、ChartControllerの系列状態、収入履歴マップ、resolveAnnualTargetsの共通計算を分離する。保存・検証・同期・取込・認証世代は[グラフ・年間目標設計](chart_budget_improvements.md)を正本とする。
+
+<a id="i-3-29"></a>
+### I-3.29 明細行の横配置
+
+共通CSSの.tx-itemは子要素間のcolumn-gapを12pxとし、.tx-infoはflex:1で金額以外の残り幅を占め、text-align:leftで文字列を表示する。既存のjustify-content:space-betweenと金額側のtext-align:rightを維持する。選択チェックを含む3要素の行でも、.tx-infoを内容幅だけで中央へ置かない。明細の描画構造・クリック・チェック選択・金額計算・保存は変更しない。共通.tx-infoを利用する最近の入力と各内訳リストも左側を維持する。配布版を1.17.1へ同期する。

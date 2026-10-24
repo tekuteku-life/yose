@@ -317,6 +317,7 @@ header {
 
 .tx-item {
 	display: flex;
+	column-gap: 12px;
 	justify-content: space-between;
 	align-items: center;
 	padding: 12px;
@@ -331,6 +332,8 @@ header {
 }
 
 .tx-info {
+	flex: 1;
+	text-align: left;
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
