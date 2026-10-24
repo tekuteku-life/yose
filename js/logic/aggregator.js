@@ -3,6 +3,7 @@
  * Handles account balance calculation, daily/monthly/yearly aggregations, and total asset valuation.
  */
 
+import { applyInvestmentValuations, investmentAtDate } from './investment.js';
 import { formatDate, getLastDayOfMonth } from './date_utils.js';
 
 /** 確認できる月末残高と確定明細から資産推移を作る。未取得の過去日を補完しない。 */
@@ -18,7 +19,8 @@ export function buildAssetHistory(snapshot = {}, transactions = [], accounts = [
 	if (snapshot.last_closed_month && !histories[snapshot.last_closed_month]?.closing_balances) histories[snapshot.last_closed_month] = { closing_balances: snapshot.account_balances || {} };
 	const anchors = Object.keys(histories).filter(key => histories[key]?.closing_balances).sort();
 	const knownTransactions = transactions.filter(tx => !tx.is_deleted && tx.status === 'confirmed' && !tx.amount_pending);
-	const earliest = [...anchors.map(key => monthEnd(key)), ...knownTransactions.filter(tx => !snapshot.last_closed_month || tx.target_month > snapshot.last_closed_month).map(tx => tx.date)].sort()[0] || today;
+	const observationDates = accounts.flatMap(account => Object.keys(account.investment_history || {}));
+	const earliest = [...observationDates, ...anchors.map(key => monthEnd(key)), ...knownTransactions.filter(tx => !snapshot.last_closed_month || tx.target_month > snapshot.last_closed_month).map(tx => tx.date)].sort()[0] || today;
 	let start = mode === 'month' ? month + '-01' : mode === 'year' ? `${options.year || today.slice(0, 4)}-01-01` : mode === 'range' ? options.start : earliest;
 	let end = mode === 'month' ? monthEnd(month) : mode === 'year' ? `${options.year || today.slice(0, 4)}-12-31` : mode === 'range' ? options.end : today;
 	const valid = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') && Number.isFinite(Date.parse(value)) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
@@ -36,19 +38,32 @@ export function buildAssetHistory(snapshot = {}, transactions = [], accounts = [
 		}
 		if (end >= start) dates.add(end);
 	}
+	for (const date of observationDates) if (date >= start && date <= end) dates.add(date);
+	const investments = accounts.filter(account => account.type === 'investment' && account.is_asset !== false && (!options.investmentAccountId || options.investmentAccountId === 'all' || account.id === options.investmentAccountId));
 	let missing = false;
 	const points = [];
 	for (const date of [...dates].sort()) {
 		const target = date.slice(0, 7);
 		const exact = date === monthEnd(target) && histories[target]?.closing_balances;
-		if (!exact && snapshot.last_closed_month && target <= snapshot.last_closed_month && !options.archiveMonths?.includes(target)) { missing = true; continue; }
+		const ledgerKnown = Boolean(exact || !snapshot.last_closed_month || target > snapshot.last_closed_month || options.archiveMonths?.includes(target));
+		if (!ledgerKnown) {
+			missing = true;
+			if (!observationDates.includes(date) && !investments.some(account => investmentAtDate(account, knownTransactions, date, snapshot, options).acquisitionCost !== null)) continue;
+		}
 		const anchor = anchors.filter(key => monthEnd(key) <= date).at(-1);
 		const balances = exact ? { ...exact } : anchor ? { ...histories[anchor].closing_balances } : Object.fromEntries(accounts.map(account => [account.id, Number(account.initial_balance) || 0]));
 		if (!exact) for (const tx of knownTransactions) {
 			if (tx.date <= date && (!anchor || tx.target_month > anchor)) applyTxToBalances(balances, tx.type, tx.account_id, tx.to_account_id, Number(tx.amount) || 0);
 		}
-		const totals = calculateTotalAssetSummary(balances, accounts);
-		points.push({ date, net_assets: totals.net_assets, liquid_assets: totals.liquid_assets, investment_assets: totals.investment_assets, liabilities: totals.liabilities });
+		const valued = applyInvestmentValuations(balances, accounts, knownTransactions, date, snapshot, options);
+		const totals = ledgerKnown ? calculateTotalAssetSummary(valued, accounts) : { net_assets: null, liquid_assets: null, investment_assets: null, liabilities: null };
+		const costs = investments.map(account => investmentAtDate(account, knownTransactions, date, snapshot, options).acquisitionCost);
+		points.push({ date, net_assets: totals.net_assets, liquid_assets: totals.liquid_assets, investment_assets: totals.investment_assets, liabilities: totals.liabilities,
+			investment_acquisition_cost: costs.some(value => value === null) ? null : costs.reduce((sum, value) => sum + value, 0),
+			investment_valuation: investments.reduce((sum, account) => {
+				const value = investmentAtDate(account, knownTransactions, date, snapshot, options).valuation;
+				return sum === null || (value === null && !ledgerKnown) ? null : sum + (value ?? valued[account.id] ?? 0);
+			}, 0) });
 	}
 	return { mode, points, notice: missing ? '日別明細を取得できていない過去期間は、確認できる月末残高のみ表示している。手動同期で履歴を取得できる。' : points.length ? '' : '表示できる確定履歴はない。' };
 }

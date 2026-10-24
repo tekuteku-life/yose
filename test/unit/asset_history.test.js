@@ -40,3 +40,31 @@ describe('Asset history periods', () => {
 		assert.equal(result.points.at(-1).liabilities, 200);
 	});
 });
+
+it('keeps total asset series independent of selected investment account and propagates unknown capital', () => {
+	const accounts = [
+		{ id: 'a', name: 'A', type: 'investment', is_asset: true, initial_balance: 0, investment_history: { '2026-10-20': { acquisition_cost: 100, market_value: 150 } } },
+		{ id: 'b', name: 'B', type: 'investment', is_asset: true, initial_balance: 20 },
+		{ id: 'excluded', type: 'investment', is_asset: false, initial_balance: 0, investment_history: { '2026-10-20': { acquisition_cost: 999, market_value: 999 } } }
+	];
+	const snapshot = { account_balances: { a: 100, b: 20, excluded: 999 } };
+	const options = { mode: 'month', month: '2026-10', today: '2026-10-20' };
+	const all = logic.buildAssetHistory(snapshot, [], accounts, options).points.at(-1);
+	assert.equal(all.investment_acquisition_cost, null); assert.equal(all.investment_valuation, 170);
+	const one = logic.buildAssetHistory(snapshot, [], accounts, { ...options, investmentAccountId: 'a' }).points.at(-1);
+	assert.equal(one.investment_acquisition_cost, 100); assert.equal(one.investment_valuation, 150);
+	assert.equal(one.net_assets, all.net_assets);
+});
+it('retains a known investment observation even when all other balances on that day are unavailable', () => {
+	const accounts = [{ id: 'a', type: 'investment', is_asset: true, initial_balance: 0, investment_history: { '2026-09-15': { acquisition_cost: 100, market_value: 150 } } }];
+	const history = logic.buildAssetHistory({ last_closed_month: '2026-09', account_balances: { a: 500 } }, [], accounts, { mode: 'month', month: '2026-09', today: '2026-10-20' });
+	const observation = history.points.find(p => p.date === '2026-09-15');
+	assert.ok(observation); assert.equal(observation.net_assets, null); assert.equal(observation.investment_valuation, 150); assert.equal(observation.investment_acquisition_cost, 100);
+});
+
+it('keeps the last recorded holding cost across a range without acquired closed-day ledger details', () => {
+	const accounts = [{ id: 'a', type: 'investment', is_asset: true, investment_history: { '2026-09-15': { acquisition_cost: 100, market_value: 150 } } }];
+	const history = logic.buildAssetHistory({ last_closed_month: '2026-09', account_balances: { a: 500 } }, [], accounts, { mode: 'range', start: '2026-09-16', end: '2026-09-20', today: '2026-10-20' });
+	assert.equal(history.points.length, 5);
+	assert.ok(history.points.every(point => point.investment_acquisition_cost === 100 && point.net_assets === null && point.investment_valuation === null));
+});

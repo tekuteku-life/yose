@@ -2,6 +2,8 @@
  * Yoseatsume Kakeibo - High-Level Domain Repository (YoseDB)
  */
 
+import { buildDataMetadata } from '../logic/data_insights.js';
+import { buildBulkEdit } from '../logic/bulk_edit.js';
 import { dataIntegrity } from '../logic/data_integrity.js';
 import { buildMasterMigration } from '../logic/master_maintenance.js';
 import { buildAdvanceLink, linkedRepayment } from '../logic/advance_links.js';
@@ -56,7 +58,7 @@ export class YoseDB extends StorageEngine {
 		}
 	}
 
-	async saveMasterConfig(config, { expectedConfig = null } = {}) {
+	async saveMasterConfig(config, { expectedConfig = null, isSessionValid = null } = {}) {
 		const requested = structuredClone(config);
 		return this.mutateBusiness(state => {
 			let updated = requested;
@@ -67,7 +69,7 @@ export class YoseDB extends StorageEngine {
 			}
 			state.master_config = { ...updated, updated_at: new Date().toISOString() };
 			return { state, result: state.master_config };
-		});
+		}, { isSessionValid });
 	}
 
 	async mutateMasterConfig(mutator) {
@@ -137,6 +139,11 @@ export class YoseDB extends StorageEngine {
 			const replacements = { master: await this.encryptRecord(next.master_config), base: await this.encryptRecord(sharedMasterConfig(acceptedShared)) };
 			if (remoteState) {
 				replacements.snapshot = await this.encryptRecord(next.summary_snapshot);
+				const remoteVersion = canonicalJsonStringify({ master_config: remoteState.master_config, snapshot: remoteState.snapshot, pending_diffs: remoteState.pending_diffs, archived_transactions: remoteState.archived_transactions, archive_months: remoteState.archive_months });
+				if (replacements.snapshot.encrypted && remoteState.state_version === remoteVersion && Array.isArray(remoteState.archived_transactions) && Array.isArray(remoteState.pending_diffs) && Array.isArray(remoteState.archive_months)) {
+					replacements.snapshot.archiveHistoryComplete = true;
+					replacements.snapshot.archiveMonths = structuredClone(remoteState.archive_months);
+				}
 				const old = new Map(before.transactions.map((tx, i) => [tx.id, { tx, raw: expected.transactions[i] }]));
 				replacements.transactions = await Promise.all(next.transactions.map(tx => {
 					const previous = old.get(tx.id);
@@ -442,9 +449,68 @@ export class YoseDB extends StorageEngine {
 			state.transactions = [...map.values()];
 			if (data.master_config) BackupMerger.mergeMasterConfig(state.master_config, data.master_config, stats);
 			else if (data.annual_budgets) BackupMerger.mergeMasterConfig(state.master_config, { annual_budgets: data.annual_budgets }, stats);
+			BackupMerger.validateImportData(data, detectedType, state.master_config.categories);
 			if (data.summary_snapshot) BackupMerger.mergeSummarySnapshot(state.summary_snapshot, data.summary_snapshot);
 			return { state, result: { success: true, stats, detectedType } };
 		}, { allowArchivedReferences: true });
+	}
+
+	async getAnalyticsState() {
+		const key = this.encryptionKey;
+		while (true) {
+			const before = await this.captureImportState();
+			const raw = await this.captureImportState();
+			if (key !== this.encryptionKey) throw new Error('認証状態が変更されました。');
+			if (canonicalJsonStringify(before) !== canonicalJsonStringify(raw)) continue;
+			const state = await this.decodeBusinessState(raw);
+			if (key !== this.encryptionKey) throw new Error('認証状態が変更されました。');
+			const complete = Boolean(raw.snapshot?.encrypted && raw.snapshot.archiveHistoryComplete === true && Array.isArray(raw.snapshot.archiveMonths));
+			return { ...state, historyOptions: { historyComplete: complete, archiveMonths: complete ? raw.snapshot.archiveMonths : [] } };
+		}
+	}
+
+	async getDataMetadata() {
+		return buildDataMetadata(await this.getAnalyticsState());
+	}
+
+	async bulkEditTransactions(originals, patch, approvedMonths, { isSessionValid = null } = {}) {
+		const expected = structuredClone(originals);
+		const changes = structuredClone(patch);
+		return this.mutateBusiness(state => {
+			for (const original of expected) if (canonicalJsonStringify(state.transactions.find(tx => tx.id === original.id)) !== canonicalJsonStringify(original)) throw new Error('明細が変更されました。開き直して確認してください。');
+			const records = buildBulkEdit(expected, changes, state.transactions).map((record, i) => {
+				const original = expected[i];
+				if (!record.previous_target_month && original.target_month !== record.target_month) record.previous_target_month = original.target_month;
+				record.reclose_approved_months = [...new Set([...(original.reclose_approved_months || []), ...approvedMonths])].sort();
+				const closed = state.summary_snapshot?.last_closed_month;
+				const required = [original.target_month, record.target_month, record.previous_target_month].filter(month => month && closed && month <= closed);
+				if (required.some(month => !record.reclose_approved_months.includes(month))) throw new Error('締め済み月の承認が不足しています。最新の締め状態を確認してください。');
+				if (record.target_month <= closed && (record.status !== 'confirmed' || record.amount_pending)) throw new Error('締め済み月には金額入力済みの確定明細が必要です。');
+				record.updated_at = new Date(Math.max(Date.now(), transactionTimestamp(original.updated_at) + 1)).toISOString();
+				record.sync_status = 'unsynced';
+				return record;
+			});
+			const updated = new Map(records.map(record => [record.id, record]));
+			state.transactions = state.transactions.map(record => updated.get(record.id) || record);
+			return { state, result: records };
+		}, { isSessionValid });
+	}
+
+	async saveInvestmentObservation(accountId, date, value, expectedValue, { isSessionValid = null } = {}) {
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) throw new Error('評価記録の日付を確認してください。');
+		if (value !== null && !Number.isSafeInteger(value?.acquisition_cost)) throw new Error('保有商品の取得原価を入力してください。');
+		const requested = structuredClone(value), expected = structuredClone(expectedValue);
+		return this.mutateBusiness(state => {
+			const account = state.master_config.accounts.find(a => a.id === accountId);
+			if (!account || account.type !== 'investment' || account.is_archived) throw new Error('投資口座が変更されています。口座を確認してください。');
+			const current = account.investment_history?.[date] || null;
+			if (canonicalJsonStringify(current) !== canonicalJsonStringify(expected)) throw new Error('同日の投資記録が変更されています。日付を選び直して確認してください。');
+			account.investment_history ||= {};
+			if (requested === null) delete account.investment_history[date];
+			else account.investment_history[date] = requested;
+			state.master_config.updated_at = new Date().toISOString();
+			return { state, result: requested };
+		}, { isSessionValid });
 	}
 
 	async getPendingImport() {
@@ -507,7 +573,7 @@ export class YoseDB extends StorageEngine {
 			replacements.transactions = await Promise.all(data.transactions.map(tx => this.encryptRecord(tx, { id: tx.id, target_month: tx.target_month, date: tx.date, sync_status: tx.sync_status, is_deleted: Boolean(tx.is_deleted) })));
 		}
 		if (data.master_config || data.annual_budgets) replacements.master = await this.encryptRecord(content.master);
-		if (data.summary_snapshot) replacements.snapshot = await this.encryptRecord(content.snapshot);
+		if (data.summary_snapshot || data.transactions) replacements.snapshot = await this.encryptRecord(content.snapshot);
 		const pendingData = structuredClone(data);
 		if (pendingData.master_config) pendingData.master_config = sharedMasterConfig(pendingData.master_config);
 		const pending = { id: content.id, created_at: content.created_at, detectedType, data: pendingData };

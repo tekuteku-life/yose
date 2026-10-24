@@ -449,7 +449,7 @@ export class HeadlessBrowserDriver {
 				const x = rect.x + rect.width / 2;
 				const y = rect.y + rect.height / 2;
 				const target = document.elementFromPoint(x, y);
-				if (!target || !(el === target || el.contains(target))) throw new Error('Element is covered: ' + ${JSON.stringify(selector)});
+				if (!target || !(el === target || el.contains(target))) throw new Error('Element is covered: ' + ${JSON.stringify(selector)} + ' by ' + (target?.tagName || '') + '#' + (target?.id || '') + '.' + (target?.className || ''));
 				return { x, y };
 			})()
 		`);

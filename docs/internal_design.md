@@ -523,3 +523,36 @@ ES ModulesではglobalThisが存在するため、暗号APIの既定値にある
 ひも付け候補の読込中に元の編集画面を閉じた場合も、AdvanceLinkControllerの操作/読込世代を失効させる。編集closeから共通cancelを呼び、Escape・取消・保存・認証変更で閉じた元画面に遅延ダイアログを復活させない。取消後の再編集と新しいひも付け読込は独立して成功できる。
 
 鍵再生成の成功/取消/失敗通知は、実際の鍵保存を担当するAuthControllerだけが行う。設定イベント側の無条件の重複成功通知を除去し、PIN取消・誤PIN・保存失敗を成功として表示しない。コミット前の取消・誤PIN・保存失敗では公開鍵・PIN鍵束・既存パスキー原本を維持する。コミット直後ロックの場合は、保存済みの新鍵を戻さず既存のPIN復旧設計に従う。
+
+<a id="i-3-55"></a>
+## I-3.55〜58 分析追加と一括更新
+
+メタ情報のcount/confirmed/planned/日付/平均は非削除明細だけである。deletedだけは削除済みを数える。非削除0件では件数・平均・期間数0、日付なしである。サイズはsharedMasterConfig射影・summary_snapshot・全transactionsの論理JSONをTextEncoderで測定し、端末設定を除外する。
+
+getAnalyticsStateはmaster/transactions/snapshot rawを二重取得し一致を確認してから同じraw集合を復号する。不一致は再取得し、鍵変更は拒否する。メタ情報と資産表示はこの一貫読取を共用する。資産KPIと資産履歴は同じ取得状態を渡す。
+
+bulk_edit純関数は選択明細と全関連明細から共通能力を導出し、許可項目以外を拒否する。単なるgroup_idだけで関連とみなさず、同グループ複数件/補助情報/連携役割から判定する。DBのbulkEditTransactionsは開いた原本・認証鍵・最新設定/全明細をmutateBusiness内で比較/検証し原子的保存する。updated_at=max(現在時刻,原本updated_at+1ms)、sync_status=unsyncedを全対象へ適用する。既存previous_target_monthを保持し、未設定の移動時だけ原本target_monthを記録する。承認は既存と今回のreclose_approved_monthsの和集合とし、保存時点の締め境界に必要な全月の承認を再検証する。金額変更時tax_metaをクリアし、金額未入力を明示解除する。保存後描画失敗は保存失敗と分離する。モーダルを開く読取後に選択ID集合を再確認する。
+
+ふるさと納税は取引日で寄附年/前年確定収入を判定する。年度予算内furusato_estimate={resident_tax,income_tax_rate}に通知書入力値を保持する。furusato_sources={salary:[],income_tax:[],resident_tax:[],social_insurance:[]}は各要素{category_id,subcategory_id:nullまたはID}の計上分類参照である。salaryはincome、残りはexpense分類だけである。親指定は全子を含み、同項目内はORで一度だけ数える。異なる項目に同じ親/子が重なる指定は拒否する。共有validatorは形・必須参照・種別・重複を検証する。年度ごとに前年/当年の確定・金額既知・非削除・指定収支種別・取引年一致を集計する。実態分類は使わない。集計元だけの保存は通知書入力を変更しない。予定/金額未入力だけの年も枠を表示し、未入力は額を合計せず別件数とする。税率0%と所得割0円を区別し、所得割0円だけ上限0円とする。前年収入は取得済み確定額であり、snapshotと混ぜて二重計上せず、未取得を年収0円と断定しない。
+
+投資口座type=investmentのinvestment_historyはYYYY-MM-DDをキー、{acquisition_cost,market_value}を値とする日末観測マップである。共有validatorは投資口座だけ、実在日・取得原価/評価額とも0以上の安全整数を許可する。同日の旧値CASで追加/訂正/削除し、同日変更/口座削除/種別変更/アーカイブ化を拒否する。別日の変更は保持する。口座マスタ配下なので既存暗号・共有同期の対象である。非破壊取込は同日の手元値を保持して不足日を追加する。マージで採用しない値も含め、新たな税設定と評価記録の全入力を共通validatorで事前検証する。
+
+採用観測は観測日<=表示日、評価への加算取引は観測日<取引日<=表示日である。取得原価は直近観測のacquisition_costを保持し入出金を加算しない。未観測はnullである。旧形式invested_amountだけの観測は検証・保持するが取得原価として利用しない。両原価欄の併記を拒否し、訂正時に新形式へ置換する。旧形式に後続する日も取得原価を過去の新形式から探し直さない。評価の観測当日は常に観測値を採用する。観測後は確定取引で口座全体評価を増減する。評価再構成は、締めなし、または全archive受信の証拠がある場合だけ許可する。月次archive範囲から取引日の完全性を推測しない。過去計上月に観測後取引日がある未取得明細も考慮する。観測を適用できない評価は帳簿残高を保つ。
+
+完全性印はfetch_state.state_versionがmaster_config/snapshot/pending_diffs/archived_transactions/archive_monthsの正規JSONと一致する受信だけで付与する。update_master応答snapshotへの差替えでこの一致を失った場合は付けない。暗号化snapshotのrawラッパーへ端末用印と取得archive月一覧を付け、全明細/master/snapshotと同じIndexedDB原子batchで保存する。印は復号本文・共有・エクスポートに含めず、取込JSON内の印を根拠にしない。snapshot再暗号化で印が消える。transactions完全置換ではsnapshotを変更しない種別も同じ原子batchで再暗号化して印を消す。getAnalyticsStateは同一raw集合の暗号化snapshotからだけ印を取得する。snapshot単独照合APIは設けない。
+
+全投資口座合計はis_asset=falseを除外し、1口座でも取得原価未記録なら合計取得原価もnullにする。未来観測/未来確定は除外する。未取得の過去日も明示観測日、および選択対象投資口座の直近取得原価が既知の表示日は残し、全体資産・流動・負債等はnull、投資は口座ごとの既知値と不明を分離する。個別口座選択でも全体資産系列を変えない。KPI/口座現在残高は今日、履歴はpoint.dateをas-ofとする。口座予測は補正後現在評価額に既存の予測/現在帳簿差を加えた参考値である。観測削除/過去訂正後は現在まで再計算する。
+
+一括・税・投資フォームは保存中全input/select/buttonを凍結し、表示更新完了までbusyを維持する。取消/失敗では値・選択・適用可否を復元する。投資の成功時は新configから同日原本を再読込して続く訂正を可能にする。ロックは世代を失効させ、旧finallyが再解除後のフォームへ触れない。
+
+
+### review57 取得原価と家計簿集計への是正
+
+InsightsControllerは通知書入力のdirtyと集計元選択のdirtyを分離する。再描画では変更中の片方を上書きせず、成功した保存だけ原本を更新する。年変更・ロックで破棄し、旧保存完了が別年の入力を変更しない。年度別設定は既存の三者マージ・暗号化・GAS共有検証・取込を通す。非破壊取込は未設定のfurusato_sourcesのみ補完する。全入力の構造不正は採用されない値も含めて拒否し、取込時は構造検証を先に行い、候補統合後にBackupMerger.validateImportData(data,type,candidate.categories)を再度呼ぶ。第三引数の分類集合でmaster_config内/単独annual_budgets内の全集計元参照・種別を検証し、既存値保持で採用しない入力も対象とする。検証はmutateBusinessの再試行内で行い、並行する分類変更後も再評価する。通知書が無くても集計元の保存は可能である。
+
+取得原価系列はChart.jsのstepped='before'を用い、前の点から次の記録日まで水平に保持する。観測日を年/月の間引き系列にも追加する。実Chart.jsの描画命令ではtarget.x/previous.yを経由する方式である（[公式canvas helper](https://github.com/chartjs/Chart.js/blob/master/src/helpers/helpers.canvas.ts)、2026-10-24確認）。
+
+
+### review58 ふるさと納税の費目割当と自動控除
+
+ふるさと納税について、上記review56/57時点の「給与・控除は参考表示のみ」を変更する。[ふるさと納税計算設計](furusato_calculation.md)を新たな表示・データ・計算の正本とし、費目割当/手入力/自動導出を区別して上限へ使用する。投資・一括編集・メタ情報は変更しない。

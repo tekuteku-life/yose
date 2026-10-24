@@ -403,6 +403,7 @@ export class SettingsController {
 				const candidate = structuredClone(baseline);
 				candidate.annual_budgets ||= {};
 				candidate.annual_budgets[year] = {
+					...(baseline.annual_budgets?.[year] || {}),
 					expense_budget: exp,
 					savings_target_amount: sav,
 					savings_target_rate: rate,
@@ -566,6 +567,7 @@ export class SettingsController {
 
 	async renderSettings() {
 		const gasUrlGeneration = this.gasUrlGeneration;
+		await this.coordinator.insightsController?.renderMetadata();
 		await this.renderPendingImport();
 		this.authController.updateKeyDisplay();
 		const badgeVer = document.getElementById('badge-current-version');

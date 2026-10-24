@@ -6,6 +6,7 @@
 | --- | --- |
 | [要件定義書](requirements.md) | 目的、業務規則、必要な機能と非機能制約である。 |
 | [外部設計書](external_design.md) | 利用者の画面/操作、確認/エラー、入出力と公開通信契約である。 |
+| [税・控除計算設計](furusato_calculation.md) | 費目割当、給与/生命/住宅の導出、専用タブと年額確認の正本である。 |
 | [内部設計書](internal_design.md) | 実装構成、計算、永続化、暗号、同期、排他/復旧方式である。 |
 | [設計テスト監査](design_test_audit.md) | 外部/内部設計と既存assertの対応、不足、仕様乖離、実行結果である。 |
 | [UIテスト監査](ui_test_audit.md) | UI回帰の追加経緯と領域別確認である。 |
@@ -90,6 +91,7 @@ I欄は主な実現方式の入口であり、一つの内部節だけで当該�
 | <a id="347-アーカイブ明細のメンテナンス更新と費目推移"></a>3.47 | アーカイブ明細のメンテナンス更新と費目推移 | [R-3.47](requirements.md#r-3-47) | [E-3.47](external_design.md#e-3-47) | [I-3.4](internal_design.md#i-3-4) |
 | <a id="348-定期ルール入力切替精算の操作整合性1121"></a>3.48 | 定期ルール・入力切替・精算の操作整合性（1.12.1） | [R-3.48](requirements.md#r-3-48) | [E-3.48](external_design.md#e-3-48) | [I-3.7](internal_design.md#i-3-7) |
 | <a id="349-パスキー解除と既存立替回収"></a>3.49 | パスキー単独解除・日本語種別・既存回収の関連付け | [R-3.49](requirements.md#r-3-49) | [E-3.49](external_design.md#e-3-49) | [I-3.49](internal_design.md#i-3-49) |
+| 3.55〜58 | データメタ情報・明細一括編集・ふるさと納税枠・投資推移 | [R-3.55](requirements.md#r-3-55)〜[R-3.58](requirements.md#r-3-58) | [E-3.55〜58](external_design.md#e-3-55) | [I-3.55〜58](internal_design.md#i-3-55) |
 
 ## 改訂と監査
 
