@@ -98,6 +98,12 @@ export class AuthController {
 	invalidateSession() {
 		this.authGeneration++;
 		this.coordinator.advanceLinkController?.cancel();
+		this.coordinator.bulkEditController?.cancel();
+		this.coordinator.insightsController?.cancel();
+		if (this.coordinator.summaryController) {
+			this.coordinator.summaryController.renderVersion++;
+			this.coordinator.summaryController.assetHistoryGeneration = (this.coordinator.summaryController.assetHistoryGeneration || 0) + 1;
+		}
 		this.coordinator.txListController.cancelPendingRenders();
 		this.privateKey = null; this.isKeyLocked = true;
 		this.db.clearEncryptionKey(); clearActiveSession(); this.syncManager?.setPrivateKey(null);

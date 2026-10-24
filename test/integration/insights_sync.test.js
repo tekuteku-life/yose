@@ -1,0 +1,44 @@
+import { it } from 'node:test';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { YoseDB } from '../../js/db.js';
+import { SyncManager } from '../../js/sync.js';
+import { generateEd25519KeyPair, exportPublicKeyBase64, canonicalJsonStringify, generateDatabaseMasterKey } from '../../js/crypto.js';
+import { transaction } from '../helpers/ui_fixture.js';
+import { MockGasEnvironment } from '../helpers/gas_mock.js';
+const gas = createRequire(import.meta.url)('../../gas/Code.gs');
+it('roundtrips bulk changes, investment observations, and donation settings through signed GAS sync', async () => {
+	const env = new MockGasEnvironment(); env.setupGlobals();
+	try {
+		const db = new YoseDB(); await db.init(); const kp = await generateEd25519KeyPair();
+		PropertiesService.getScriptProperties().setProperty('USER_PUBLIC_KEYS', await exportPublicKeyBase64(kp.publicKey));
+		gas.saveJsonFile('master_config.json', await db.getMasterConfig()); gas.saveJsonFile('summary_snapshot.json', await db.getSnapshot());
+		const customFetch = async (_url, options) => ({ ok: true, text: async () => JSON.stringify(gas.doPost({ postData: { contents: options.body } })) });
+		const sync = new SyncManager({ db, privateKey: kp.privateKey, gasUrl: 'https://gas.test', customFetch });
+		await db.putTransactions([transaction('a'), transaction('b')]); await sync.syncBidirectional();
+		await db.bulkEditTransactions(await db.getTransactions(), { tags: ['ふるさと納税'] }, []);
+		await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { invested_amount: 1000, market_value: 1500 }, null);
+		await db.mutateMasterConfig(c => { c.annual_budgets[2026] = { furusato_estimate: { resident_tax: 200000, income_tax_rate: 20 } }; });
+		await sync.syncBidirectional();
+		const remote = gas.handleAction('fetch_state', {});
+		assert.deepEqual(remote.pending_diffs.map(t => t.id).sort(), ['a', 'b']); assert.ok(remote.pending_diffs.every(t => t.tags.includes('ふるさと納税')));
+		assert.equal(remote.master_config.accounts.find(a => a.id === 'acc_investment_main').investment_history['2026-10-20'].market_value, 1500);
+		assert.equal(remote.master_config.annual_budgets[2026].furusato_estimate.resident_tax, 200000);
+		const bad = structuredClone(remote.master_config); bad.accounts.find(a => a.id === 'acc_investment_main').investment_history['2026-10-20'].market_value = -1;
+		const rejected = gas.handleAction('update_master', { master_config: bad, base_version: canonicalJsonStringify(remote.master_config) });
+		assert.equal(rejected.success, false); assert.ok(!rejected.master_conflict); assert.deepEqual(gas.handleAction('fetch_state', {}), remote);
+		const badTax = structuredClone(remote.master_config); badTax.annual_budgets[2026].furusato_estimate.income_tax_rate = 19;
+		assert.equal(gas.handleAction('update_master', { master_config: badTax, base_version: canonicalJsonStringify(remote.master_config) }).success, false); assert.deepEqual(gas.handleAction('fetch_state', {}), remote);
+		const copy = new YoseDB(); await copy.init(); const download = new SyncManager({ db: copy, privateKey: kp.privateKey, gasUrl: 'https://gas.test', customFetch });
+		await download.syncBidirectional(); assert.deepEqual((await copy.getMasterConfig()).accounts.find(a=>a.id==='acc_investment_main').investment_history, remote.master_config.accounts.find(a=>a.id==='acc_investment_main').investment_history);
+		const originalObservation = { invested_amount: 1000, market_value: 1500 };
+		await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', { invested_amount: 1000, market_value: 1800 }, originalObservation); await sync.syncBidirectional(); await download.syncBidirectional();
+		assert.equal((await copy.getMasterConfig()).accounts.find(a=>a.id==='acc_investment_main').investment_history['2026-10-20'].market_value, 1800);
+		await db.saveInvestmentObservation('acc_investment_main', '2026-10-20', null, { invested_amount: 1000, market_value: 1800 }); await sync.syncBidirectional(); await download.syncBidirectional();
+		assert.equal((await copy.getMasterConfig()).accounts.find(a=>a.id==='acc_investment_main').investment_history['2026-10-20'], undefined);
+		assert.equal((await db.getTransactions()).length, 2); assert.deepEqual((await db.getSnapshot()).account_balances, remote.snapshot.account_balances);
+		db.setEncryptionKey(await generateDatabaseMasterKey()); const backup = await db.exportFullData(); backup.master_config.accounts.find(a=>a.id==='acc_investment_main').investment_history['2026-10-20']={invested_amount:900,market_value:1400};
+		await db.commitReplacementImport(await db.prepareReplacementImport(backup), {confirmation:'完全インポート'}); await sync.syncBidirectional(); await download.syncBidirectional();
+		assert.equal((await copy.getMasterConfig()).accounts.find(a=>a.id==='acc_investment_main').investment_history['2026-10-20'].market_value,1400); assert.equal((await copy.getTransactions()).length,2); assert.deepEqual((await copy.getSnapshot()).account_balances,backup.summary_snapshot.account_balances);
+	} finally { env.teardownGlobals(); }
+});

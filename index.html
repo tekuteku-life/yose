@@ -332,9 +332,25 @@
 					<label>終了日 <input type="date" id="asset-period-end" class="form-control"></label>
 					<button type="button" id="btn-apply-asset-period" class="btn btn-secondary">期間を適用</button>
 				</div>
+				<label>投資推移の対象口座<select id="asset-investment-account" class="form-control"><option value="all">全投資口座</option></select></label>
+				<p>投資額は入金から出金を引いた差引拠出額です。評価額は日末の評価記録と、それ以後の確定入出金による参考推移です。市場価格の自動取得は行いません。元本・過去明細が不足する場合は未算出と表示します。</p>
 				<p id="asset-history-notice" aria-live="polite"></p>
 				<div style="height:280px;position:relative;"><canvas id="asset-history-chart"></canvas></div>
 				<div id="asset-history-fallback" style="display:none;"></div>
+			</div>
+
+			<div class="card" id="investment-record-card" style="display:none;">
+				<h3 class="card-title">投資口座の評価記録</h3>
+				<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;">
+					<label>投資口座<select id="investment-account" class="form-control"></select></label>
+					<label>評価日（日末）<input type="date" id="investment-date" class="form-control"></label>
+					<label>投資額（差引拠出額・円）<input type="number" step="1" id="investment-invested" class="form-control"></label>
+					<label>評価額（円）<input type="number" min="0" step="1" id="investment-valuation" class="form-control"></label>
+					<button type="button" class="btn btn-primary" id="btn-save-investment">評価記録を保存</button>
+				</div>
+				<p>同日の記録がある場合は訂正します。投資額は開始時点の累計拠出額を入力してください。月末予測は現在評価額に予定入出金等の差を加えた参考値です。</p>
+				<p id="investment-error" role="alert"></p>
+				<div id="investment-observations"></div>
 			</div>
 
 			<!-- Realtime Cashflow Stats (Visible when target === 'cashflow') -->
@@ -385,6 +401,20 @@
 					<div id="stat-budget-pace-status" class="stat-value" style="font-size: 1.15rem; color: #10b981;">順調</div>
 					<div id="label-budget-pace-desc" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">月割り基準ペースと連動</div>
 				</div>
+			</div>
+
+			<div class="card" id="furusato-card" style="display:none;">
+				<h3 class="card-title">ふるさと納税枠</h3>
+				<div id="furusato-summary" aria-live="polite"></div>
+				<p>取得済みの支出を取引年で集計します。タグまたは計上費目・中項目の名称が「ふるさと納税」の明細が対象です。前年の家計簿収入は手取入金等を含む参考値で、給与年収・課税所得ではありません。</p>
+				<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;">
+					<label>住民税所得割額（調整控除後・円）<input id="furusato-resident-tax" class="form-control" type="number" min="0" step="1"></label>
+					<label>特例控除用税率<select id="furusato-tax-rate" class="form-control"><option value="">未入力</option><option value="0">0%</option><option value="5">5%</option><option value="10">10%</option><option value="20">20%</option><option value="23">23%</option><option value="33">33%</option><option value="40">40%</option><option value="45">45%</option></select></label>
+					<button type="button" id="btn-save-furusato" class="btn btn-primary">概算条件を保存</button>
+				</div>
+				<p id="furusato-error" role="alert"></p>
+				<details><summary>概算の条件・計算式</summary><p>前年の通知書等を参考に、当年も同条件と仮定します。特例控除用税率は住民税の課税所得から人的控除差を調整して求め、通常の所得税率と異なる場合があります。所得割額×20%÷（90%−税率×1.021）＋2,000円を円未満切捨てで求めます。所得割額0円は概算上限0円です。対応する税制年は2015〜2037年です。所得や控除の変動、住宅ローン控除、他の寄附・分離課税等を反映した確定上限ではありません。</p><p><a href="https://www.nta.go.jp/taxes/shiraberu/taxanswer/shotoku/1155.htm" target="_blank" rel="noopener noreferrer">国税庁の制度説明</a> / <a href="https://www.4894.call.city.niigata.jp/Faq/X0309701?logid=0&amp;sugtype=6" target="_blank" rel="noopener noreferrer">新潟市の計算説明</a></p></details>
+				<div id="furusato-records"></div>
 			</div>
 
 			<!-- Interactive Chart Container -->
@@ -507,6 +537,12 @@
 				<div style="margin-bottom: 10px;">
 					<input type="text" id="input-tx-search" class="form-control form-control-sm" placeholder="🔍 費目・中項目・メモ・タグで絞り込み...">
 				</div>
+				<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+					<span id="bulk-selection-count" aria-live="polite">0件選択</span>
+					<button type="button" id="btn-bulk-select-page" class="btn btn-secondary btn-sm">表示ページを選択</button>
+					<button type="button" id="btn-bulk-clear" class="btn btn-secondary btn-sm">選択解除</button>
+					<button type="button" id="btn-bulk-edit" class="btn btn-primary btn-sm" disabled>一括編集</button>
+				</div>
 				<div id="month-tx-list" class="tx-list"></div>
 				<div id="tx-pagination-controls" style="display: none; justify-content: center; align-items: center; gap: 12px; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border);">
 					<button type="button" id="btn-tx-prev-page" class="btn btn-secondary btn-sm">◀ 前へ</button>
@@ -518,6 +554,11 @@
 
 		<!-- ==================== TAB 3: SETTINGS & MASTER ==================== -->
 		<section id="tab-settings" class="tab-panel">
+			<div class="card" id="card-data-metadata">
+				<h3 class="card-title">データ情報</h3>
+				<div id="data-metadata" aria-live="polite"></div>
+				<p>取得済みの明細・共有マスタ・集計情報を対象にしています。サイズは削除済みを含むUTF-8 JSONのバイト数です。端末設定・認証鍵・IndexedDBの物理使用量・サーバー上の未取得明細は含みません。平均は最古〜最新の取引日を含む暦月・暦年で割り、空の月・年も含めます。</p>
+			</div>
 			<!-- Security & Public Key (Requirement 4.5: Visual Segregation) -->
 			<div class="card" id="card-security-keys">
 				<div class="card-title">
@@ -795,7 +836,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.13.0</span>
+					<span class="badge badge-info" id="badge-current-version">v1.14.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
@@ -937,6 +978,16 @@
 			</div>
 			<button type="button" id="btn-save-advance-link" class="btn btn-primary">選択した明細をひも付け</button>
 			<button type="button" id="btn-unlink-advance" class="btn btn-secondary" hidden>ひも付けを解除</button>
+		</div>
+	</div>
+
+	<div id="modal-bulk-edit" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bulk-edit-title">
+		<div class="modal">
+			<div class="modal-header"><h3 id="bulk-edit-title" class="modal-title">明細の一括編集</h3><button type="button" class="close-btn" id="btn-close-bulk" aria-label="閉じる">&times;</button></div>
+			<p id="bulk-edit-scope"></p>
+			<div id="bulk-edit-fields"></div>
+			<p id="bulk-edit-error" role="alert"></p>
+			<button type="button" id="btn-save-bulk" class="btn btn-primary">選択明細へ保存</button>
 		</div>
 	</div>
 

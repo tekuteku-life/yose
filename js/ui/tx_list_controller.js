@@ -167,6 +167,7 @@ export class TransactionListController {
 
 		return `
 			<div class="tx-item ${isPlanned ? 'planned' : ''} clickable" data-id="${escapeHtml(t.id)}">
+				${includeDeleteBtn ? `<label class="bulk-check-label" title="この明細を選択"><input type="checkbox" data-bulk-id="${escapeHtml(t.id)}" aria-label="${escapeHtml(t.date + ' ' + (t.memo || '') + 'を選択')}" ${this.coordinator.bulkEditController?.selectedIds.has(t.id) ? 'checked' : ''}></label>` : ''}
 				<div class="tx-info">
 					<span class="tx-title">${escapeHtml(display.primaryTitle)} <span class="tx-edit-hint" title="タッチして編集">✏️</span></span>
 					${subInfoHtml}
@@ -238,6 +239,7 @@ export class TransactionListController {
 			keyword: filterKeyword
 		}, masterConfig);
 
+		this.coordinator.bulkEditController?.reconcile(filtered);
 		const paginationControls = document.getElementById('tx-pagination-controls');
 		const paginationInfo = document.getElementById('tx-pagination-info');
 		const btnPrev = document.getElementById('btn-tx-prev-page');
@@ -295,7 +297,7 @@ export class TransactionListController {
 		// Attach click listeners to .tx-item.clickable (ignoring clicks on delete button)
 		list.querySelectorAll('.tx-item.clickable').forEach(item => {
 			item.addEventListener('click', (e) => {
-				if (e.target.closest('.btn-delete-tx')) return;
+				if (e.target.closest('.btn-delete-tx, .bulk-check-label')) return;
 				const id = item.dataset.id;
 				if (id) this.coordinator.txEditController.openEditTransactionModal(id);
 			});

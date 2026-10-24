@@ -21,6 +21,7 @@ export function sharedMasterConfig(config) {
 
 const FIELD_LABELS = {
 	schema_version: 'データ形式', accounts: '口座', categories: '費目', subcategories: '中項目', recurring_rules: '定期設定', holidays: '祝日', annual_budgets: '年度予算', category_budgets: '費目別予算',
+	investment_history: '投資評価記録', invested_amount: '差引拠出額', market_value: '評価額', furusato_estimate: 'ふるさと納税概算', resident_tax: '住民税所得割額', income_tax_rate: '特例控除用税率',
 	name: '名称', type: '種別', initial_balance: '初期残高', is_asset: '資産への算入', sort_order: '表示順', is_archived: 'アーカイブ状態',
 	debit_account_id: '引落口座', settlement_account_id: '精算口座', closing_day: '締日', debit_day: '引落日', debit_month_offset: '引落月',
 	is_active: '有効状態', start_date: '開始日', end_date: '終了日', frequency: '繰返し頻度', interval_months: '繰返し月数', day_of_month: '対象日', holiday_adjustment: '休日調整', amortize_months: '按分月数',

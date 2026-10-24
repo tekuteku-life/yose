@@ -43,7 +43,9 @@ export class ChartController {
 		const data = { labels: history.points.map(point => point.date), datasets: [
 			{ label: '純資産', data: history.points.map(point => point.net_assets), borderColor: '#2563eb' },
 			{ label: '流動資産', data: history.points.map(point => point.liquid_assets), borderColor: '#10b981' },
-			{ label: '投資資産', data: history.points.map(point => point.investment_assets), borderColor: '#8b5cf6' },
+			{ label: '投資資産（全口座）', data: history.points.map(point => point.investment_assets), borderColor: '#8b5cf6' },
+			{ label: '投資額（差引拠出額）', data: history.points.map(point => point.investment_contributions), borderColor: '#d97706', borderDash: [5, 3], spanGaps: false },
+			{ label: '投資評価額', data: history.points.map(point => point.investment_valuation), borderColor: '#db2777' },
 			{ label: '負債', data: history.points.map(point => point.liabilities), borderColor: '#ef4444' }
 		] };
 		if (window.Chart) {
@@ -51,7 +53,7 @@ export class ChartController {
 			this.assetHistoryChart = new window.Chart(canvas, { type: 'line', data, options: { responsive: true, maintainAspectRatio: false, animation: false } });
 		} else {
 			canvas.style.display = 'none'; fallback.style.display = 'block';
-			fallback.textContent = history.points.map(point => `${point.date}: ¥${point.net_assets.toLocaleString()}`).join(' / ') || '確定履歴はない。';
+			fallback.innerHTML = `<table class="summary-table"><caption>資産・投資推移</caption><thead><tr><th>日付</th>${data.datasets.map(series => `<th>${escapeHtml(series.label)}</th>`).join('')}</tr></thead><tbody>${history.points.map((point, index) => `<tr><th>${escapeHtml(point.date)}</th>${data.datasets.map(series => `<td>${series.data[index] == null ? '未算出' : '¥' + series.data[index].toLocaleString()}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
 		}
 	}
 

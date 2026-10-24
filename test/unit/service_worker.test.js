@@ -7,8 +7,9 @@ import { productionSource, coverageGlobals } from '../../scripts/coverage_tools.
 
 const filename = path.resolve('sw.js');
 const source = productionSource(filename);
+const currentCache = JSON.parse(fs.readFileSync('version.json', 'utf8')).cache_name;
 
-function worker({ cacheHit, network, cacheError, putError, keys = ['yose-cache-v1.13.0', 'old-cache'] } = {}) {
+function worker({ cacheHit, network, cacheError, putError, keys = [currentCache, 'old-cache'] } = {}) {
 	const handlers = new Map();
 	const calls = { added: [], deleted: [], put: [], fetch: [], skip: 0, claim: 0 };
 	const cache = {
@@ -68,7 +69,7 @@ describe('Service worker original-source lifecycle and fetch boundaries', () => 
 		assert.equal(w.calls.skip, 1);
 		assert.deepEqual(w.calls.deleted, []);
 		await w.dispatch('message', { data: 'CLEAR_ALL_CACHES' });
-		assert.deepEqual(w.calls.deleted, ['yose-cache-v1.13.0', 'old-cache']);
+		assert.deepEqual(w.calls.deleted, [currentCache, 'old-cache']);
 	});
 	for (const req of [request(undefined, 'POST'), request('data:text/plain,hello'), request('https://yose.local/version.json?time=1'), request('https://script.google.com/macros/s/api/exec')]) {
 		it(`leaves network-only or unsupported request alone: ${req.method} ${req.url}`, async () => {

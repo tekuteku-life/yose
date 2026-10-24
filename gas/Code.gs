@@ -1043,6 +1043,16 @@ function createDataIntegrityValidator() {
 			text(item, path, ['name', 'maturity_date']);
 			bools(item, path, ['is_asset', 'is_archived']);
 			number(item.initial_balance, `${path}.initial_balance`, { integer: true });
+			if (item.investment_history !== undefined) {
+				if (item.type !== 'investment' || !object(item.investment_history)) issue('shape', `${path}.investment_history`, '投資口座の日付別記録が必要です');
+				else for (const [day, value] of Object.entries(item.investment_history)) {
+					const location = `${path}.investment_history.${day}`;
+					if (!date(day)) issue('date', location, '評価日が不正です', day);
+					if (!object(value)) { issue('shape', location, '拠出額と評価額が必要です'); continue; }
+					number(value.invested_amount, `${location}.invested_amount`, { required: true, integer: true });
+					number(value.market_value, `${location}.market_value`, { required: true, integer: true, min: 0 });
+				}
+			}
 			number(item.maturity_amount, `${path}.maturity_amount`, { integer: true, min: 0 });
 			for (const field of ['debit_account_id', 'settlement_account_id', 'premium_pay_account_id']) ref(item[field], accounts, `${path}.${field}`);
 			for (const field of ['debit_account_id', 'settlement_account_id']) if (item[field]) {
@@ -1157,6 +1167,14 @@ function createDataIntegrityValidator() {
 			const path = `annual_budgets.${year}`;
 			if (!/^\d{4}$/.test(year) || !object(entry)) { issue('shape', path, '年度予算の形式が不正です', year); continue; }
 			for (const field of ['expense_budget', 'savings_target_amount']) number(entry[field], `${path}.${field}`, { integer: true, min: 0 });
+			if (entry.furusato_estimate !== undefined) {
+				const estimate = entry.furusato_estimate;
+				if (!object(estimate)) issue('shape', `${path}.furusato_estimate`, '税概算には所得割額と税率が必要です');
+				else {
+					number(estimate.resident_tax, `${path}.furusato_estimate.resident_tax`, { required: true, integer: true, min: 0 });
+					if (![0, 5, 10, 20, 23, 33, 40, 45].includes(estimate.income_tax_rate)) issue('enum', `${path}.furusato_estimate.income_tax_rate`, '特例控除用税率が不正です', estimate.income_tax_rate);
+				}
+			}
 			for (const field of ['savings_target_rate', 'target_savings_rate']) number(entry[field], `${path}.${field}`, { min: 0, max: 100 });
 			if (entry.category_budgets !== undefined && !object(entry.category_budgets)) issue('shape', `${path}.category_budgets`, '費目予算の形式が不正です');
 			for (const [id, value] of Object.entries(object(entry.category_budgets) ? entry.category_budgets : {})) { ref(id, categories, `${path}.${id}`); number(value, `${path}.${id}`, { integer: true, min: 0 }); }

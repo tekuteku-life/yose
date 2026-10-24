@@ -2,6 +2,7 @@
  * Yoseatsume Kakeibo - Non-Destructive Backup Merger & Sanitizer (Requirement 3.14 & 3.15)
  */
 
+import { dataIntegrity } from '../logic/data_integrity.js';
 import { FORBIDDEN_PROTOTYPE_KEYS } from './defaults.js';
 
 export class BackupMerger {
@@ -23,6 +24,12 @@ export class BackupMerger {
 			seen.delete(value);
 		};
 		inspect(data, 'data');
+		// 採用されない既存日・既存年の不正値も、非破壊マージ前に拒否する。
+		const incomingMasters = [data.master_config, data.annual_budgets ? { annual_budgets: data.annual_budgets } : null].filter(Boolean);
+		for (const incomingMaster of incomingMasters) {
+			const invalid = dataIntegrity.issues({ master_config: incomingMaster }).filter(item => item.path.includes('.investment_history') || item.path.includes('.furusato_estimate'));
+			requireType(!invalid.length, invalid.map(item => item.message).join(' / '));
+		}
 		const requiredFields = {
 			full_backup: ['transactions', 'master_config', 'summary_snapshot'],
 			transactions: ['transactions'],
@@ -161,7 +168,8 @@ export class BackupMerger {
 			expense_budget: Math.max(0, Number(entry.expense_budget) || 0),
 			savings_target_amount: Math.max(0, Number(entry.savings_target_amount) || 0),
 			savings_target_rate: Math.max(0, Number(entry.savings_target_rate ?? entry.target_savings_rate) || 0),
-			category_budgets: BackupMerger.sanitizeCategoryBudgets(entry.category_budgets)
+			category_budgets: BackupMerger.sanitizeCategoryBudgets(entry.category_budgets),
+			...(entry.furusato_estimate !== undefined ? { furusato_estimate: structuredClone(entry.furusato_estimate) } : {})
 		};
 	}
 
@@ -175,6 +183,9 @@ export class BackupMerger {
 					localConfig.accounts.push(acc);
 					existingAccIds.add(acc.id);
 					stats.addedAccounts++;
+				} else if (acc?.investment_history) {
+					const current = localConfig.accounts.find(a => a.id === acc.id);
+					current.investment_history = { ...acc.investment_history, ...current.investment_history };
 				}
 			}
 		}
@@ -246,6 +257,7 @@ export class BackupMerger {
 					localConfig.annual_budgets[yKey] = normalized;
 					stats.addedBudgets++;
 				} else {
+					if (localConfig.annual_budgets[yKey].furusato_estimate === undefined && normalized.furusato_estimate !== undefined) localConfig.annual_budgets[yKey].furusato_estimate = normalized.furusato_estimate;
 					if (!localConfig.annual_budgets[yKey].category_budgets || typeof localConfig.annual_budgets[yKey].category_budgets !== 'object') {
 						localConfig.annual_budgets[yKey].category_budgets = {};
 					}

@@ -19,6 +19,8 @@ import { MasterController } from './master_controller.js';
 import { SettingsController } from './settings_controller.js';
 import { MaintenanceController } from './maintenance_controller.js';
 import { MasterConflictController } from './master_conflict_controller.js';
+import { BulkEditController } from './bulk_edit_controller.js';
+import { InsightsController } from './insights_controller.js';
 import { AdvanceLinkController } from './advance_link_controller.js';
 
 export class AppCoordinator {
@@ -53,6 +55,8 @@ export class AppCoordinator {
 		this.maintenanceController = new MaintenanceController(this);
 		this.masterConflictController = new MasterConflictController(this);
 		this.advanceLinkController = new AdvanceLinkController(this);
+		this.bulkEditController = new BulkEditController(this);
+		this.insightsController = new InsightsController(this);
 	}
 
 	// Backward-compatible accessors for key states and components
@@ -108,6 +112,8 @@ export class AppCoordinator {
 			this.txEditController.setupEditTransactionModal();
 			this.txListController.setupInteractionGuard();
 			this.advanceLinkController.setup();
+			this.bulkEditController.setup();
+			this.insightsController.setup();
 			this.summaryController.setupSummaryView();
 			this.settingsController.setupSettingsView();
 			this.maintenanceController.setup();
@@ -199,6 +205,7 @@ export class AppCoordinator {
 
 	closeTopModal() {
 		const top = this.getTopModal();
+		if (top?.id === 'modal-bulk-edit') return this.bulkEditController.requestClose();
 		if (top?.id === 'modal-edit-tx') return this.txEditController.requestClose();
 		if (top?.id === 'modal-master-item') return this.masterController.requestClose();
 		if (top?.id === 'modal-master-conflict') { this.masterConflictController.cancel(); return true; }

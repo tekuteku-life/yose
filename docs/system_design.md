@@ -90,6 +90,7 @@ I欄は主な実現方式の入口であり、一つの内部節だけで当該�
 | <a id="347-アーカイブ明細のメンテナンス更新と費目推移"></a>3.47 | アーカイブ明細のメンテナンス更新と費目推移 | [R-3.47](requirements.md#r-3-47) | [E-3.47](external_design.md#e-3-47) | [I-3.4](internal_design.md#i-3-4) |
 | <a id="348-定期ルール入力切替精算の操作整合性1121"></a>3.48 | 定期ルール・入力切替・精算の操作整合性（1.12.1） | [R-3.48](requirements.md#r-3-48) | [E-3.48](external_design.md#e-3-48) | [I-3.7](internal_design.md#i-3-7) |
 | <a id="349-パスキー解除と既存立替回収"></a>3.49 | パスキー単独解除・日本語種別・既存回収の関連付け | [R-3.49](requirements.md#r-3-49) | [E-3.49](external_design.md#e-3-49) | [I-3.49](internal_design.md#i-3-49) |
+| 3.55〜58 | データメタ情報・明細一括編集・ふるさと納税枠・投資推移 | [R-3.55](requirements.md#r-3-55)〜[R-3.58](requirements.md#r-3-58) | [E-3.55〜58](external_design.md#e-3-55) | [I-3.55〜58](internal_design.md#i-3-55) |
 
 ## 改訂と監査
 

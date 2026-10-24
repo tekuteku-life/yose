@@ -18,6 +18,7 @@ import {
 	escapeHtml
 } from '../logic.js';
 import { buildAssetHistory, formatDate } from '../logic.js';
+import { applyInvestmentValuations } from '../logic/investment.js';
 import { buildCategoryTrend } from '../logic/category_trend.js';
 
 export class SummaryController {
@@ -251,12 +252,21 @@ export class SummaryController {
 			}
 		}
 
-		const snapshot = await this.db.getSnapshot();
-		const config = await this.db.getMasterConfig();
-		const transactions = await this.db.getTransactions({ includeDeleted: false });
+		const assetState = target === 'assets' ? await this.db.getAnalyticsState() : null;
+		const snapshot = assetState ? assetState.summary_snapshot : await this.db.getSnapshot();
+		const config = assetState ? assetState.master_config : await this.db.getMasterConfig();
+		const transactions = assetState ? assetState.transactions.filter(tx => !tx.is_deleted) : await this.db.getTransactions({ includeDeleted: false });
 		if (renderId !== this.renderVersion) return;
 
-		const summary = calculateBalancesAndSummaries(snapshot, transactions, this.coordinator.currentMonth);
+		const summary = calculateBalancesAndSummaries(snapshot, target === 'assets' ? transactions.filter(tx => tx.status !== 'confirmed' || tx.date <= formatDate(new Date())) : transactions, this.coordinator.currentMonth);
+		if (target === 'assets') {
+			const valued = applyInvestmentValuations(summary.confirmed_balances, config.accounts, transactions, formatDate(new Date()), snapshot, assetState.historyOptions);
+			if (renderId !== this.renderVersion || this.coordinator.isKeyLocked) return;
+			for (const account of config.accounts.filter(a => a.type === 'investment')) {
+				summary.projected_balances[account.id] = (summary.projected_balances[account.id] || 0) + (valued[account.id] || 0) - (summary.confirmed_balances[account.id] || 0);
+			}
+			summary.confirmed_balances = valued;
+		}
 		const totalAssetSummary = calculateTotalAssetSummary(
 			summary.confirmed_balances,
 			config?.accounts || [],
@@ -288,7 +298,9 @@ export class SummaryController {
 		// Cards visibility
 		const historyCard = document.getElementById('asset-history-card');
 		if (historyCard) historyCard.style.display = target === 'assets' ? 'block' : 'none';
-		if (target === 'assets') await this.renderAssetHistory();
+		document.getElementById('investment-record-card').style.display = target === 'assets' ? 'block' : 'none';
+		this.coordinator.insightsController.renderFurusato(transactions, config);
+		if (target === 'assets') { this.coordinator.insightsController.renderInvestment(config); await this.renderAssetHistory(assetState); }
 		if (renderId !== this.renderVersion) return;
 		const cardPeriodControls = document.getElementById('card-period-controls');
 		const granularityRow = document.getElementById('granularity-control-row');
@@ -370,21 +382,24 @@ export class SummaryController {
 		}
 	}
 
-	async renderAssetHistory() {
+	async renderAssetHistory(assetState = null) {
+		const generation = this.assetHistoryGeneration = (this.assetHistoryGeneration || 0) + 1, key = this.db.encryptionKey;
 		try {
 			const today = formatDate(new Date());
-			const start = document.getElementById('asset-period-start');
-			const end = document.getElementById('asset-period-end');
+			const start = document.getElementById('asset-period-start'), end = document.getElementById('asset-period-end');
 			if (!start.value) start.value = this.coordinator.currentMonth + '-01';
 			if (!end.value) end.value = today;
-			const history = buildAssetHistory(await this.db.getSnapshot(), await this.db.getTransactions(), (await this.db.getMasterConfig())?.accounts || [], {
+			const state = assetState || await this.db.getAnalyticsState();
+			const { summary_snapshot: snapshot, transactions, master_config: config, historyOptions } = state;
+			if (generation !== this.assetHistoryGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+			const history = buildAssetHistory(snapshot, transactions, config.accounts, {
 				mode: this.assetPeriod, month: this.coordinator.currentMonth, year: this.coordinator.selectedYear, start: start.value, end: end.value, today,
-				archiveMonths: await this.db.getSetting('downloaded_archive_months', [])
+				...historyOptions, investmentAccountId: document.getElementById('asset-investment-account').value
 			});
 			this.chartController.renderAssetHistory(history);
-			document.getElementById('asset-history-notice').textContent = history.notice;
+			document.getElementById('asset-history-notice').textContent = history.notice + (history.points.some(point => point.investment_contributions === null) ? ' 投資額は元本・履歴不足のため未算出の期間があります。評価記録を登録してください。' : '');
 			document.getElementById('asset-history-card').dataset.period = this.assetPeriod;
-		} catch (error) { alert(error.message); }
+		} catch (error) { if (generation === this.assetHistoryGeneration && !this.coordinator.isKeyLocked) alert(error.message); }
 	}
 
 	async applyDrilldownFilter({ accountId = 'all', categoryId = 'all', tag = 'all' } = {}) {
