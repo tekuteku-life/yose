@@ -74,8 +74,8 @@ describe('category trend visualization', () => {
 	});
 	it('does not let an older summary read overwrite a newer chart or breakdown', async () => {
 		const d = fixture.driver; await seed(d, [transaction('race')]); await cashflow(d);
-		await d.evaluate(`const app=window.__yose_app, get=app.db.getMasterConfig.bind(app.db);let first=true;
-		app.db.getMasterConfig=async()=>{const config=await get();if(first){first=false;await new Promise(resolve=>window.__releaseSummary=resolve);}return config;};
+		await d.evaluate(`const app=window.__yose_app, get=app.db.getAnalyticsState.bind(app.db);let first=true;
+		app.db.getAnalyticsState=async()=>{const config=await get();if(first){first=false;await new Promise(resolve=>window.__releaseSummary=resolve);}return config;};
 		window.__oldSummary=app.summaryController.renderSummary();void 0;`);
 		await d.waitFor('typeof window.__releaseSummary==="function"');
 		await d.evaluate(`(async()=>{const app=window.__yose_app;await app.db.mutateMasterConfig(c=>{c.categories.find(x=>x.id==='cat_food').name='新版';});await app.summaryController.renderSummary();window.__releaseSummary();await window.__oldSummary;})()`);

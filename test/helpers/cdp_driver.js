@@ -51,6 +51,7 @@ export class HeadlessBrowserDriver {
 		this.rootDir = options.rootDir || process.cwd();
 		this.origin = options.origin || 'https://yose.local';
 		this.now = options.now || null;
+		this.realCharts = Boolean(options.realCharts);
 		this.commandTimeoutMs = options.commandTimeoutMs || 10000;
 		this.responses = new Map();
 		this.requests = [];
@@ -290,7 +291,7 @@ export class HeadlessBrowserDriver {
 					requestId: params.requestId,
 					responseCode: 200,
 					responseHeaders: [{ name: 'Content-Type', value: 'application/javascript; charset=utf-8' }],
-					body: Buffer.from(CHART_JS_STUB, 'utf8').toString('base64')
+					body: Buffer.from(this.realCharts ? fs.readFileSync(path.join(this.rootDir, 'node_modules/chart.js/dist/chart.umd.js'), 'utf8') : CHART_JS_STUB, 'utf8').toString('base64')
 				}, sessionId);
 			} else {
 				await this.send('Fetch.fulfillRequest', {

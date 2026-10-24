@@ -1,101 +1,129 @@
-/**
- * Yoseatsume Kakeibo - Chart Visualization Controller
- * Dedicated Chart.js generator for daily, monthly, yearly, budget progress, category breakdown, tags, and assets.
- */
-
 import { formatDoughnutTooltipLabel, escapeHtml } from '../logic.js';
+import { markerRadii } from '../logic/chart_geometry.js';
+import { ChartViewport } from './chart_viewport.js';
 
 export class ChartController {
 	constructor(coordinator) {
-		this.coordinator = coordinator;
-		this.chart = null;
-		this.tagChart = null;
-		this.categoryBreakdownChart = null;
-		this.isDark = false;
-		this.assetHistoryChart = null;
-		this.categoryTrendChart = null;
-		this.lastCategoryTrend = null;
+		this.coordinator = coordinator; this.chart = null; this.tagChart = null; this.categoryBreakdownChart = null;
+		this.assetHistoryChart = null; this.categoryTrendChart = null; this.lastCategoryTrend = null; this.isDark = false;
+		this.viewports = new Map(); this.selection = new Map(); this.timeViews = new Map();
+	}
+
+	drop(slot) {
+		this.viewports.get(slot)?.destroy(); this.viewports.delete(slot);
+		this[slot]?.destroy(); this[slot] = null;
 	}
 
 	destroy() {
-		this.categoryTrendChart?.destroy(); this.categoryTrendChart = null;
-		this.lastCategoryTrend = null;
-		this.assetHistoryChart?.destroy(); this.assetHistoryChart = null;
-		if (this.chart) {
-			this.chart.destroy();
-			this.chart = null;
+		for (const slot of ['chart', 'tagChart', 'categoryBreakdownChart', 'assetHistoryChart', 'categoryTrendChart']) this.drop(slot);
+		this.selection.clear(); this.timeViews.clear(); this.lastCategoryTrend = null;
+		for (const prefix of ['summary', 'asset-history', 'category-trend']) document.getElementById(`${prefix}-series`)?.replaceChildren();
+	}
+
+	destroyMainChart() { this.drop('chart'); }
+
+	updateThemeMode(isDark) {
+		this.isDark = isDark;
+		if (window.Chart?.defaults) {
+			window.Chart.defaults.color = isDark ? '#94a3b8' : '#64748b';
+			window.Chart.defaults.borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)';
 		}
-		if (this.tagChart) {
-			this.tagChart.destroy();
-			this.tagChart = null;
-		}
-		if (this.categoryBreakdownChart) {
-			this.categoryBreakdownChart.destroy();
-			this.categoryBreakdownChart = null;
+		for (const args of [...this.timeViews.values()]) this.drawTime(...args);
+	}
+
+	/** Keep all observations; selection changes visibility and marker density only. */
+	drawTime(slot, prefix, canvasId, fallbackId, title, type, source, options = {}) {
+		if (this.coordinator.isKeyLocked) return;
+		this.drop(slot);
+		const args = [slot, prefix, canvasId, fallbackId, title, type, source, options]; this.timeViews.set(slot, args);
+		const canvas = document.getElementById(canvasId), fallback = document.getElementById(fallbackId), controls = document.getElementById(`${prefix}-series`), reset = document.getElementById(`${prefix}-reset`);
+		if (!canvas || !fallback || !controls) return;
+		reset.parentElement.style.display = 'flex';
+		const datasets = source.datasets.map(dataset => {
+			const key = JSON.stringify([prefix, dataset.seriesKey]);
+			const row = { ...dataset, data: dataset.data.slice(), hidden: this.selection.get(key) === false };
+			if (type === 'line') { row.pointRadius = markerRadii(row.data, dataset.pointRadius ?? 3); row.pointHoverRadius = 5; row.pointHitRadius = 8; }
+			return row;
+		});
+		const toggle = index => {
+			if (this.coordinator.isKeyLocked || !source.datasets[index]) return;
+			const key = JSON.stringify([prefix, source.datasets[index].seriesKey]); this.selection.set(key, this.selection.get(key) === false);
+			this.drawTime(...args);
+		};
+		controls.replaceChildren();
+		datasets.forEach((dataset, index) => {
+			const label = document.createElement('label'), input = document.createElement('input'); input.type = 'checkbox'; input.checked = !dataset.hidden;
+			input.addEventListener('change', () => toggle(index)); label.append(input, document.createTextNode(dataset.label)); controls.append(label);
+		});
+		if (datasets.length && datasets.every(row => row.hidden)) { const status = document.createElement('span'); status.textContent = '表示項目が選択されていません'; status.role = 'status'; controls.append(status); }
+		const container = prefix === 'category-trend' ? document.getElementById('category-trend-chart-container') : null;
+		if (window.Chart && datasets.length) {
+			canvas.style.display = 'block'; fallback.style.display = 'none'; if (container) container.style.display = 'block';
+			this[slot] = new window.Chart(canvas, {
+				type, data: { labels: source.labels.slice(), datasets },
+				options: { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false }, ...options, scales: structuredClone(options.scales || { y: {} }),
+					plugins: { legend: { position: 'bottom', onClick: (_event, item) => toggle(item.datasetIndex) } } }
+			});
+			this.viewports.set(slot, new ChartViewport(this[slot], canvas, reset, () => !this.coordinator.isKeyLocked));
+		} else {
+			canvas.style.display = 'none'; fallback.style.display = 'block'; if (container) container.style.display = 'none'; reset.disabled = true;
+			const visible = datasets.filter(row => !row.hidden);
+			fallback.innerHTML = datasets.length ? `<table class="summary-table"><caption>${escapeHtml(title)}</caption><thead><tr><th>期間</th>${visible.map(row => `<th>${escapeHtml(row.label)}</th>`).join('')}</tr></thead><tbody>${source.labels.map((label, index) => `<tr><th>${escapeHtml(label)}</th>${visible.map(row => `<td>${row.data[index] == null ? '未算出' : '¥' + escapeHtml(row.data[index].toLocaleString())}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '対象の費目データはありません。';
 		}
 	}
 
 	renderAssetHistory(history) {
-		const canvas = document.getElementById('asset-history-chart');
-		const fallback = document.getElementById('asset-history-fallback');
-		if (!canvas) return;
-		this.assetHistoryChart?.destroy();
-		const data = { labels: history.points.map(point => point.date), datasets: [
-			{ label: '純資産', data: history.points.map(point => point.net_assets), borderColor: '#2563eb' },
-			{ label: '流動資産', data: history.points.map(point => point.liquid_assets), borderColor: '#10b981' },
-			{ label: '投資資産（全口座）', data: history.points.map(point => point.investment_assets), borderColor: '#8b5cf6' },
-			{ label: '取得原価（直近記録）', data: history.points.map(point => point.investment_acquisition_cost), borderColor: '#d97706', borderDash: [5, 3], spanGaps: false, stepped: 'before' },
-			{ label: '口座評価額（預り金込・参考）', data: history.points.map(point => point.investment_valuation), borderColor: '#db2777' },
-			{ label: '負債', data: history.points.map(point => point.liabilities), borderColor: '#ef4444' }
-		] };
-		if (window.Chart) {
-			canvas.style.display = 'block'; fallback.style.display = 'none';
-			this.assetHistoryChart = new window.Chart(canvas, { type: 'line', data, options: { responsive: true, maintainAspectRatio: false, animation: false } });
-		} else {
-			canvas.style.display = 'none'; fallback.style.display = 'block';
-			fallback.innerHTML = `<table class="summary-table"><caption>資産・投資推移</caption><thead><tr><th>日付</th>${data.datasets.map(series => `<th>${escapeHtml(series.label)}</th>`).join('')}</tr></thead><tbody>${history.points.map((point, index) => `<tr><th>${escapeHtml(point.date)}</th>${data.datasets.map(series => `<td>${series.data[index] == null ? '未算出' : '¥' + series.data[index].toLocaleString()}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-		}
-	}
-
-	destroyMainChart() {
-		if (this.chart) {
-			this.chart.destroy();
-			this.chart = null;
-		}
-	}
-
-	updateThemeMode(isDark) {
-		this.isDark = isDark;
-		if (typeof window !== 'undefined' && window.Chart?.defaults) {
-			window.Chart.defaults.color = isDark ? '#94a3b8' : '#64748b';
-			window.Chart.defaults.borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)';
-		}
-		if (this.lastCategoryTrend) this.renderCategoryTrend(this.lastCategoryTrend);
+		const fields = [['net_assets','純資産','#2563eb'],['liquid_assets','流動資産','#10b981'],['investment_assets','投資資産（全口座）','#8b5cf6'],['investment_acquisition_cost','取得原価（直近記録）','#d97706'],['investment_valuation','口座評価額（預り金込・参考）','#db2777'],['liabilities','負債','#ef4444']];
+		this.drawTime('assetHistoryChart','asset-history','asset-history-chart','asset-history-fallback','資産・投資推移','line', {
+			labels: history.points.map(point => point.date), datasets: fields.map(([field, label, borderColor]) => ({ seriesKey: field, label, borderColor, data: history.points.map(point => point[field]), ...(field === 'investment_acquisition_cost' ? { spanGaps: false, stepped: 'before', borderDash: [5,3] } : {}) }))
+		}, { scales: { y: { beginAtZero: true } } });
 	}
 
 	renderCategoryTrend(trend) {
 		this.lastCategoryTrend = trend;
-		this.categoryTrendChart?.destroy(); this.categoryTrendChart = null;
-		const canvas = document.getElementById('category-trend-chart');
-		const container = document.getElementById('category-trend-chart-container');
-		const fallback = document.getElementById('category-trend-fallback');
-		if (!canvas || !container || !fallback) return;
-		container.style.display = 'none'; fallback.style.display = 'block';
-		if (!trend.series.length) { fallback.textContent = '対象の費目支出はありません。'; return; }
-		if (window.Chart) {
-			const palette = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed', '#db2777', '#0891b2', '#65a30d'];
-			container.style.display = 'block'; fallback.style.display = 'none';
-			this.categoryTrendChart = new window.Chart(canvas, {
-				type: 'line',
-				data: { labels: trend.labels, datasets: trend.series.map(row => {
-					let hash = 0; for (const char of row.id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-					return { categoryId: row.id, label: row.name, data: row.values.slice(), borderColor: palette[hash % palette.length], fill: false, tension: 0.15 };
-				}) },
-				options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: 'bottom' } }, interaction: { mode: 'index', intersect: false } }
-			});
-		} else {
-			fallback.innerHTML = `<table class="summary-table"><caption>費目ごとの支出推移</caption><thead><tr><th>期間</th>${trend.series.map(row => `<th>${escapeHtml(row.name)}</th>`).join('')}</tr></thead><tbody>${trend.labels.map((label, index) => `<tr><th>${escapeHtml(label)}</th>${trend.series.map(row => `<td>¥${escapeHtml(row.values[index].toLocaleString())}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-		}
+		const palette = ['#2563eb','#059669','#d97706','#dc2626','#7c3aed','#db2777','#0891b2','#65a30d'];
+		this.drawTime('categoryTrendChart','category-trend','category-trend-chart','category-trend-fallback',`費目ごとの${trend.type === 'income' ? '収入' : '支出'}推移`,'line', {
+			labels: trend.labels, datasets: trend.series.map(row => {
+				const key = JSON.stringify([trend.type || 'expense', row.kind || 'category', row.id]);
+				let hash = 0; for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+				return { seriesKey: key, categoryId: row.id, label: row.name, data: row.values, borderColor: palette[hash % palette.length], fill: false, tension: 0.15 };
+			})
+		}, { scales: { y: { beginAtZero: true } } });
+	}
+
+	renderChartForDaily(dailyData) {
+		const days = Object.values(dailyData.days);
+		this.drawTime('chart','summary','summary-chart','chart-fallback','日別収支','bar', { labels: days.map(d => `${d.day}日`), datasets: [
+			{ seriesKey: 'expense:confirmed', label: '確定支出', data: days.map(d => d.expense_confirmed), backgroundColor: '#ef4444', stack: 'exp' },
+			{ seriesKey: 'expense:planned', label: '予定支出', data: days.map(d => this.coordinator.showPlanned ? d.expense_planned : 0), backgroundColor: '#fca5a5', stack: 'exp' },
+			{ seriesKey: 'income', label: '収入', data: days.map(d => d.income_total), backgroundColor: '#10b981' }
+		] }, { scales: { x: { stacked: true }, y: { beginAtZero: true } } });
+	}
+
+	renderChartForMonthly(monthlyData) {
+		const months = Object.values(monthlyData.months);
+		this.renderCashflowTotals(months.map(m => `${m.month.slice(5)}月`), months.map(m => m.income_total), months.map(m => m.expense_total), `${monthlyData.year}年 月別収支`);
+	}
+
+	renderChartForYearly(yearlyData) {
+		const years = Object.values(yearlyData).sort((a,b) => a.year.localeCompare(b.year));
+		this.renderCashflowTotals(years.map(y => `${y.year}年`), years.map(y => y.income), years.map(y => y.expense));
+	}
+
+	renderCashflowTotals(labels, incomes, expenses, title = '収支推移') {
+		this.drawTime('chart','summary','summary-chart','chart-fallback',title,'bar', { labels, datasets: [
+			{ seriesKey: 'income', label: '収入', data: incomes, backgroundColor: '#10b981' },
+			{ seriesKey: 'expense', label: '支出', data: expenses, backgroundColor: '#ef4444' }
+		] }, { scales: { y: { beginAtZero: true } } });
+	}
+
+	renderChartForBudgetProgress(trajectory, year, expenseBudget, savingsTarget) {
+		this.drawTime('chart','summary','summary-chart','chart-fallback',`${year}年 予算消化・貯蓄進捗`,'line', { labels: trajectory.map(t => `${Number(t.month)}月`), datasets: [
+			{ seriesKey:'budget:expense',label:'累積支出実績',data:trajectory.map(t=>t.cumulative_expense),borderColor:'#ef4444',fill:false },
+			{ seriesKey:'budget:expense-pace',label:'予算消化ペース基準',data:trajectory.map(t=>t.cumulative_budget_pace),borderColor:'#f59e0b',borderDash:[5,5],pointRadius:0 },
+			{ seriesKey:'budget:savings',label:'累積純貯蓄実績',data:trajectory.map(t=>t.cumulative_savings),borderColor:'#10b981',fill:false },
+			{ seriesKey:'budget:savings-pace',label:'目標貯蓄ペース基準',data:trajectory.map(t=>t.cumulative_savings_pace),borderColor:'#3b82f6',borderDash:[5,5],pointRadius:0 }
+		] }, { scales: { y: { beginAtZero: true } } });
 	}
 
 	getDoughnutTooltipOptions() {
@@ -111,196 +139,11 @@ export class ChartController {
 		};
 	}
 
-	renderChartForDaily(dailyData) {
-		const canvas = document.getElementById('summary-chart');
-		const fallback = document.getElementById('chart-fallback');
-		if (!canvas) return;
-
-		const days = Object.values(dailyData.days);
-		const labels = days.map(d => String(d.day) + '日');
-		const confirmedExp = days.map(d => d.expense_confirmed);
-		const plannedExp = days.map(d => this.coordinator.showPlanned ? d.expense_planned : 0);
-		const incomes = days.map(d => d.income_total);
-
-		if (typeof window !== 'undefined' && window.Chart) {
-			if (fallback) fallback.style.display = 'none';
-			canvas.style.display = 'block';
-
-			this.destroyMainChart();
-			this.chart = new window.Chart(canvas, {
-				type: 'bar',
-				data: {
-					labels,
-					datasets: [
-						{ label: '確定支出', data: confirmedExp, backgroundColor: '#ef4444', stack: 'exp' },
-						{ label: '予定支出', data: plannedExp, backgroundColor: '#fca5a5', stack: 'exp' },
-						{ label: '収入', data: incomes, backgroundColor: '#10b981' }
-					]
-				},
-				options: {
-					responsive: true,
-					maintainAspectRatio: false,
-					scales: { x: { stacked: true }, y: { beginAtZero: true } }
-				}
-			});
-		} else if (fallback) {
-			canvas.style.display = 'none';
-			fallback.style.display = 'block';
-			fallback.innerHTML = `<div>当月の日別集計データ表示中 (合計: 収入 ¥${dailyData.total_income.toLocaleString()} / 支出 ¥${dailyData.total_expense.toLocaleString()})</div>`;
-		}
-	}
-
-	renderChartForMonthly(monthlyData) {
-		const canvas = document.getElementById('summary-chart');
-		const fallback = document.getElementById('chart-fallback');
-		if (!canvas) return;
-
-		const months = Object.values(monthlyData.months);
-		const labels = months.map(m => m.month.slice(5) + '月');
-		const incomes = months.map(m => m.income_total);
-		const expenses = months.map(m => m.expense_total);
-
-		if (typeof window !== 'undefined' && window.Chart) {
-			if (fallback) fallback.style.display = 'none';
-			canvas.style.display = 'block';
-
-			this.destroyMainChart();
-			this.chart = new window.Chart(canvas, {
-				type: 'bar',
-				data: {
-					labels,
-					datasets: [
-						{ label: '収入', data: incomes, backgroundColor: '#10b981' },
-						{ label: '支出', data: expenses, backgroundColor: '#ef4444' }
-					]
-				},
-				options: {
-					responsive: true,
-					maintainAspectRatio: false,
-					scales: { y: { beginAtZero: true } }
-				}
-			});
-		} else if (fallback) {
-			canvas.style.display = 'none';
-			fallback.style.display = 'block';
-			fallback.innerHTML = `<div>${monthlyData.year}年 月別収支 (年間収入: ¥${monthlyData.total_income.toLocaleString()} / 支出: ¥${monthlyData.total_expense.toLocaleString()})</div>`;
-		}
-	}
-
-	renderChartForYearly(yearlyData) {
-		const canvas = document.getElementById('summary-chart');
-		const fallback = document.getElementById('chart-fallback');
-		if (!canvas) return;
-
-		const years = Object.values(yearlyData).sort((a, b) => a.year.localeCompare(b.year));
-		const labels = years.map(y => y.year + '年');
-		const incomes = years.map(y => y.income);
-		const expenses = years.map(y => y.expense);
-
-		if (typeof window !== 'undefined' && window.Chart) {
-			if (fallback) fallback.style.display = 'none';
-			canvas.style.display = 'block';
-
-			this.destroyMainChart();
-			this.chart = new window.Chart(canvas, {
-				type: 'bar',
-				data: {
-					labels,
-					datasets: [
-						{ label: '年間収入', data: incomes, backgroundColor: '#10b981' },
-						{ label: '年間支出', data: expenses, backgroundColor: '#ef4444' }
-					]
-				},
-				options: {
-					responsive: true,
-					maintainAspectRatio: false,
-					scales: { y: { beginAtZero: true } }
-				}
-			});
-		} else if (fallback) {
-			canvas.style.display = 'none';
-			fallback.style.display = 'block';
-			fallback.innerHTML = '<div>年次推移データ表示中</div>';
-		}
-	}
-
-	renderChartForBudgetProgress(trajectory, year, expenseBudget, savingsTarget) {
-		const canvas = document.getElementById('summary-chart');
-		const fallback = document.getElementById('chart-fallback');
-		if (!canvas) return;
-
-		const labels = trajectory.map(t => `${Number(t.month)}月`);
-		const cumExpenses = trajectory.map(t => t.cumulative_expense);
-		const cumBudgetPace = trajectory.map(t => t.cumulative_budget_pace);
-		const cumSavings = trajectory.map(t => t.cumulative_savings);
-		const cumSavingsPace = trajectory.map(t => t.cumulative_savings_pace);
-
-		if (typeof window !== 'undefined' && window.Chart) {
-			if (fallback) fallback.style.display = 'none';
-			canvas.style.display = 'block';
-
-			this.destroyMainChart();
-			this.chart = new window.Chart(canvas, {
-				type: 'line',
-				data: {
-					labels,
-					datasets: [
-						{
-							label: '累積支出実績',
-							data: cumExpenses,
-							borderColor: '#ef4444',
-							backgroundColor: 'rgba(239, 68, 68, 0.1)',
-							borderWidth: 2,
-							tension: 0.1,
-							fill: false
-						},
-						{
-							label: '予算消化ペース基準',
-							data: cumBudgetPace,
-							borderColor: '#f59e0b',
-							borderDash: [5, 5],
-							borderWidth: 2,
-							pointRadius: 0,
-							fill: false
-						},
-						{
-							label: '累積純貯蓄実績',
-							data: cumSavings,
-							borderColor: '#10b981',
-							backgroundColor: 'rgba(16, 185, 129, 0.1)',
-							borderWidth: 2,
-							tension: 0.1,
-							fill: false
-						},
-						{
-							label: '目標貯蓄ペース基準',
-							data: cumSavingsPace,
-							borderColor: '#3b82f6',
-							borderDash: [5, 5],
-							borderWidth: 2,
-							pointRadius: 0,
-							fill: false
-						}
-					]
-				},
-				options: {
-					responsive: true,
-					maintainAspectRatio: false,
-					scales: {
-						y: {
-							beginAtZero: true
-						}
-					}
-				}
-			});
-		} else if (fallback) {
-			canvas.style.display = 'none';
-			fallback.style.display = 'block';
-			fallback.innerHTML = `<div>${year}年 予算消化・貯蓄進捗データ表示中 (年間予算: ¥${expenseBudget.toLocaleString()} / 目標貯蓄: ¥${savingsTarget.toLocaleString()})</div>`;
-		}
-	}
 
 	renderChartForAssets(totalAssetSummary) {
+		this.drop('chart'); this.timeViews.delete('chart');
+		document.getElementById('summary-series')?.replaceChildren();
+		const reset = document.getElementById('summary-reset'); if (reset) reset.parentElement.style.display = 'none';
 		const canvas = document.getElementById('summary-chart');
 		const fallback = document.getElementById('chart-fallback');
 		if (!canvas) return;

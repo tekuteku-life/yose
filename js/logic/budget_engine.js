@@ -4,6 +4,30 @@
  * annual/category progress evaluation, and 12-month trajectory generation.
  */
 
+/** Resolve current annual goals without persisting derived amounts. */
+export function resolveAnnualTargets(config = {}, income = 0) {
+	const basis = config.goal_basis ?? 'independent';
+	let expense = config.expense_budget ?? 0, savings = config.savings_target_amount ?? 0, rate = config.savings_target_rate ?? config.target_savings_rate ?? 0;
+	const invalid = { valid: false, expense_budget: null, savings_target_amount: null, savings_target_rate: null };
+	if (!Number.isSafeInteger(income) || income < 0 || !['independent', 'rate', 'savings', 'expense'].includes(basis)) return invalid;
+	if (basis === 'rate') {
+		if (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0 || rate > 100) return invalid;
+		const [decimal, exponentText] = String(rate).toLowerCase().split('e');
+		const fractionDigits = (decimal.split('.')[1] || '').length, exponent = Number(exponentText || 0) - fractionDigits;
+		const digits = BigInt(decimal.replace('.', ''));
+		const numerator = exponent >= 0 ? digits * 10n ** BigInt(exponent) : digits;
+		const denominator = 100n * (exponent < 0 ? 10n ** BigInt(-exponent) : 1n);
+		savings = Number(BigInt(income) * numerator / denominator); expense = income - savings;
+	} else if (basis === 'savings' || basis === 'expense') {
+		const primary = basis === 'savings' ? savings : expense;
+		if (!Number.isSafeInteger(primary) || primary < 0) return invalid;
+		if (basis === 'savings') expense = income - savings; else savings = income - expense;
+		rate = income > 0 ? savings / income * 100 : null;
+	} else if (![expense, savings].every(n => Number.isSafeInteger(n) && n >= 0) || typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0 || rate > 100) return invalid;
+	if (![expense, savings].every(Number.isSafeInteger)) return invalid;
+	return { valid: true, expense_budget: expense, savings_target_amount: savings, savings_target_rate: rate };
+}
+
 const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
 
 /**
@@ -159,15 +183,21 @@ export function calculateAnnualBudgetProgress({
 	categoryBudgets = null,
 	categoryActuals = null
 } = {}) {
-	const finalExpenseBudget = expenseBudget !== null
+	let finalExpenseBudget = expenseBudget !== null
 		? Math.max(0, Number(expenseBudget) || 0)
 		: Math.max(0, Number(budgetConfig?.expense_budget) || 0);
-	const finalSavingsTargetAmount = savingsTargetAmount !== null
+	let finalSavingsTargetAmount = savingsTargetAmount !== null
 		? Math.max(0, Number(savingsTargetAmount) || 0)
 		: Math.max(0, Number(budgetConfig?.savings_target_amount) || 0);
-	const finalSavingsTargetRate = savingsTargetRate !== null
+	let finalSavingsTargetRate = savingsTargetRate !== null
 		? Math.max(0, Number(savingsTargetRate) || 0)
 		: Math.max(0, Number(budgetConfig?.savings_target_rate ?? budgetConfig?.target_savings_rate) || 0);
+
+	const invalidGoals = budgetConfig && !resolveAnnualTargets(budgetConfig, incomeActual ?? yearlySummary?.income ?? 0).valid;
+	if (budgetConfig?.goal_basis && budgetConfig.goal_basis !== 'independent') {
+		const targets = resolveAnnualTargets(budgetConfig, incomeActual ?? yearlySummary?.income ?? 0);
+		finalExpenseBudget = targets.expense_budget; finalSavingsTargetAmount = targets.savings_target_amount; finalSavingsTargetRate = targets.savings_target_rate;
+	}
 
 	const finalExpenseActual = expenseActual !== null
 		? Number(expenseActual) || 0
@@ -192,7 +222,7 @@ export function calculateAnnualBudgetProgress({
 		: (new Date().getMonth() + 1);
 	const expectedPaceRate = Math.round((month / 12) * 1000) / 10;
 
-	const paceStatus = evaluatePaceStatus(expenseConsumptionRate, finalExpenseBudget, expectedPaceRate);
+	const paceStatus = finalExpenseBudget < 0 || (budgetConfig?.goal_basis && budgetConfig.goal_basis !== 'independent' && finalExpenseBudget === 0 && finalExpenseActual > 0) ? 'over_budget' : evaluatePaceStatus(expenseConsumptionRate, finalExpenseBudget, expectedPaceRate);
 
 	// Savings target metrics
 	const isDeficit = finalNetSavingsActual < 0;
@@ -258,7 +288,8 @@ export function calculateAnnualBudgetProgress({
 		savings_rate_achieved: savingsRateAchieved,
 		category_progress,
 		total_category_budget: totalCategoryBudget,
-		budget_discrepancy: finalExpenseBudget - totalCategoryBudget
+		budget_discrepancy: finalExpenseBudget - totalCategoryBudget,
+		...(invalidGoals ? { expense_budget: null, expense_remaining: null, expense_consumption_rate: null, pace_status: 'unavailable', savings_target_amount: null, savings_remaining: null, savings_achievement_rate: null, savings_target_rate: null, savings_rate_achieved: false, budget_discrepancy: null } : {})
 	};
 }
 
@@ -271,11 +302,13 @@ export function generateAnnualTrajectory({
 	year = String(new Date().getFullYear()),
 	monthlySummaries = {},
 	expenseBudget = 0,
-	savingsTarget = 0
+	savingsTarget = 0,
+	linked = false,
+	targetsValid = true
 } = {}) {
 	const trajectory = [];
-	const budget = Math.max(0, Number(expenseBudget) || 0);
-	const targetSavings = Math.max(0, Number(savingsTarget) || 0);
+	const budget = linked ? Number(expenseBudget) || 0 : Math.max(0, Number(expenseBudget) || 0);
+	const targetSavings = linked ? Number(savingsTarget) || 0 : Math.max(0, Number(savingsTarget) || 0);
 
 	let cumExpense = 0;
 	let cumSavings = 0;
@@ -296,12 +329,12 @@ export function generateAnnualTrajectory({
 			month: mStr,
 			month_str: periodKey,
 			monthly_expense: mExp,
-			monthly_budget_allowance: Math.round(budget / 12),
+			monthly_budget_allowance: targetsValid ? Math.round(budget / 12) : null,
 			cumulative_expense: cumExpense,
-			cumulative_budget_pace: Math.round((budget / 12) * m),
+			cumulative_budget_pace: targetsValid ? Math.round((budget / 12) * m) : null,
 			monthly_savings: mNet,
 			cumulative_savings: cumSavings,
-			cumulative_savings_pace: Math.round((targetSavings / 12) * m)
+			cumulative_savings_pace: targetsValid ? Math.round((targetSavings / 12) * m) : null
 		});
 	}
 

@@ -14,6 +14,7 @@ export class TransactionListController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
 		this.currentPage = 1;
+		this.calendarMonthFilter = null;
 		this.pageSize = 30;
 		this.totalPages = 1;
 		this._paginationEventsAttached = false;
@@ -100,9 +101,10 @@ export class TransactionListController {
 			const categories = (masterConfig?.categories || []).filter(c => !c.is_archived || referencedCategories.has(c.id));
 			catSelect.innerHTML = [
 				'<option value="all">すべての費目</option>',
+				'<option value="cat_unclassified">未分類</option>',
 				...categories.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.icon || '🏷️')} ${escapeHtml(c.name)}</option>`)
 			].join('');
-			if (currentCat === 'all' || categories.some(c => c.id === currentCat)) {
+			if (currentCat === 'all' || currentCat === 'cat_unclassified' || categories.some(c => c.id === currentCat)) {
 				catSelect.value = currentCat;
 			} else {
 				catSelect.value = 'all';
@@ -198,7 +200,11 @@ export class TransactionListController {
 		const titleEl = document.getElementById('month-tx-list-title');
 		let title;
 
-		if (granularity === 'yearly') {
+		if (this.calendarMonthFilter && document.getElementById('select-type-filter')?.value === 'income') {
+			const all = await this.db.getTransactions({ includeDeleted: false });
+			txs = all.filter(tx => tx.date?.slice(0, 7) === this.calendarMonthFilter);
+			title = `📋 ${this.calendarMonthFilter} (取引日別の当月) の明細一覧`;
+		} else if (granularity === 'yearly') {
 			const targetYear = this.coordinator.selectedYear || new Date().getFullYear();
 			title = `📋 ${targetYear}年 (年間) の明細一覧`;
 			const all = await this.db.getTransactions({ includeDeleted: false });
@@ -232,6 +238,8 @@ export class TransactionListController {
 
 		const filtered = filterTransactionsByCriteria(txs, {
 			status: filterStatus,
+			type: document.getElementById('select-type-filter')?.value || 'all',
+			categoryAxis: document.getElementById('select-type-filter')?.value === 'income' ? (this.coordinator.useActualCategoryAxis ? 'actual' : 'accounting') : 'both',
 			includePlanned: this.coordinator.showPlanned,
 			accountId: filterAccount,
 			categoryId: filterCategory,

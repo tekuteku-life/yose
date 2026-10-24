@@ -26,7 +26,7 @@ const FIELD_LABELS = {
 	debit_account_id: '引落口座', settlement_account_id: '精算口座', closing_day: '締日', debit_day: '引落日', debit_month_offset: '引落月',
 	is_active: '有効状態', start_date: '開始日', end_date: '終了日', frequency: '繰返し頻度', interval_months: '繰返し月数', day_of_month: '対象日', holiday_adjustment: '休日調整', amortize_months: '按分月数',
 	amount: '金額', account_id: '決済口座', to_account_id: '振替先口座', category_id: '計上費目', subcategory_id: '計上中項目', actual_category_id: '実態費目', actual_subcategory_id: '実態中項目', memo: 'メモ', tags: 'タグ',
-	expense_budget: '支出予算', savings_target_amount: '貯蓄目標額', savings_target_rate: '貯蓄目標率', target_savings_rate: '目標貯蓄率'
+	goal_basis: '目標の基準', expense_budget: '支出予算', savings_target_amount: '貯蓄目標額', savings_target_rate: '貯蓄目標率', target_savings_rate: '目標貯蓄率'
 };
 
 function valueAtSegments(root, segments) {
@@ -77,7 +77,19 @@ function referenceDisplayName(root, segments, value) {
 export function mergeMasterConfigs(base, local, remote) {
 	assertSafe(base); assertSafe(local); assertSafe(remote);
 	const conflicts = [], conflictDetails = [];
-	const merge = (before, here, there, path, segments) => {
+	const conflict = (here, there, path, segments, annualGoal = false) => {
+		conflicts.push(path);
+		const localDisplayName = referenceDisplayName(local, segments, here);
+		const remoteDisplayName = referenceDisplayName(remote, segments, there);
+		conflictDetails.push({
+			...(localDisplayName === undefined ? {} : { localDisplayName }), ...(remoteDisplayName === undefined ? {} : { remoteDisplayName }),
+			id: `conflict-${conflictDetails.length}`, path, label: conflictLabel(segments, [local, remote, base]) + (annualGoal ? ' / 目標の基準と元入力' : ''), segments: structuredClone(segments),
+			...(annualGoal ? { kind: 'annual_goal' } : {}),
+			localValue: structuredClone(here), remoteValue: structuredClone(there), hasLocal: here !== undefined, hasRemote: there !== undefined
+		});
+		return here;
+	};
+	const merge = (before, here, there, path, segments, skipGoals = false) => {
 		if (same(here, there) || same(before, there)) return here;
 		if (same(before, here)) return there;
 		if ([before, here, there].every(value => Array.isArray(value))) {
@@ -92,6 +104,16 @@ export function mergeMasterConfigs(base, local, remote) {
 			}
 		}
 		if ([here, there].every(value => value && !Array.isArray(value) && typeof value === 'object') && (before === undefined || (before && !Array.isArray(before) && typeof before === 'object'))) {
+			if (!skipGoals && segments.length === 2 && segments[0] === 'annual_budgets') {
+				const fields = ['goal_basis', 'expense_budget', 'savings_target_amount', 'savings_target_rate', 'target_savings_rate'];
+				const goal = entry => [entry?.goal_basis ?? 'independent', entry?.expense_budget ?? 0, entry?.savings_target_amount ?? 0, entry?.savings_target_rate ?? entry?.target_savings_rate ?? 0];
+				const pick = entry => Object.fromEntries(Object.entries(entry || {}).filter(([key]) => fields.includes(key)));
+				const omit = entry => entry === undefined ? undefined : Object.fromEntries(Object.entries(entry).filter(([key]) => !fields.includes(key)));
+				const rest = merge(omit(before), omit(here), omit(there), path, segments, true);
+				if (same(goal(here), goal(there)) || same(goal(before), goal(there))) return { ...rest, ...pick(here) };
+				if (same(goal(before), goal(here))) return { ...rest, ...pick(there) };
+				return { ...rest, ...conflict(pick(here), pick(there), path, segments, true) };
+			}
 			const merged = {};
 			for (const key of new Set([...Object.keys(before || {}), ...Object.keys(here), ...Object.keys(there)])) {
 				const value = merge(before?.[key], here[key], there[key], path ? `${path}.${key}` : key, [...segments, key]);
@@ -99,15 +121,7 @@ export function mergeMasterConfigs(base, local, remote) {
 			}
 			return merged;
 		}
-		conflicts.push(path);
-		const localDisplayName = referenceDisplayName(local, segments, here);
-		const remoteDisplayName = referenceDisplayName(remote, segments, there);
-		conflictDetails.push({
-			...(localDisplayName === undefined ? {} : { localDisplayName }), ...(remoteDisplayName === undefined ? {} : { remoteDisplayName }),
-			id: `conflict-${conflictDetails.length}`, path, label: conflictLabel(segments, [local, remote, base]), segments: structuredClone(segments),
-			localValue: structuredClone(here), remoteValue: structuredClone(there), hasLocal: here !== undefined, hasRemote: there !== undefined
-		});
-		return here;
+		return conflict(here, there, path, segments);
 	};
 	return { config: structuredClone(merge(base, local, remote, '', [])), conflicts, conflictDetails };
 }
@@ -120,6 +134,7 @@ export function resolveMasterConflicts(mergeResult, choices) {
 	const ids = new Set();
 	for (const detail of details) {
 		if (!detail || typeof detail.id !== 'string' || !detail.id || ids.has(detail.id) || !Array.isArray(detail.segments)) throw new Error('競合情報が不正または重複しています');
+		if (detail.kind !== undefined && (detail.kind !== 'annual_goal' || detail.segments.length !== 2 || detail.segments[0] !== 'annual_budgets' || !/^\d{4}$/.test(detail.segments[1]) || [detail.localValue, detail.remoteValue].some(value => !value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(field => !['goal_basis', 'expense_budget', 'savings_target_amount', 'savings_target_rate', 'target_savings_rate'].includes(field))))) throw new Error('目標組の競合情報が不正です');
 		ids.add(detail.id);
 		if (!choices.has(detail.id) || !['local', 'remote'].includes(choices.get(detail.id))) throw new Error('すべての競合項目で手元またはサーバーを選択してください');
 		if (typeof detail.hasLocal !== 'boolean' || typeof detail.hasRemote !== 'boolean' || detail.hasLocal !== (detail.localValue !== undefined) || detail.hasRemote !== (detail.remoteValue !== undefined)) throw new Error('競合値の有無が不正です');
@@ -150,6 +165,12 @@ export function resolveMasterConflicts(mergeResult, choices) {
 		const finalSegment = detail.segments.at(-1);
 		if (typeof finalSegment === 'string') {
 			if (!parent || typeof parent !== 'object' || Array.isArray(parent)) throw new Error('競合パスの参照先が不正です');
+			if (detail.kind === 'annual_goal') {
+				const entry = parent[finalSegment];
+				if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('目標組の年度参照が不正です');
+				for (const field of ['goal_basis', 'expense_budget', 'savings_target_amount', 'savings_target_rate', 'target_savings_rate']) delete entry[field];
+				Object.assign(entry, value); continue;
+			}
 			if (present) parent[finalSegment] = value;
 			else delete parent[finalSegment];
 		} else {

@@ -31,8 +31,8 @@ export function transaction(id, overrides = {}) {
 	};
 }
 
-export async function openBrowser() {
-	const driver = new HeadlessBrowserDriver({ now: FIXED_NOW });
+export async function openBrowser(options = {}) {
+	const driver = new HeadlessBrowserDriver({ now: FIXED_NOW, ...options });
 	try {
 		await driver.launch();
 		await driver.navigate();
@@ -48,10 +48,10 @@ export async function openBrowser() {
 }
 
 // Every test owns an isolated browser context, IndexedDB, storage, keys, and application state.
-export function useBrowser() {
+export function useBrowser(options = {}) {
 	const fixture = { driver: null };
 	beforeEach(async () => {
-		fixture.driver = await openBrowser();
+		fixture.driver = await openBrowser(options);
 	});
 	afterEach(async () => {
 		const driver = fixture.driver;

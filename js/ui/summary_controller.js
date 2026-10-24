@@ -12,6 +12,7 @@ import {
 	aggregateMonthlySummaries,
 	aggregateYearlySummaries,
 	calculateAnnualBudgetProgress,
+	resolveAnnualTargets,
 	generateAnnualTrajectory,
 	calculateTagSummary,
 	calculateCrossAccrualActualSummary,
@@ -25,6 +26,8 @@ export class SummaryController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
 		this.tagSearchQuery = '';
+		this.categoryType = 'expense';
+		this.incomeBreakdown = [];
 		this.lastTransactions = null;
 		this.assetPeriod = 'month';
 		this.renderVersion = 0;
@@ -43,6 +46,7 @@ export class SummaryController {
 	}
 
 	setSelectedMonth(month) {
+		this.coordinator.txListController.calendarMonthFilter = null;
 		const day = Number((this.coordinator.selectedDate || '').slice(8, 10)) || 1;
 		const [year, monthNumber] = month.split('-').map(Number);
 		const lastDay = new Date(year, monthNumber, 0).getDate();
@@ -69,6 +73,7 @@ export class SummaryController {
 			btn.addEventListener('click', () => {
 				document.querySelectorAll('#control-granularity .segment-btn').forEach(b => b.classList.remove('active'));
 				btn.classList.add('active');
+				this.coordinator.txListController.calendarMonthFilter = null;
 				this.coordinator.analyticsGranularity = btn.dataset.granularity;
 				if (this.coordinator.txListController) {
 					this.coordinator.txListController.currentPage = 1;
@@ -130,6 +135,8 @@ export class SummaryController {
 			this.renderSummary();
 		});
 
+		document.getElementById('category-trend-type').addEventListener('change', event => { this.categoryType = event.target.value; void this.renderSummary(); });
+		document.getElementById('select-type-filter').addEventListener('change', () => { this.coordinator.txListController.currentPage = 1; void this.coordinator.txListController.renderMonthTransactions(); });
 		const btnAxis = document.getElementById('btn-toggle-axis');
 		btnAxis?.addEventListener('click', () => {
 			this.coordinator.useActualCategoryAxis = !this.coordinator.useActualCategoryAxis;
@@ -252,10 +259,10 @@ export class SummaryController {
 			}
 		}
 
-		const assetState = ['assets', 'budget'].includes(target) ? await this.db.getAnalyticsState() : null;
-		const snapshot = assetState ? assetState.summary_snapshot : await this.db.getSnapshot();
-		const config = assetState ? assetState.master_config : await this.db.getMasterConfig();
-		const transactions = assetState ? assetState.transactions.filter(tx => !tx.is_deleted) : await this.db.getTransactions({ includeDeleted: false });
+		const assetState = await this.db.getAnalyticsState();
+		const snapshot = assetState.summary_snapshot;
+		const config = assetState.master_config;
+		const transactions = assetState.transactions.filter(tx => !tx.is_deleted);
 		if (renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 
 		const summary = calculateBalancesAndSummaries(snapshot, target === 'assets' ? transactions.filter(tx => tx.status !== 'confirmed' || tx.date <= formatDate(new Date())) : transactions, this.coordinator.currentMonth);
@@ -341,11 +348,18 @@ export class SummaryController {
 			if (budgetCatCard) budgetCatCard.style.display = 'none';
 			if (catCard) catCard.style.display = 'block';
 			if (accountBalancesTitle) accountBalancesTitle.textContent = '口座別支出（収支）';
+			const type = this.categoryType, typeName = type === 'income' ? '収入' : '支出';
 			const scope = document.getElementById('category-trend-scope');
-			if (scope) scope.textContent = granularity === 'daily' ? `${this.coordinator.currentMonth}の取得済み明細を取引日で集計します。未取得の日別明細は含みません。` : '計上月と保存済み月次集計に基づく取得済み範囲の支出推移です。';
+			if (scope) scope.textContent = granularity === 'daily' ? `${this.coordinator.currentMonth}の取得済み明細を取引日で集計します。未取得の日別明細は含みません。` : `計上月と保存済み月次集計に基づく取得済み範囲の${typeName}推移です。`;
 			const title = document.getElementById('category-trend-title');
-			if (title) title.textContent = `${granularity === 'daily' ? this.coordinator.currentMonth + ' 取引日別' : granularity === 'monthly' ? this.coordinator.selectedYear + '年 月別' : '年別'} 費目ごとの支出推移（${this.coordinator.useActualCategoryAxis ? '実態分類' : '計上分類'}）`;
-			this.chartController.renderCategoryTrend(buildCategoryTrend(transactions, snapshot, config, { granularity, month: this.coordinator.currentMonth, year: this.coordinator.selectedYear, actualAxis: this.coordinator.useActualCategoryAxis, includePlanned: this.coordinator.showPlanned }));
+			if (title) title.textContent = `${granularity === 'daily' ? this.coordinator.currentMonth + ' 取引日別' : granularity === 'monthly' ? this.coordinator.selectedYear + '年 月別' : '年別'} 費目ごとの${typeName}推移（${this.coordinator.useActualCategoryAxis ? '実態分類' : '計上分類'}）`;
+			document.getElementById('category-trend-chart').setAttribute('aria-label', `費目ごとの${typeName}推移`);
+			const options = { type, granularity, month: this.coordinator.currentMonth, year: this.coordinator.selectedYear, actualAxis: this.coordinator.useActualCategoryAxis, includePlanned: this.coordinator.showPlanned, historyOptions: assetState.historyOptions };
+			const trend = buildCategoryTrend(transactions, snapshot, config, options);
+			this.chartController.renderCategoryTrend({ ...trend, type });
+			const breakdownTrend = type === 'income' && granularity === 'yearly' ? buildCategoryTrend(transactions, snapshot, config, { ...options, granularity: 'monthly' }) : trend;
+			this.incomeBreakdown = breakdownTrend.series.map(row => ({ id: row.id, name: row.name, amount: row.values.reduce((sum, value, index) => sum + (granularity !== 'monthly' || breakdownTrend.labels[index] === this.coordinator.currentMonth ? value : 0), 0) }));
+
 
 			if (granularity === 'daily') {
 				if (chartTitle) chartTitle.textContent = `${this.coordinator.currentMonth} 日別収支推移・内訳`;
@@ -403,7 +417,7 @@ export class SummaryController {
 		} catch (error) { if (generation === this.assetHistoryGeneration && !this.coordinator.isKeyLocked) alert(error.message); }
 	}
 
-	async applyDrilldownFilter({ accountId = 'all', categoryId = 'all', tag = 'all' } = {}) {
+	async applyDrilldownFilter({ accountId = 'all', categoryId = 'all', tag = 'all', type = 'all' } = {}) {
 		if (this.coordinator.analyticsTarget !== 'cashflow') {
 			this.coordinator.analyticsTarget = 'cashflow';
 			const tabBtns = document.querySelectorAll('.tab-btn');
@@ -420,6 +434,8 @@ export class SummaryController {
 		const tagSelect = document.getElementById('select-tag-filter');
 		const searchInput = document.getElementById('input-tx-search');
 
+		document.getElementById('select-type-filter').value = type;
+		this.coordinator.txListController.calendarMonthFilter = type === 'income' && this.coordinator.analyticsGranularity === 'daily' ? this.coordinator.currentMonth : null;
 		if (statusSelect) statusSelect.value = 'all';
 		if (searchInput) searchInput.value = '';
 
@@ -802,11 +818,11 @@ export class SummaryController {
 	renderBudgetAnalytics(transactions, snapshot, config) {
 		const currentYear = this.coordinator.selectedYear || String(new Date().getFullYear());
 		const budgetConfig = config?.annual_budgets?.[currentYear] || {};
-		const expenseBudget = Number(budgetConfig.expense_budget) || 0;
-		const savingsTarget = Number(budgetConfig.savings_target_amount) || 0;
-		const targetRate = Number(budgetConfig.savings_target_rate ?? budgetConfig.target_savings_rate) || 0;
-
 		const monthlyData = aggregateMonthlySummaries(transactions, currentYear, snapshot?.monthly_summaries || {});
+		const targets = resolveAnnualTargets(budgetConfig, monthlyData.total_income);
+		const expenseBudget = targets.expense_budget, savingsTarget = targets.savings_target_amount, targetRate = targets.savings_target_rate;
+
+		const money = value => value === null ? '未算出' : `¥${value.toLocaleString()}`;
 		const expenseActual = monthlyData.total_expense;
 		const incomeActual = monthlyData.total_income;
 		const savingsActual = monthlyData.total_net;
@@ -838,6 +854,7 @@ export class SummaryController {
 				by_category: yearlyCategoryActuals
 			},
 			budgetConfig: {
+				goal_basis: budgetConfig.goal_basis,
 				expense_budget: expenseBudget,
 				savings_target_amount: savingsTarget,
 				savings_target_rate: targetRate,
@@ -868,7 +885,7 @@ export class SummaryController {
 		const lblPaceDesc = document.getElementById('label-budget-pace-desc');
 
 		if (statExp) {
-			statExp.textContent = `¥${expenseBudget.toLocaleString()} / ¥${expenseActual.toLocaleString()}`;
+			statExp.textContent = `${money(expenseBudget)} / ¥${expenseActual.toLocaleString()}`;
 		}
 		if (barExp) {
 			barExp.style.width = `${Math.min(100, Math.max(0, progress.expense_consumption_rate))}%`;
@@ -881,30 +898,36 @@ export class SummaryController {
 			}
 		}
 		if (lblExpPace) {
-			lblExpPace.textContent = `消化率: ${progress.expense_consumption_rate}% (基準ペース: ${progress.expected_pace_rate}%, 残: ¥${progress.expense_remaining.toLocaleString()})`;
+			lblExpPace.textContent = targets.valid ? `消化率: ${progress.expense_consumption_rate}% (基準ペース: ${progress.expected_pace_rate}%, 残: ${money(progress.expense_remaining)})` : '目標・残額は未算出です。';
 		}
 
 		if (statSav) {
-			statSav.textContent = `¥${savingsTarget.toLocaleString()} / ¥${savingsActual.toLocaleString()}`;
+			statSav.textContent = `${money(savingsTarget)} / ¥${savingsActual.toLocaleString()}`;
 		}
 		if (barSav) {
 			barSav.style.width = `${Math.min(100, Math.max(0, progress.savings_achievement_rate))}%`;
 			barSav.style.background = progress.is_deficit ? 'var(--danger)' : '#10b981';
 		}
 		if (lblSavRate) {
-			if (progress.is_deficit) {
+			if (!targets.valid) {
+				lblSavRate.textContent = '目標・残額は未算出です。';
+			} else if (progress.is_deficit) {
 				lblSavRate.textContent = `達成率: 0% (年間収支赤字: ¥${Math.abs(savingsActual).toLocaleString()})`;
 			} else {
-				lblSavRate.textContent = `達成率: ${progress.savings_achievement_rate}% (目標残: ¥${progress.savings_remaining.toLocaleString()})`;
+				lblSavRate.textContent = `達成率: ${progress.savings_achievement_rate}% (目標残: ${money(progress.savings_remaining)})`;
 			}
 		}
 
 		if (statRate) {
-			statRate.textContent = `${targetRate}% / ${progress.savings_actual_rate}%`;
+			statRate.textContent = `${targetRate === null ? '未算出' : Math.round(targetRate * 100) / 100 + '%'} / ${progress.savings_actual_rate}%`;
 		}
 		if (lblRateEval) {
-			if (targetRate <= 0) {
-				lblRateEval.textContent = '目標貯蓄率: 未設定';
+			if (targetRate === null) {
+				lblRateEval.textContent = '目標貯蓄率: 未算出';
+			} else if (targetRate < 0) {
+				lblRateEval.textContent = '目標貯蓄率: 赤字の派生率です。';
+			} else if (targetRate === 0) {
+				lblRateEval.textContent = budgetConfig.goal_basis && budgetConfig.goal_basis !== 'independent' ? '目標貯蓄率: 0%' : '目標貯蓄率: 未設定';
 			} else if (progress.savings_rate_achieved) {
 				lblRateEval.textContent = '✅ 目標貯蓄率を達成中';
 			} else {
@@ -914,7 +937,7 @@ export class SummaryController {
 		}
 
 		if (statPaceStatus) {
-			let paceText = '順調';
+			let paceText = targets.valid ? '順調' : '未算出';
 			let paceColor = '#10b981';
 			if (progress.pace_status === 'ahead') {
 				paceText = '⚡ 抑制中 (余裕あり)';
@@ -930,7 +953,7 @@ export class SummaryController {
 			statPaceStatus.style.color = paceColor;
 		}
 		if (lblPaceDesc) {
-			lblPaceDesc.textContent = `経過${currentMonthIndex}ヶ月時点 (標準消化ペース: ${progress.expected_pace_rate}%)`;
+			lblPaceDesc.textContent = !targets.valid ? '収入または目標の合計が計算範囲を超えています。' : `経過${currentMonthIndex}ヶ月時点 (標準消化ペース: ${progress.expected_pace_rate}%)${expenseBudget < 0 || savingsTarget < 0 ? '・目標に不足/赤字額があります。' : ''}`;
 		}
 
 		// Trajectory for table and chart
@@ -938,7 +961,9 @@ export class SummaryController {
 			year: currentYear,
 			monthlySummaries: monthlyData.months,
 			expenseBudget,
-			savingsTarget
+			savingsTarget,
+			linked: budgetConfig.goal_basis && budgetConfig.goal_basis !== 'independent',
+			targetsValid: targets.valid
 		});
 
 		// Table
@@ -966,11 +991,11 @@ export class SummaryController {
 								<tr>
 									<td><strong>${Number(t.month)}月</strong></td>
 									<td style="color: var(--danger);">¥${t.monthly_expense.toLocaleString()}</td>
-									<td style="color: var(--text-muted);">¥${t.monthly_budget_allowance.toLocaleString()}</td>
+									<td style="color: var(--text-muted);">${money(t.monthly_budget_allowance)}</td>
 									<td style="font-weight: 600; color: ${expExceeded ? 'var(--danger)' : 'var(--text-main)'};">
 										¥${t.cumulative_expense.toLocaleString()}
 									</td>
-									<td style="color: var(--text-muted);">¥${t.cumulative_budget_pace.toLocaleString()}</td>
+									<td style="color: var(--text-muted);">${money(t.cumulative_budget_pace)}</td>
 									<td style="color: ${t.monthly_savings >= 0 ? '#10b981' : 'var(--danger)'};">
 										${t.monthly_savings >= 0 ? '+' : ''}¥${t.monthly_savings.toLocaleString()}
 									</td>
@@ -978,7 +1003,7 @@ export class SummaryController {
 										¥${t.cumulative_savings.toLocaleString()}
 									</td>
 									<td style="color: var(--text-muted); font-weight: ${savOnTrack ? '600' : 'normal'};">
-										¥${t.cumulative_savings_pace.toLocaleString()}
+										${money(t.cumulative_savings_pace)}
 									</td>
 								</tr>
 							`;
@@ -1182,49 +1207,16 @@ export class SummaryController {
 			}
 		}
 
-		const entries = Object.entries(categoriesData || {});
-		if (entries.length === 0) {
-			this.chartController.renderChartForCategoryBreakdown([]);
-			list.innerHTML = '<div style="color: var(--text-muted); padding: 12px; text-align: center;">内訳データはありません</div>';
-			return;
-		}
+		const income = this.categoryType === 'income';
+		const items = income ? this.incomeBreakdown : Object.entries(categoriesData || {}).map(([id, data]) => ({ id, name: catMap.get(id) || id, amount: data.total || 0 }));
+		const sorted = items.slice().sort((a, b) => b.amount - a.amount), total = sorted.reduce((sum, item) => sum + item.amount, 0);
+		this.chartController.renderChartForCategoryBreakdown(sorted);
+		list.innerHTML = sorted.length ? sorted.map(item => {
+			const pct = total > 0 ? Math.round(item.amount / total * 1000) / 10 : 0;
+			return `<div class="tx-item ${item.id === null ? '' : 'clickable'}" ${item.id === null ? 'data-income-unknown' : `data-filter-category="${escapeHtml(item.id)}"`}><div class="tx-info"><span class="tx-title">${escapeHtml(item.name)}</span><span class="tx-meta">構成比: ${pct}%${item.id === null ? '・過去月の収入内訳を取得できていません。' : ''}</span></div><div style="font-weight:700">¥${item.amount.toLocaleString()}</div></div>`;
+		}).join('') : '<div>内訳データはありません</div>';
+		list.querySelectorAll('[data-filter-category]').forEach(item => item.addEventListener('click', () => { void this.applyDrilldownFilter({ categoryId: item.dataset.filterCategory, type: income ? 'income' : 'all' }); }));
 
-		const sortedEntries = entries.sort((a, b) => (b[1].total || 0) - (a[1].total || 0));
-		const totalExpense = sortedEntries.reduce((sum, [, data]) => sum + (data.total || 0), 0);
-
-		const chartItems = sortedEntries.map(([catId, data]) => ({
-			id: catId,
-			name: catMap.get(catId) || catId,
-			amount: data.total || 0
-		}));
-		this.chartController.renderChartForCategoryBreakdown(chartItems);
-
-		list.innerHTML = sortedEntries
-			.map(([catId, data]) => {
-				const amt = data.total || 0;
-				const pct = totalExpense > 0 ? Math.round((amt / totalExpense) * 1000) / 10 : 0;
-				const catName = catMap.get(catId) || catId;
-				return `
-					<div class="tx-item clickable" data-filter-category="${escapeHtml(catId)}" title="タッチしてこの費目の明細一覧を表示">
-						<div class="tx-info">
-							<span class="tx-title">${escapeHtml(catName)} <span style="font-size: 0.75rem; color: var(--text-muted);">🔍</span></span>
-							<span class="tx-meta">構成比: ${pct}%</span>
-						</div>
-						<div style="text-align: right; font-weight: 700; color: var(--primary);">
-							¥${amt.toLocaleString()}
-						</div>
-					</div>
-				`;
-			}).join('');
-
-		list.querySelectorAll('.tx-item[data-filter-category]').forEach(item => {
-			item.addEventListener('click', () => {
-				const catId = item.dataset.filterCategory;
-				if (catId) {
-					this.applyDrilldownFilter({ categoryId: catId });
-				}
-			});
-		});
 	}
 
 	async renderAccountBalances(summary, transactions = [], config = null) {

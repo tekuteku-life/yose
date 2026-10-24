@@ -1,6 +1,6 @@
 {
 	"name": "yose",
-	"version": "1.16.0",
+	"version": "1.17.0",
 	"description": "よせあつめ家計簿 - 脱ベンダーロックイン・複式簿記ライクなPWA家計・資産管理システム",
 	"type": "module",
 	"scripts": {
@@ -26,6 +26,7 @@
 	"author": "",
 	"license": "MIT",
 	"devDependencies": {
+		"chart.js": "4.6.1",
 		"istanbul-lib-coverage": "^3.2.2",
 		"istanbul-lib-instrument": "^6.0.3",
 		"istanbul-lib-report": "^3.0.1",

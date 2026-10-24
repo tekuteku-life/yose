@@ -47,6 +47,7 @@ export {
 } from './logic/aggregator.js';
 
 export {
+	resolveAnnualTargets,
 	roundTieredAmount,
 	calculateAnnualBudgetDefaults,
 	calculateAnnualBudgetProgress,

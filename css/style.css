@@ -1204,3 +1204,31 @@ header {
 @media (max-width: 420px) {
 	.master-conflict-modal .edit-save-actions { flex-wrap: wrap; }
 }
+
+/* Time-series controls remain outside the fixed-height chart canvas. */
+.chart-series-controls, .chart-zoom-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 16px;
+	align-items: center;
+	margin: 8px 0;
+}
+.chart-series-controls label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	cursor: pointer;
+	font-size: 0.85rem;
+}
+.chart-zoom-controls small {
+	color: var(--text-muted);
+}
+input[readonly] {
+	background: var(--bg-hover);
+}
+
+#chart-fallback {
+	max-height: 100%;
+	overflow: auto;
+	box-sizing: border-box;
+}
