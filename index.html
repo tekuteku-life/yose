@@ -10,7 +10,7 @@
 	<link rel="apple-touch-icon" href="icon-192.png">
 	<link rel="stylesheet" href="css/style.css">
 	<script src="js/theme_bootstrap.js"></script>
-	<script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+	<script src="https://cdn.jsdelivr.net/npm/chart.js@4.6.1/dist/chart.umd.min.js" defer></script>
 </head>
 <body>
 
@@ -336,6 +336,8 @@
 				<label>投資推移の対象口座<select id="asset-investment-account" class="form-control"><option value="all">全投資口座</option></select></label>
 				<p>投資額は保有商品の取得原価です。直近の記録値を次の記録まで据え置きます。口座評価額は預り金を含む口座全体の日末記録と、その後の確定入出金による参考値です。市場価格は自動反映しません。取得原価との差額は含み損益を表しません。</p>
 				<p id="asset-history-notice" aria-live="polite"></p>
+				<div id="asset-history-series" class="chart-series-controls" aria-label="描画項目"></div>
+				<div class="chart-zoom-controls"><button type="button" id="asset-history-reset" class="btn btn-secondary btn-sm">金額軸を戻す</button><small>Ctrl＋スクロール・2本指のピンチで金額軸を拡大縮小できます。</small></div>
 				<div style="height:280px;position:relative;"><canvas id="asset-history-chart"></canvas></div>
 				<div id="asset-history-fallback" style="display:none;"></div>
 			</div>
@@ -419,6 +421,8 @@
 						<button id="btn-toggle-axis" class="btn btn-secondary btn-sm">🏷️ 計上分類ベース</button>
 					</div>
 				</div>
+				<div id="summary-series" class="chart-series-controls" aria-label="描画項目"></div>
+				<div class="chart-zoom-controls"><button type="button" id="summary-reset" class="btn btn-secondary btn-sm">金額軸を戻す</button><small>Ctrl＋スクロール・2本指のピンチで金額軸を拡大縮小できます。</small></div>
 				<div class="chart-container" style="height: 320px; position: relative;">
 					<canvas id="summary-chart"></canvas>
 					<div id="chart-fallback" style="display:none; padding: 20px; text-align: center; color: var(--text-muted);"></div>
@@ -446,8 +450,12 @@
 				<div class="card-title">
 					<span id="category-breakdown-title">費目別推移・内訳</span>
 				</div>
+				<label for="category-trend-type">推移・内訳の種別</label>
+				<select id="category-trend-type" class="form-control"><option value="expense">支出</option><option value="income">収入</option></select>
 				<h4 id="category-trend-title">費目ごとの支出推移</h4>
 				<p id="category-trend-scope" style="color: var(--text-muted); font-size: 0.8rem;"></p>
+				<div id="category-trend-series" class="chart-series-controls" aria-label="描画項目"></div>
+				<div class="chart-zoom-controls"><button type="button" id="category-trend-reset" class="btn btn-secondary btn-sm">金額軸を戻す</button><small>Ctrl＋スクロール・2本指のピンチで金額軸を拡大縮小できます。</small></div>
 				<div id="category-trend-chart-container" class="chart-container" style="height: 280px; position: relative;">
 					<canvas id="category-trend-chart" role="img" aria-label="費目ごとの支出推移"></canvas>
 				</div>
@@ -511,6 +519,7 @@
 				<div class="card-title" style="flex-wrap: wrap; gap: 8px;">
 					<span id="month-tx-list-title">📋 当月の明細一覧</span>
 					<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+						<select id="select-type-filter" class="form-control" aria-label="収支種別"><option value="all">すべての種別</option><option value="income">収入</option><option value="expense">支出</option><option value="transfer">振替</option></select>
 						<select id="select-status-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
 							<option value="all">すべて表示</option>
 							<option value="confirmed">確定のみ</option>
@@ -722,6 +731,9 @@
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					年間の総支出予算・目標貯蓄額・目標貯蓄率、および各大項目ごとの予算を設定します。「🎯 予算・実績」タブにて消化ペースや年間推移グラフで進捗を確認できます。
 				</p>
+				<label class="form-label" for="setting-goal-basis">目標の基準</label>
+				<select id="setting-goal-basis" class="form-control"><option value="independent">個別指定</option><option value="rate">貯蓄率</option><option value="savings">貯蓄額</option><option value="expense">支出予算</option></select>
+				<p id="budget-basis-income"></p><p id="budget-goal-notice" role="status"></p>
 				<div class="form-row">
 					<div class="form-group" style="flex: 1; min-width: 120px;">
 						<label class="form-label" for="setting-budget-year">対象年</label>
@@ -888,7 +900,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.16.0</span>
+					<span class="badge badge-info" id="badge-current-version">v1.17.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。

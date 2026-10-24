@@ -556,3 +556,8 @@ InsightsControllerは通知書入力のdirtyと集計元選択のdirtyを分離�
 ### review58 ふるさと納税の費目割当と自動控除
 
 ふるさと納税について、上記review56/57時点の「給与・控除は参考表示のみ」を変更する。[ふるさと納税計算設計](furusato_calculation.md)を新たな表示・データ・計算の正本とし、費目割当/手入力/自動導出を区別して上限へ使用する。投資・一括編集・メタ情報は変更しない。
+
+<a id="i-3-59"></a>
+### I-3.59 グラフ操作と年間目標の連動
+
+chart_geometryの純関数、ChartViewportのイベント管理、ChartControllerの系列状態、収入履歴マップ、resolveAnnualTargetsの共通計算を分離する。保存・検証・同期・取込・認証世代は[グラフ・年間目標設計](chart_budget_improvements.md)を正本とする。

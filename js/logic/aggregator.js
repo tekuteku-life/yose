@@ -778,6 +778,8 @@ export function resolveTransactionDisplayInfo(tx = {}, masterConfig = {}) {
  * Filter Transactions by Multi-Criteria: Status, Account, Category, Tag, and Keyword (Requirement 3.30 & 3.38)
  * @param {Array} transactions - list of transactions
  * @param {object} [filters]
+ * @param {string} [filters.type='all'] - transaction type
+ * @param {string} [filters.categoryAxis='both'] - accounting, actual or both
  * @param {string} [filters.status='all'] - 'all' | 'confirmed' | 'planned'
  * @param {boolean} [filters.includePlanned=true] - whether to include planned transactions when status is 'all'
  * @param {string} [filters.accountId='all'] - 'all' or account ID (matches account_id or to_account_id)
@@ -798,6 +800,7 @@ export function filterTransactionsByCriteria(transactions = [], filters = {}, ma
 	return (transactions || []).filter(tx => {
 		if (!tx || tx.is_deleted) return false;
 
+		if (filters.type && filters.type !== 'all' && tx.type !== filters.type) return false;
 		if (status === 'confirmed' && tx.status !== 'confirmed') return false;
 		if (status === 'planned' && tx.status !== 'planned') return false;
 		if (status === 'all' && !includePlanned && tx.status === 'planned') return false;
@@ -808,8 +811,8 @@ export function filterTransactionsByCriteria(transactions = [], filters = {}, ma
 		}
 
 		if (categoryId !== 'all') {
-			const matchAccrual = tx.category_id === categoryId;
-			const matchActual = tx.actual_category_id === categoryId;
+			const matchAccrual = filters.categoryAxis !== 'actual' && (tx.category_id || 'cat_unclassified') === categoryId;
+			const matchActual = filters.categoryAxis !== 'accounting' && (tx.actual_category_id || tx.category_id || 'cat_unclassified') === categoryId;
 			if (!matchAccrual && !matchActual) return false;
 		}
 

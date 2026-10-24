@@ -194,6 +194,7 @@ export function createDataIntegrityValidator() {
 		for (const [year, entry] of Object.entries(object(master.annual_budgets) ? master.annual_budgets : {})) {
 			const path = `annual_budgets.${year}`;
 			if (!/^\d{4}$/.test(year) || !object(entry)) { issue('shape', path, '年度予算の形式が不正です', year); continue; }
+			if (entry.goal_basis !== undefined && !['independent', 'rate', 'savings', 'expense'].includes(entry.goal_basis)) issue('enum', `${path}.goal_basis`, '目標の基準が不正です', entry.goal_basis);
 			for (const field of ['expense_budget', 'savings_target_amount']) number(entry[field], `${path}.${field}`, { integer: true, min: 0 });
 			if (entry.furusato_estimate !== undefined) {
 				const estimate = entry.furusato_estimate;
@@ -291,6 +292,34 @@ export function createDataIntegrityValidator() {
 				for (const field of ['income_total', 'expense_total', 'net_income', 'income_confirmed', 'expense_confirmed', 'total_income', 'total_expense']) number(summary[field], `${path}.${field}`);
 				numberMap(summary.closing_balances, `${path}.closing_balances`, accounts);
 				categoryMap(summary.by_category, `${path}.by_category`); categoryMap(summary.by_actual_category, `${path}.by_actual_category`);
+				if (summary.by_income_category !== undefined || summary.by_actual_income_category !== undefined) {
+					number(summary.income_total, `${path}.income_total`, { required: true, integer: true, min: 0 });
+					for (const field of ['by_income_category', 'by_actual_income_category']) {
+						const map = summary[field], location = `${path}.${field}`;
+						if (!object(map)) { issue('shape', location, '収入費目・内訳の集計マップが必要です'); continue; }
+						let total = 0;
+						for (const [id, item] of Object.entries(map)) {
+							const p = `${location}.${id}`;
+							if (id !== 'cat_unclassified') {
+								ref(id, categories, p, true);
+								if (categories.has(id) && categories.get(id).type !== 'income') issue('category_type', p, '収入費目が必要です', id);
+							}
+							if (!object(item) || !object(item.by_subcategory)) { issue('shape', p, '収入合計と内訳が必要です'); continue; }
+							number(item.total, `${p}.total`, { required: true, integer: true, min: 0 });
+							let subtotal = 0;
+							for (const [sub, amount] of Object.entries(item.by_subcategory)) {
+								if (sub !== 'sub_unclassified') ref(sub, children.get(id) || new Map(), `${p}.by_subcategory.${sub}`, true);
+								number(amount, `${p}.by_subcategory.${sub}`, { required: true, integer: true, min: 0 }); subtotal += amount;
+								if (!Number.isSafeInteger(subtotal)) issue('number', p, '収入内訳の加算範囲を超えています');
+							}
+							if (subtotal !== item.total) issue('sum', p, '収入内訳と費目合計が一致しません');
+							total += item.total;
+							if (!Number.isSafeInteger(total)) issue('number', location, '収入合計の加算範囲を超えています');
+						}
+						if (total !== summary.income_total) issue('sum', location, '収入費目の合計と収入総額が一致しません');
+					}
+				}
+
 			}
 			if (snapshot.external_assets !== undefined) for (const item of keyed(snapshot.external_assets, 'external_assets').values()) {
 				if (!object(item)) { issue('shape', 'external_assets', '資産の形式が不正です'); continue; }

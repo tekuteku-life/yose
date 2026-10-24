@@ -27,7 +27,12 @@ export class BackupMerger {
 		// 採用されない既存日・既存年の不正値も、非破壊マージ前に拒否する。
 		const incomingMasters = [data.master_config, data.annual_budgets ? { annual_budgets: data.annual_budgets } : null].filter(Boolean);
 		for (const incomingMaster of incomingMasters) {
-			const invalid = dataIntegrity.issues({ master_config: candidateCategories === undefined ? incomingMaster : { ...incomingMaster, categories: candidateCategories } }).filter(item => item.path.includes('.investment_history') || item.path.includes('.furusato_estimate') || item.path.includes('.furusato_calculation') || (item.path.includes('.furusato_sources') && (!['reference', 'category_type'].includes(item.code) || candidateCategories !== undefined)));
+			const invalid = dataIntegrity.issues({ master_config: candidateCategories === undefined ? incomingMaster : { ...incomingMaster, categories: candidateCategories } }).filter(item => (item.path.startsWith('annual_budgets.') && !['reference', 'category_type'].includes(item.code)) || item.path.includes('.investment_history') || item.path.includes('.furusato_estimate') || item.path.includes('.furusato_calculation') || (item.path.includes('.furusato_sources') && (!['reference', 'category_type'].includes(item.code) || candidateCategories !== undefined)));
+			requireType(!invalid.length, invalid.map(item => item.message).join(' / '));
+		}
+		if (data.summary_snapshot?.monthly_summaries) {
+			const months = Object.fromEntries(Object.entries(data.summary_snapshot.monthly_summaries).filter(([, summary]) => summary && (summary.by_income_category !== undefined || summary.by_actual_income_category !== undefined)));
+			const invalid = dataIntegrity.issues({ master_config: { categories: candidateCategories ?? data.master_config?.categories ?? [] }, summary_snapshot: { monthly_summaries: months } }).filter(item => item.path.startsWith('summary_snapshot.monthly_summaries.') && (item.path.includes('.by_income_category') || item.path.includes('.by_actual_income_category') || item.path.endsWith('.income_total')) && (!['reference', 'category_type'].includes(item.code) || candidateCategories !== undefined));
 			requireType(!invalid.length, invalid.map(item => item.message).join(' / '));
 		}
 		const requiredFields = {
@@ -169,6 +174,7 @@ export class BackupMerger {
 			savings_target_amount: Math.max(0, Number(entry.savings_target_amount) || 0),
 			savings_target_rate: Math.max(0, Number(entry.savings_target_rate ?? entry.target_savings_rate) || 0),
 			category_budgets: BackupMerger.sanitizeCategoryBudgets(entry.category_budgets),
+			...(entry.goal_basis !== undefined ? { goal_basis: entry.goal_basis } : {}),
 			...(entry.furusato_calculation !== undefined ? { furusato_calculation: structuredClone(entry.furusato_calculation) } : {}),
 			...(entry.furusato_sources !== undefined ? { furusato_sources: structuredClone(entry.furusato_sources) } : {}),
 			...(entry.furusato_estimate !== undefined ? { furusato_estimate: structuredClone(entry.furusato_estimate) } : {})

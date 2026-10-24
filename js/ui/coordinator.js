@@ -10,6 +10,7 @@ import { CURRENT_APP_VERSION, checkAppVersion } from '../version.js';
 
 import { AuthController } from './auth_controller.js';
 import { SyncStatusController } from './sync_status_controller.js';
+import { BudgetSettingsController } from './budget_settings_controller.js';
 import { ChartController } from './chart_controller.js';
 import { TransactionListController } from './tx_list_controller.js';
 import { TransactionEditController } from './tx_edit_controller.js';
@@ -53,6 +54,7 @@ export class AppCoordinator {
 		this.summaryController = new SummaryController(this);
 		this.masterController = new MasterController(this);
 		this.settingsController = new SettingsController(this);
+		this.budgetSettingsController = new BudgetSettingsController(this);
 		this.maintenanceController = new MaintenanceController(this);
 		this.masterConflictController = new MasterConflictController(this);
 		this.advanceLinkController = new AdvanceLinkController(this);
@@ -118,7 +120,7 @@ export class AppCoordinator {
 			this.insightsController.setup();
 			this.furusatoController.setup();
 			this.summaryController.setupSummaryView();
-			this.settingsController.setupSettingsView();
+			this.setupSettingsView();
 			this.maintenanceController.setup();
 			this.masterConflictController.setup();
 			this.masterController.setupMasterTabs();
@@ -564,7 +566,10 @@ export class AppCoordinator {
 	async handleFormSubmit() { return this.txInputController.handleFormSubmit(); }
 	setupSummaryView() { return this.summaryController.setupSummaryView(); }
 	async renderSummary() { return this.summaryController.renderSummary(); }
-	setupSettingsView() { return this.settingsController.setupSettingsView(); }
+	setupSettingsView() {
+		this.settingsController.setupSettingsView();
+		this.budgetSettingsController.setup();
+	}
 	async renderSettings() { return this.settingsController.renderSettings(); }
 	setupMasterTabs() { return this.masterController.setupMasterTabs(); }
 	async renderMasterManagement() { return this.masterController.renderMasterManagement(); }

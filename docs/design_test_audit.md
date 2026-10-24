@@ -144,3 +144,11 @@ review58全UIで既存の締め済み削除競合試験が1件失敗した。無
 上記削除試験の失敗stackはbtn-edit-delete-tx非表示を確定した。PRF再起動の別失敗はauth-screen非表示後、finishAppInitの非同期読取とナビゲーション生成より先に設定タブを押し、鍵詳細ボタンが非表示になったものである。解除待機へ_domInitializedを含め、初期化前のクリックを避ける。入力単独では安全でも合計が安全整数を超える給与/他所得の未算出も直接assertする。
 
 review58最終計測対象46ファイルのハッシュが一致し、全Node975件・実UI438件が合格した。Line 96.70%/Branch 84.43%であり、各97%基準は29ファイルで未達である。新税UIを含む未達表と実行証拠は[review58](reviews/review58.md#最終検証結果)を正本とする。
+
+### review59 先行監査
+
+R/E/I-3.59の全操作を[グラフ・年間目標設計](chart_budget_improvements.md#テストと受入)に定義する。既存Chart.js stubは実scale/pointRadius評価/実凡例を再現しないため、新実Chart.js UIで補完する。丸の間引きでデータ本体を削除しないこと、縦軸だけが変わること、収入の未取得内訳を捏造しないこと、目標の基準と現在額が全表示へ揃うことを直接assertする。
+
+review59の対応はmarkerRadii/zoomMoneyRangeの境界、real Chart.jsの3canvas実wheel・pinch・実凡例・hidden/代替表/lock、incomeの日付・計上・完全取得証拠・同名未知系列・未分類絞込、目標の全基準/overflow/CAS/実署名同期/組外競合保持を直接assertする。指摘とPhase再入は[review59](reviews/review59.md)を正本とする。
+
+review59最終計測は同一原本49ファイルで全Node999件・実UI456件が合格した。Line97.13%/Branch85.00%であり、各97%基準は33ファイルで未達である。新規グラフ操作・予算設定の分岐未達も含め[review59](reviews/review59.md#最終検証結果)へ記録した。機能差分PASSと総合定量ゲートを区別する。

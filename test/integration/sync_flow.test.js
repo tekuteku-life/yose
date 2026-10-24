@@ -142,6 +142,8 @@ describe('Integration - Client & GAS Sync Flow', () => {
 		const localSnapshot = await db.getSnapshot();
 		assert.equal(localSnapshot.last_closed_month, '2026-10');
 		assert.equal(localSnapshot.monthly_summaries['2026-10'].income_total, 250000);
+		assert.deepEqual(localSnapshot.monthly_summaries['2026-10'].by_income_category, { cat_unclassified: { total: 250000, by_subcategory: { sub_unclassified: 250000 } } });
+		assert.deepEqual(localSnapshot.monthly_summaries['2026-10'].by_actual_income_category, localSnapshot.monthly_summaries['2026-10'].by_income_category);
 		assert.equal(localSnapshot.monthly_summaries['2026-10'].expense_total, 50000);
 		assert.equal(localSnapshot.monthly_summaries['2026-10'].net_income, 200000);
 	});
