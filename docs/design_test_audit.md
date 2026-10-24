@@ -152,3 +152,9 @@ R/E/I-3.59の全操作を[グラフ・年間目標設計](chart_budget_improveme
 review59の対応はmarkerRadii/zoomMoneyRangeの境界、real Chart.jsの3canvas実wheel・pinch・実凡例・hidden/代替表/lock、incomeの日付・計上・完全取得証拠・同名未知系列・未分類絞込、目標の全基準/overflow/CAS/実署名同期/組外競合保持を直接assertする。指摘とPhase再入は[review59](reviews/review59.md)を正本とする。
 
 review59最終計測は同一原本49ファイルで全Node999件・実UI456件が合格した。Line97.13%/Branch85.00%であり、各97%基準は33ファイルで未達である。新規グラフ操作・予算設定の分岐未達も含め[review59](reviews/review59.md#最終検証結果)へ記録した。機能差分PASSと総合定量ゲートを区別する。
+
+### review60 明細の左寄せ
+
+R/E/I-3.29の表示配置が対象である。375/768/1280pxの実Chromium計測で、チェック右端と情報左端の間隔が30.17/226.67/300.17pxへ拡大する不具合を再現した。修正案は全幅で12px、金額の右余白13pxを維持する。低影響のCSS修正であるため実装を写す固定テストを追加せず、既存の明細/一括編集/最近の入力/ドリルダウンUI試験と実ブラウザの表示計測で検証する。結果は[review60](reviews/review60.md)へ記録する。
+
+review60は実CSSで左寄せ位置を再確認し、静的検査・全Node999件・全UI456件が合格した。49原本とCSSハッシュ一致、Line97.16%/Branch85.03%、既存33ファイルの各97%未達を[review60](reviews/review60.md#最終検証)へ記録した。CSSの位置と操作の確認をJSカバレッジの合格へ読み替えない。
