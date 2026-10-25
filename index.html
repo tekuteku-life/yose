@@ -677,12 +677,12 @@
 							<textarea id="txt-public-key" class="form-control" rows="2" readonly></textarea>
 						</div>
 						<div style="display: flex; gap: 8px; flex-wrap: wrap;">
-							<button id="btn-register-key-gas-direct" class="btn btn-primary btn-sm">⚡ GASへワンクリック登録</button>
+							<button id="btn-show-gas-key-setup" class="btn btn-primary btn-sm">GASへの公開鍵登録手順</button>
 							<button id="btn-copy-public-key" class="btn btn-secondary btn-sm">公開鍵をコピー</button>
 							<button id="btn-generate-key" class="btn btn-secondary btn-sm">新しい鍵ペアを生成</button>
 						</div>
 						<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">
-							※ ワンクリック登録が有効なのは、GAS側のスクリプトプロパティ（<code>USER_PUBLIC_KEYS</code>）が未設定（初回プロビジョニング前）の場合のみです。すでに設定済みの場合はGAS側で直接更新してください。
+							公開前に、GAS管理画面のスクリプトプロパティ（<code>USER_PUBLIC_KEYS</code>）へ登録してください。公開APIからの登録・更新はできません。
 						</div>
 					</div>
 				</div>
@@ -892,7 +892,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.18.0</span>
+					<span class="badge badge-info" id="badge-current-version">v1.18.1</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。

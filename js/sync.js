@@ -442,27 +442,6 @@ export class SyncManager {
 		}
 	}
 
-	/**
-	 * Register initial public key to GAS backend (Write-Once setup)
-	 * @param {string} publicKeyBase64
-	 */
-	async registerInitialKey(publicKeyBase64) {
-		if (this.isSyncing) {
-			throw new Error('Another sync operation is in progress');
-		}
-		this.isSyncing = true;
-		try {
-			const response = await this.sendRequest('register_initial_key', {
-				publicKey: publicKeyBase64
-			});
-			return response;
-		} catch (err) {
-			this.lastError = err.message;
-			throw err;
-		} finally {
-			this.isSyncing = false;
-		}
-	}
 }
 
 

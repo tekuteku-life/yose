@@ -52,6 +52,14 @@ async function main() {
 	console.log('   新規作成する場合: npx @google/clasp create --type webapp --title "よせあつめ家計簿" --rootDir gas');
 	console.log('   既存スクリプトを使う場合: .clasp.json の scriptId にスクリプトIDを記載\n');
 
+	console.log('【公開前の必須条件】');
+	console.log('   所有者が公開前に USER_PUBLIC_KEYS を設定する。公開APIからの鍵登録は受け付けない。');
+	console.log('   旧版から認証是正版へ初めて移行する場合: 旧版の全公開URLを停止する（別URLの旧版も対象）。');
+	console.log('   続いてGASの実行一覧で旧版の全実行終了を確認する。');
+	console.log('   全実行の終了確認時刻から600,000msを超えて待機し、その後に新版を公開する。');
+	console.log('   AUTH_REPLAY_ で始まるスクリプトプロパティを稼働中に削除しない。');
+	console.log('   詳細: README.md「旧版から認証是正版への初回移行」、docs/gas_auth_hardening.md\n');
+
 	console.log('【ステップ 3】スクリプトコードのプッシュ (Code.gs & appsscript.json)');
 	console.log('   コマンド: npx @google/clasp push\n');
 
@@ -75,7 +83,7 @@ async function main() {
 	console.log('   - 種類の選択: ウェブアプリ');
 	console.log('   - 次のユーザーとして実行: 自分');
 	console.log('   - アクセスできるユーザー: 全員（Googleログイン不要、ANYONE_ANONYMOUS）');
-	console.log('   ※ 既存デプロイは [デプロイを管理] で実行ユーザー・アクセス設定を確認し、新バージョンへ更新する');
+	console.log('   ※ 旧版から認証是正版への初回更新では、上述の全URL停止・全実行終了確認・待機後に新版を公開する');
 	console.log('   ※ シークレットタブで /exec の status: ok を確認後、PWAから署名付き同期を確認する');
 	console.log('7. 発行された「ウェブアプリのURL」をコピーし、PWAの設定画面の GAS URL に貼り付けて保存！');
 	console.log('====================================================\n');

@@ -172,7 +172,7 @@ SyncManagerは同期実行中、最後のエラー/同期時刻、設定再送�
 <a id="i-4-2"></a>
 ## I-4.2 GAS入口と要求検証
 
-`doGet`は固定の疎通状態だけを返す。`doPost`はJSON解析、script lock、復旧処理、action/payload/署名・timestamp検証を行う。初回公開鍵は登録済み鍵の上書きを許さず、登録要求の署名を検証する。
+`doGet`は固定の疎通状態だけを返す。`doPost`はJSON解析、action/署名・timestamp検証、script lock取得、時刻/登録鍵再確認、認証台帳確定、業務復旧/操作の順に処理する。公開APIからの鍵登録は禁止し、管理画面に事前設定した公開鍵で要求を検証する（I-4.9）。
 
 既存actionはpush_diff、close_month、retroactive_update、fetch_state、fetch_master、update_master、replace_importおよび互換経路のupdate_external_assetsである。候補全体の不整合は保存前に拒否する。close_monthは予定集合と内容版の承認を照合し、未入力金額を確定しない。遡及更新は元月を保持して移動/削除を扱い、履歴を最新締め月まで再計算する。
 
@@ -338,21 +338,7 @@ sequenceDiagram
 <a id="i-6-3-6"></a>
 ## I-6.3.6 初回公開鍵登録
 
-```mermaid
-sequenceDiagram
-    participant U as 設定UI
-    participant C as Crypto / Sync
-    participant G as GAS
-    U->>C: 端末公開鍵の登録要求
-    C->>G: register_initial_key + 自己署名
-    G->>G: script lock / 鮮度 / 署名の検査
-    alt 未登録
-        G->>G: 公開鍵を初回保存
-        G-->>U: 登録結果
-    else 登録済み
-        G-->>U: 既存鍵の上書き拒否
-    end
-```
+所有者がPWAの公開鍵をコピーし、GASエディタのスクリプトプロパティUSER_PUBLIC_KEYSに設定する。公開APIへ初回登録要求は送信しない。手順と鍵の検証は[I-4.9](#i-4-9)に従う。
 
 <a id="i-6-4"></a>
 ## I-6.4 論理エンティティの参照関係
@@ -415,7 +401,7 @@ POST本文は署名付きJSON文字列、Content-Typeは`text/plain;charset=utf-
 
 action/timestamp/payloadをキー順序の一致するcanonical JSONにしてEd25519で署名する。クライアント生成/署名はWeb Crypto対応が必要であり、独自の未対応環境fallbackを持つと説明しない。GASはPure JSのEd25519検証を持つ。
 
-GASは現在時刻との±300,000ms超を拒否し、CacheServiceが利用できる場合はsignatureをキーに300秒記録して同一署名の再送を拒否する。これは鮮度と短期キャッシュの併用であり、永続nonceによる全再送防止ではない。CacheServiceの不存在/例外時はその検査を継続できず、早期失効も含めた保証は別途検証が必要である。完全取込のimport_id/receiptや安定IDによる冪等性と、認証の再送防止を混同しない。
+GASは正の安全な整数の時刻と±300,000ms以内を要求する。再送拒否はScriptLock内の永続認証台帳で行い、CacheServiceの状態に依存しない。台帳記録を確定できない場合は処理を中断する。詳細はI-4.9に従う。完全取込のimport_id/receipt等による業務の冪等性は別に維持する。
 
 <a id="i-7-5"></a>
 ## I-7.5 鍵ライフサイクル
@@ -573,3 +559,8 @@ chart_geometryの純関数、ChartViewportのイベント管理、ChartControlle
 InsightsControllerは取得・世代・鍵ガードを維持してメタ情報をulへ描画する。FurusatoControllerは計算結果をエスケープしたdt/ddの共通表示関数で描画し、計算・入力・保存ロジックを維持する。CSSは専用クラスに限定し、動的な項目名・日付・不足理由もHTMLエスケープする。通信、GAS、暗号、保存スキーマには変更がない。
 
 TransactionListControllerは初期化時に上下前後ボタンと番号セレクトを登録する。スクロール用の操作世代を持ち、documentのclick/input/changeを捕捉段階で受けて同期的に失効させる。ページ操作自身は捕捉後のハンドラーで新しい操作世代を取得する。これにより、タブを往復した場合や新しい再描画が未開始の場合も過去のページ操作はスクロールしない。共通goToPageで有効な整数範囲とロック状態を検査し、同一ページは処理しない。描画は従来の世代・鍵・操作ポインターガードを維持し、コミットした世代を返す。goToPageは描画世代と操作世代がともに最新であり、未ロックかつ収支タブが表示中の場合だけ上側操作欄へscrollIntoViewする。待機中の別ページ操作・フィルター・鍵失効・タブ移動はスクロールを発生させない。通常の再描画経路にはスクロールを加えない。ページUI更新は共通関数に集約し、空一覧も現在ページと上下UIを正規化する。番号選択肢は数値のみから生成する。イベントの重複登録と旧下側専用登録フラグは除去する。
+
+<a id="i-4-9"></a>
+## I-4.9 GAS認証の是正
+
+[認証是正設計](gas_auth_hardening.md)を検証順序、鍵/点の検証、ロック・永続台帳と障害時中断の正本とする。OAuthスコープ、署名対象形式、業務保存スキーマは維持する。公開鍵登録クライアントAPIと公開登録用UIを削除する。

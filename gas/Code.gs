@@ -68,6 +68,7 @@ function recoverX(y, sign) {
 		x = modP(x * ED25519_I);
 	}
 	if (modP(x * x - xx) !== _0n) return null;
+	if (x === _0n && sign === _1n) return null;
 	if ((x & _1n) !== sign) x = modP(ED25519_P - x);
 	return x;
 }
@@ -137,44 +138,38 @@ function base64ToUint8Array(base64) {
 	return bytes;
 }
 
-/**
- * Verify Ed25519 signature
- */
+function isIdentityPoint(point) {
+	return modP(point[2]) !== _0n && modP(point[0]) === _0n && modP(point[1] - point[2]) === _0n;
+}
+
+function decodePrimeOrderPoint(bytes, rejectIdentity) {
+	if (!(bytes instanceof Uint8Array) || bytes.length !== 32) return null;
+	const copy = new Uint8Array(bytes), sign = BigInt(copy[31] >> 7);
+	copy[31] &= 127;
+	const y = bytesToBigIntLE(copy), x = recoverX(y, sign);
+	if (x === null) return null;
+	const point = [x, y, _1n, modP(x * y)];
+	if ((rejectIdentity && isIdentityPoint(point)) || !isIdentityPoint(pointMul(ED25519_L, point))) return null;
+	return point;
+}
+
+function isValidEd25519PublicKey(bytes) {
+	return decodePrimeOrderPoint(bytes, true) !== null;
+}
+
+/** Verify canonical Ed25519 points and the signature equation. */
 function verifyEd25519(pubKeyBytes, sigBytes, msgBytes) {
-	if (pubKeyBytes.length !== 32 || sigBytes.length !== 64) return false;
-	const ySign = BigInt((pubKeyBytes[31] >> 7) & 1);
-	const pubCopy = new Uint8Array(pubKeyBytes);
-	pubCopy[31] &= 0x7f;
-	const y = bytesToBigIntLE(pubCopy);
-	const x = recoverX(y, ySign);
-	if (x === null) return false;
-	const A = [x, y, _1n, modP(x * y)];
-
-	const rSign = BigInt((sigBytes[31] >> 7) & 1);
-	const rCopy = new Uint8Array(sigBytes.subarray(0, 32));
-	rCopy[31] &= 0x7f;
-	const ry = bytesToBigIntLE(rCopy);
-	const rx = recoverX(ry, rSign);
-	if (rx === null) return false;
-	const R = [rx, ry, _1n, modP(rx * ry)];
-
+	if (!(sigBytes instanceof Uint8Array) || sigBytes.length !== 64) return false;
 	const S = bytesToBigIntLE(sigBytes.subarray(32, 64));
 	if (S >= ED25519_L) return false;
-
-	const kData = new Uint8Array(32 + 32 + msgBytes.length);
-	kData.set(sigBytes.subarray(0, 32), 0);
-	kData.set(pubKeyBytes, 32);
-	kData.set(msgBytes, 64);
-	const h = computeSha512(kData);
-	const k = bytesToBigIntLE(h) % ED25519_L;
-
-	const SB = pointMul(S, ED25519_BASE);
-	const kA = pointMul(k, A);
-	const R_kA = pointAdd(R, kA);
-
-	const xEq = modP(SB[0] * R_kA[2] - R_kA[0] * SB[2]) === _0n;
-	const yEq = modP(SB[1] * R_kA[2] - R_kA[1] * SB[2]) === _0n;
-	return xEq && yEq;
+	const A = decodePrimeOrderPoint(pubKeyBytes, true);
+	const R = decodePrimeOrderPoint(sigBytes.subarray(0, 32), false);
+	if (!A || !R) return false;
+	const kData = new Uint8Array(64 + msgBytes.length);
+	kData.set(sigBytes.subarray(0, 32)); kData.set(pubKeyBytes, 32); kData.set(msgBytes, 64);
+	const k = bytesToBigIntLE(computeSha512(kData)) % ED25519_L;
+	const SB = pointMul(S, ED25519_BASE), R_kA = pointAdd(R, pointMul(k, A));
+	return modP(SB[0] * R_kA[2] - R_kA[0] * SB[2]) === _0n && modP(SB[1] * R_kA[2] - R_kA[1] * SB[2]) === _0n;
 }
 
 // ==========================================
@@ -377,148 +372,97 @@ function doGet(e) {
 	});
 }
 
-function doPost(e) {
-	let lock = null;
-	if (typeof LockService !== 'undefined') {
-		lock = LockService.getScriptLock();
-		try {
-			const hasLock = lock.tryLock(30000);
-			if (!hasLock) {
-				return createResponse({ success: false, error: 'Could not obtain lock: Server is busy' });
-			}
-		} catch (err) {
-			return createResponse({ success: false, error: 'LockService error: ' + err.message });
-		}
-	}
+function authUtf8Bytes(text) {
+	return typeof Utilities !== 'undefined' && Utilities.newBlob
+		? new Uint8Array(Utilities.newBlob(text).getBytes().map(byte => byte < 0 ? byte + 256 : byte))
+		: new TextEncoder().encode(text);
+}
 
+const AUTH_WINDOW_MS = 300000;
+const AUTH_REPLAY_PREFIX = 'AUTH_REPLAY_';
+const AUTH_REPLAY_LIMIT = 1024;
+const AUTH_ACTIONS = new Set(['push_diff', 'close_month', 'retroactive_update', 'replace_import', 'fetch_state', 'fetch_master', 'update_master', 'update_external_assets']);
+
+function validAuthTime(timestamp, now) {
+	return Number.isSafeInteger(timestamp) && timestamp > 0 && Math.abs(now - timestamp) <= AUTH_WINDOW_MS;
+}
+
+function decodeAuthBase64(value, size) {
+	const pattern = size === 32 ? /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/ : /^[A-Za-z0-9+/]{85}[AQgw]==$/;
+	if (typeof value !== 'string' || !pattern.test(value)) return null;
 	try {
-		if (!e || !e.postData || !e.postData.contents) {
-			return createResponse({ success: false, error: 'Empty request body' });
-		}
+		const bytes = base64ToUint8Array(value);
+		return bytes.length === size ? bytes : null;
+	} catch (error) { return null; }
+}
 
+function readReplayExpiry(value) {
+	if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error('Authentication replay record is invalid');
+	return Number(value);
+}
+
+function recordAuthenticatedRequest(signString, timestamp, now) {
+	const properties = PropertiesService.getScriptProperties();
+	const stored = properties.getProperties();
+	if (!stored || typeof stored !== 'object' || Array.isArray(stored)) throw new Error('Authentication replay storage is unavailable');
+	const digest = Array.from(computeSha512(authUtf8Bytes(signString)), byte => byte.toString(16).padStart(2, '0')).join('');
+	const key = AUTH_REPLAY_PREFIX + digest;
+	const records = Object.entries(stored).filter(([name]) => name.startsWith(AUTH_REPLAY_PREFIX)).map(([name, value]) => {
+		if (!/^AUTH_REPLAY_[0-9a-f]{128}$/.test(name)) throw new Error('Authentication replay record is invalid');
+		return { key: name, expires: readReplayExpiry(value) };
+	});
+	const previous = properties.getProperty(key);
+	const listed = Object.prototype.hasOwnProperty.call(stored, key) ? stored[key] : null;
+	if (previous !== listed) throw new Error('Authentication replay storage reads are inconsistent');
+	if (records.some(record => record.key === key && record.expires >= now)) throw new Error('Replay detected: Request already processed');
+	const active = records.filter(record => record.expires >= now);
+	if (active.length >= AUTH_REPLAY_LIMIT) throw new Error('Authentication replay storage is full; retry after records expire');
+	for (const record of records) if (record.expires < now) properties.deleteProperty(record.key);
+	const expiry = String(timestamp + AUTH_WINDOW_MS);
+	properties.setProperty(key, expiry);
+	if (properties.getProperty(key) !== expiry) throw new Error('Authentication replay record could not be confirmed');
+}
+
+function doPost(e) {
+	let lock = null, acquired = false;
+	try {
+		if (!e?.postData?.contents) return createResponse({ success: false, error: 'Empty request body' });
 		let request;
-		try {
-			request = JSON.parse(e.postData.contents);
-		} catch (err) {
-			return createResponse({ success: false, error: 'Invalid JSON body' });
-		}
-
+		try { request = JSON.parse(e.postData.contents); }
+		catch (error) { return createResponse({ success: false, error: 'Invalid JSON body' }); }
+		if (!request || typeof request !== 'object' || Array.isArray(request)) return createResponse({ success: false, error: 'Invalid request envelope' });
 		const { action, timestamp, payload, signature } = request;
-
-		// 1. Replay attack prevention check
-		const now = Date.now();
-		if (!timestamp || Math.abs(now - timestamp) > 300000) {
-			return createResponse({
-				success: false,
-				error: 'Timestamp skew exceeds allowed window (potential replay attack)'
-			});
-		}
-
-		// Fast path: Write-once protection for register_initial_key
-		if (action === 'register_initial_key') {
-			const existingKeys = getRegisteredPublicKeys();
-			if (existingKeys.length > 0) {
-				return createResponse({
-					success: false,
-					error: 'Public keys already configured on server'
-				});
-			}
-		}
-
-		if (typeof CacheService !== 'undefined' && signature) {
-			try {
-				const cache = CacheService.getScriptCache();
-				if (cache) {
-					if (cache.get(signature)) {
-						return createResponse({
-							success: false,
-							error: 'Replay detected: Request already processed'
-						});
-					}
-					cache.put(signature, '1', 300);
-				}
-			} catch (cacheErr) {}
-		}
-
-		// 2. Ed25519 Signature Verification
+		if (action === 'register_initial_key') return createResponse({ success: false, error: 'Public key registration via API is disabled. Configure USER_PUBLIC_KEYS in the GAS project settings before publishing.' });
+		if (!AUTH_ACTIONS.has(action)) return createResponse({ success: false, error: 'Unknown action' });
+		if (!validAuthTime(timestamp, Date.now())) return createResponse({ success: false, error: 'Timestamp must be a positive safe integer within the allowed window (potential replay attack)' });
+		const signatureBytes = decodeAuthBase64(signature, 64);
+		if (!signatureBytes) return createResponse({ success: false, error: 'Signature verification failed: Noncanonical Base64 encoding' });
 		const publicKeys = getRegisteredPublicKeys();
-
-		if (action === 'register_initial_key') {
-			if (publicKeys.length > 0) {
-				return createResponse({
-					success: false,
-					error: 'Public keys already configured on server'
-				});
-			}
-			if (!payload || !payload.publicKey) {
-				return createResponse({
-					success: false,
-					error: 'Missing publicKey in payload'
-				});
-			}
-
-			const signString = canonicalJsonStringify({ action, timestamp, payload });
-			const msgBytes = (typeof Utilities !== 'undefined' && Utilities.newBlob)
-				? new Uint8Array(Utilities.newBlob(signString).getBytes().map(b => (b < 0 ? b + 256 : b)))
-				: new TextEncoder().encode(signString);
-
-			const sigBytes = base64ToUint8Array(signature);
-			const candidateKeyBytes = base64ToUint8Array(payload.publicKey);
-
-			if (!verifyEd25519(candidateKeyBytes, sigBytes, msgBytes)) {
-				return createResponse({
-					success: false,
-					error: 'Signature verification failed: Self-signature does not match candidate key'
-				});
-			}
-
-			setScriptProp('USER_PUBLIC_KEYS', JSON.stringify([payload.publicKey]));
-			return createResponse({
-				success: true,
-				message: 'Public key successfully registered on GAS'
-			});
-		}
-
-		if (publicKeys.length === 0) {
-			return createResponse({
-				success: false,
-				error: 'No public keys registered on server. Please configure USER_PUBLIC_KEYS in Script Properties.'
-			});
-		}
-
+		if (!publicKeys.length) return createResponse({ success: false, error: 'No public keys registered on server. Configure USER_PUBLIC_KEYS in Script Properties.' });
 		const signString = canonicalJsonStringify({ action, timestamp, payload });
-		const msgBytes = (typeof Utilities !== 'undefined' && Utilities.newBlob)
-			? new Uint8Array(Utilities.newBlob(signString).getBytes().map(b => (b < 0 ? b + 256 : b)))
-			: new TextEncoder().encode(signString);
-
-		const sigBytes = base64ToUint8Array(signature);
-
-		let isVerified = false;
-		for (const pubKeyBase64 of publicKeys) {
-			const pubKeyBytes = base64ToUint8Array(pubKeyBase64);
-			if (verifyEd25519(pubKeyBytes, sigBytes, msgBytes)) {
-				isVerified = true;
-				break;
-			}
-		}
-
-		if (!isVerified) {
-			return createResponse({ success: false, error: 'Signature verification failed' });
-		}
-
-		// 3. Dispatch action
-		const result = handleAction(action, payload);
-		return createResponse(result);
-	} catch (err) {
-		return createResponse({ success: false, error: err.message || 'Internal server error' });
+		const message = authUtf8Bytes(signString);
+		const verifiedKey = publicKeys.find(key => {
+			if (typeof key !== 'string') return false;
+			const bytes = decodeAuthBase64(key.trim(), 32);
+			return bytes && verifyEd25519(bytes, signatureBytes, message);
+		});
+		if (!verifiedKey) return createResponse({ success: false, error: 'Signature verification failed' });
+		// Unauthenticated callers never acquire the business lock or consume receipts.
+		try {
+			if (typeof LockService === 'undefined') throw new Error('Lock service unavailable');
+			lock = LockService.getScriptLock();
+			acquired = lock.tryLock(30000);
+			if (!acquired) return createResponse({ success: false, error: 'Could not obtain lock: Server is busy' });
+		} catch (error) { return createResponse({ success: false, error: 'LockService error: Authentication lock unavailable' }); }
+		const now = Date.now();
+		if (!validAuthTime(timestamp, now)) return createResponse({ success: false, error: 'Timestamp expired while waiting for lock' });
+		if (!getRegisteredPublicKeys().includes(verifiedKey)) return createResponse({ success: false, error: 'Registered public key changed; sign a new request' });
+		recordAuthenticatedRequest(signString, timestamp, now);
+		return createResponse(handleAction(action, payload));
+	} catch (error) {
+		return createResponse({ success: false, error: error.message || 'Internal server error' });
 	} finally {
-		if (lock) {
-			try {
-				lock.releaseLock();
-			} catch (e) {
-				// ignore lock release error
-			}
-		}
+		if (acquired) { try { lock.releaseLock(); } catch (error) { /* The committed operation must not be reported as rolled back. */ } }
 	}
 }
 
@@ -1355,6 +1299,7 @@ if (typeof module !== 'undefined' && module.exports) {
 		doGet,
 		doPost,
 		verifyEd25519,
+		isValidEd25519PublicKey,
 		pointAdd,
 		pointMul,
 		recoverX,
