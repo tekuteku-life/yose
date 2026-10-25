@@ -3,6 +3,7 @@ import { buildFurusatoSummary, buildFurusatoLedgerSummary } from '../logic/data_
 import { FURUSATO_FIELDS, getFurusatoSetting, getFurusatoInputMode, getFurusatoLedgerFingerprint, calculateFurusatoFromLedger, estimateFurusatoLimit } from '../logic/furusato_calculator.js';
 const el = id => /** @type {HTMLInputElement & HTMLSelectElement} */ (document.getElementById(id));
 const yen = value => value == null ? '未算出' : `¥${value.toLocaleString()}`;
+const resultList = rows => `<dl class="tax-result-grid">${rows.map(([label, value], index) => `<div class="tax-result${index === 0 ? ' tax-result-primary' : ''}"><dt>${escapeHtml(label)} </dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>`;
 export class FurusatoController {
 	constructor(coordinator) {
 		this.coordinator = coordinator; this.generation = 0; this.renderVersion = 0; this.editVersion = 0;
@@ -14,7 +15,7 @@ export class FurusatoController {
 		for (const [field, def] of Object.entries(FURUSATO_FIELDS)) {
 			const target = def.life ? 'furusato-life-fields' : def.reference ? 'furusato-reference-fields' : def.auto ? 'furusato-auto-fields' : 'furusato-input-fields';
 			const modes = [...(def.auto ? [['auto', '自動計算']] : []), ...(field === 'donation' ? [['legacy', '従来の名称・タグ判定']] : []), ['ledger', '費目・内訳から集計'], ['manual', '年額を手入力']];
-			el(target).insertAdjacentHTML('beforeend', `<div class="card"><label for="furusato-mode-${field}">${def.label}</label><select id="furusato-mode-${field}" class="form-control">${modes.map(([v, label]) => `<option value="${v}">${label}</option>`).join('')}</select><label>費目・内訳（複数選択可）<select id="furusato-source-${field}" class="form-control" multiple size="3"></select></label><label>手入力年額（円）<input id="furusato-manual-${field}" class="form-control" type="number" step="1" ${field === 'other_gap' ? '' : 'min="0"'}></label><div id="furusato-value-${field}"></div></div>`);
+			el(target).insertAdjacentHTML('beforeend', `<div class="tax-field" role="group" aria-labelledby="tax-field-${field}"><h4 id="tax-field-${field}">${escapeHtml(def.label)}</h4><label for="furusato-mode-${field}">採用方法</label><select id="furusato-mode-${field}" class="form-control">${modes.map(([v, label]) => `<option value="${v}">${escapeHtml(label)}</option>`).join('')}</select><label>費目・内訳（複数選択可）<select id="furusato-source-${field}" class="form-control" multiple size="3"></select></label><label>手入力年額（円）<input id="furusato-manual-${field}" class="form-control" type="number" step="1" ${field === 'other_gap' ? '' : 'min="0"'}></label><div id="furusato-value-${field}" class="tax-adopted-value"></div></div>`);
 		}
 		el('tab-tax').addEventListener('input', event => this.edited(event));
 		el('tab-tax').addEventListener('change', event => this.edited(event));
@@ -119,7 +120,11 @@ export class FurusatoController {
 		const summary = buildFurusatoSummary(transactions, config, year, { calculation });
 		el('furusato-card').style.display = this.coordinator.analyticsTarget === 'budget' && (summary.records.length || summary.confirmed) ? 'block' : 'none';
 		const text = `${year}年 確定寄附 ${yen(summary.confirmed)} / 予定 ${yen(summary.planned)} / 金額未入力 ${summary.pending}件 / 概算上限 ${yen(summary.limit)} / ${summary.remaining !== null && summary.remaining < 0 ? '超過額 ' + yen(-summary.remaining) : '残り ' + yen(summary.remaining)} / ${Number(year) - 1}年の取得済み確定収入 ${summary.previousCount}件・合計 ${yen(summary.previousIncome)}`;
-		el('furusato-summary').textContent = text; el('furusato-tax-summary').textContent = text;
+		el('furusato-summary').textContent = text;
+		el('furusato-tax-summary').innerHTML = resultList([
+			['概算上限', yen(summary.limit)], ['確定寄附', yen(summary.confirmed)],
+			[summary.remaining !== null && summary.remaining < 0 ? '超過額' : '残り', yen(summary.remaining !== null && summary.remaining < 0 ? -summary.remaining : summary.remaining)]
+		]) + `<p class="tax-help">${escapeHtml(`${year}年 / 予定 ${yen(summary.planned)} / 金額未入力 ${summary.pending}件 / ${Number(year) - 1}年の取得済み確定収入 ${summary.previousCount}件・合計 ${yen(summary.previousIncome)}`)}</p>`;
 		el('furusato-records').innerHTML = `<table class="summary-table"><caption>${year}年の取得済み寄附一覧</caption><thead><tr><th>取引日</th><th>メモ</th><th>状態</th><th>金額</th></tr></thead><tbody>${summary.records.map(tx => `<tr><td>${escapeHtml(tx.date)}</td><td>${escapeHtml(tx.memo || '')}</td><td>${tx.status === 'confirmed' ? '確定' : '予定'}</td><td>${tx.amount_pending ? '金額未入力' : yen(tx.amount)}</td></tr>`).join('')}</tbody></table>`;
 	}
 	preview() {
@@ -129,9 +134,16 @@ export class FurusatoController {
 		el('furusato-housing-fields').hidden = !el('furusato-housing-enabled').checked;
 		for (const field of Object.keys(FURUSATO_FIELDS)) el(`furusato-value-${field}`).textContent = '';
 		for (const [field, value] of Object.entries(result.values)) el(`furusato-value-${field}`).textContent = `採用額 ${yen(value.amount)}${value.source === 'ledger' ? ` / ${value.count}件` : ''}`;
-		el('furusato-calculation-preview').textContent = `概算上限 ${yen(result.limit)} / 住民税課税所得 ${yen(result.residentTaxable)} / 所得税課税所得 ${yen(result.incomeTaxable)} / 調整控除後所得割 ${yen(result.residentTax)} / 特例税率 ${result.rate ?? '未算出'}% / 生命保険料控除 住民税 ${yen(result.life?.resident)}・所得税 ${yen(result.life?.income)} / 住宅ローン控除見込 ${yen(result.housing?.potential)} / 住宅の住民税移行見込 ${yen(result.housing?.carry)} / 寄附後の参考自己負担 ${yen(result.housing?.selfCost)} / 併用前上限 ${yen(result.baseLimit)}${[...result.missing, ...(result.progressMissing || [])].length ? ' / 不足項目: ' + [...result.missing, ...(result.progressMissing || [])].join('、') : ''}`;
+		const missing = [...result.missing, ...(result.progressMissing || [])];
+		el('furusato-calculation-preview').innerHTML = resultList([
+			['概算上限', yen(result.limit)], ['住民税課税所得', yen(result.residentTaxable)], ['所得税課税所得', yen(result.incomeTaxable)],
+			['調整控除後所得割', yen(result.residentTax)], ['特例税率', result.rate == null ? '未算出' : `${result.rate}%`],
+			['生命保険料控除（住民税）', yen(result.life?.resident)], ['生命保険料控除（所得税）', yen(result.life?.income)],
+			['住宅ローン控除見込', yen(result.housing?.potential)], ['住宅の住民税移行見込', yen(result.housing?.carry)],
+			['寄附後の参考自己負担', yen(result.housing?.selfCost)], ['併用前上限', yen(result.baseLimit)]
+		]) + (missing.length ? `<p class="tax-missing">不足項目: ${escapeHtml(missing.join('、'))}</p>` : '');
 		const data = buildFurusatoLedgerSummary(this.state.transactions, config, year);
-		el('furusato-ledger-summary').textContent = Object.entries(FURUSATO_FIELDS).map(([field, def]) => `${def.label}: 前年 ${yen(data[field].previous.amount)} / ${data[field].previous.count}件・当年 ${yen(data[field].current.amount)} / ${data[field].current.count}件`).join(' / ');
+		el('furusato-ledger-summary').innerHTML = `<div class="tax-table-scroll"><table class="summary-table"><caption>取得済み明細の参考集計</caption><thead><tr><th>項目</th><th>前年（件数）</th><th>当年（件数）</th></tr></thead><tbody>${Object.entries(FURUSATO_FIELDS).map(([field, def]) => `<tr><th scope="row">${escapeHtml(def.label)}</th><td>${escapeHtml(yen(data[field].previous.amount))} / ${data[field].previous.count}件</td><td>${escapeHtml(yen(data[field].current.amount))} / ${data[field].current.count}件</td></tr>`).join('')}</tbody></table></div>`;
 	}
 	setFormBusy(busy) {
 		this.taxBusy = busy;

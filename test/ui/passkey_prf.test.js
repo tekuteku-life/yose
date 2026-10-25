@@ -27,6 +27,20 @@ async function pin(d, value = '1234') {
 	await d.waitFor('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")');
 }
 
+// Observe the real initialization promise; an already initialized DOM is not a ready unlocked view.
+async function observeAppInit(d) {
+	await d.evaluate(`{
+		const app=window.__yose_app;
+		window.__prfInitOriginal=app.finishAppInit;
+		window.__prfInitPromise=null;
+		app.finishAppInit=(...args)=>{const pending=window.__prfInitOriginal.apply(app,args);window.__prfInitPromise=pending;return pending;};
+	}`);
+}
+async function awaitAppInit(d) {
+	await d.waitFor('Boolean(window.__prfInitPromise) && document.getElementById("auth-screen").classList.contains("hidden")');
+	await d.evaluate('(async()=>{try{await window.__prfInitPromise;}finally{window.__yose_app.finishAppInit=window.__prfInitOriginal;}})()');
+}
+
 describe('PRF passkey unlock in Chromium', () => {
 	for (const attempt of ['cancel', 'wrong-pin']) it(`keeps the existing keys and never reports successful regeneration on ${attempt}`, async () => {
 		const d=fixture.driver; await seed(d,[transaction('kept')]); await authenticator(d); await register(d);
@@ -145,10 +159,28 @@ describe('PRF passkey unlock in Chromium', () => {
 		assert.equal(await d.evaluate('(async()=> (await import("./js/crypto.js")).hasActiveSession())()'),false);
 		await pin(d); assert.equal((await records(d))[0].id,'kept');
 	});
+	it('waits for the actual unlocked view refresh before clicking keys when metadata is delayed', async () => {
+		const d=fixture.driver; await authenticator(d); await register(d);
+		await d.evaluate('window.__yose_app.settingsController.renderSettings()');
+		await lock(d); await observeAppInit(d);
+		await d.evaluate(`{
+			const db=window.__yose_app.db, read=db.getDataMetadata.bind(db);let once=true;
+			db.getDataMetadata=async(...args)=>{const data=await read(...args);if(once){once=false;await new Promise(r=>window.__prfMetadataRelease=r);}return data;};
+		}`);
+		await d.click('#btn-auth-webauthn'); await d.waitFor('typeof window.__prfMetadataRelease==="function"');
+		assert.equal(await d.evaluate('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")'),true);
+		assert.equal(await d.textContent('#data-metadata'),'');
+		await d.evaluate('window.__prfMetadataRelease()'); await awaitAppInit(d);
+		assert.equal(await d.evaluate('document.querySelectorAll("#data-metadata li").length'),5);
+		await settings(d); if (!await d.isVisible('#btn-generate-key')) await d.click('#btn-toggle-key-details');
+		await d.evaluate('window.__dialogs=[];window.__nextPromptText=null');
+		await d.click('#btn-generate-key'); await waitForDialog(d,'再生成を中止しました');
+		assert.equal(await d.evaluate('window.__dialogs.some(d=>d.type==="confirm") && window.__dialogs.some(d=>d.type==="prompt")'),true);
+	});
 	it('preserves PRF unlock after PIN changes and invalidates it on signing key regeneration', async () => {
 		const d=fixture.driver; await authenticator(d); await register(d);
 		await d.fill('#input-pin','5678'); await d.click('#btn-save-pin'); await waitForDialog(d,'PINコードを正常に更新');
-		await lock(d); await d.click('#btn-auth-webauthn'); await d.waitFor('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")');
+		await lock(d); await observeAppInit(d); await d.click('#btn-auth-webauthn'); await awaitAppInit(d);
 		await settings(d); if (!await d.isVisible('#btn-generate-key')) await d.click('#btn-toggle-key-details');
 		await d.evaluate('window.__nextPromptText="5678"');
 		await d.click('#btn-generate-key'); await waitForDialog(d,'新しいEd25519鍵ペアを生成し、PINで保護しました。');

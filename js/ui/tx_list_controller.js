@@ -17,7 +17,7 @@ export class TransactionListController {
 		this.calendarMonthFilter = null;
 		this.pageSize = 30;
 		this.totalPages = 1;
-		this._paginationEventsAttached = false;
+		this._navigationGeneration = 0;
 		this._renderGeneration = 0;
 		this._recentRenderGeneration = 0;
 		this._listPointers = new Map();
@@ -29,6 +29,13 @@ export class TransactionListController {
 	}
 
 	setupInteractionGuard() {
+		// A later user action cancels scrolling, even before its async render starts.
+		for (const type of ['click', 'input', 'change']) document.addEventListener(type, () => { this._navigationGeneration++; }, true);
+		for (const suffix of ['', '-top']) {
+			document.getElementById(`btn-tx-prev-page${suffix}`).addEventListener('click', () => { void this.goToPage(this.currentPage - 1); });
+			document.getElementById(`btn-tx-next-page${suffix}`).addEventListener('click', () => { void this.goToPage(this.currentPage + 1); });
+		}
+		document.getElementById('select-tx-page').addEventListener('change', event => { void this.goToPage(Number(event.target.value)); });
 		document.addEventListener('pointerdown', event => {
 			if (!(event.target instanceof Element)) return;
 			const list = event.target.closest('#month-tx-list, #recent-tx-list');
@@ -66,8 +73,34 @@ export class TransactionListController {
 	}
 
 	cancelPendingRenders() {
-		this._renderGeneration++; this._recentRenderGeneration++;
+		this._renderGeneration++; this._recentRenderGeneration++; this._navigationGeneration++;
 		this._listPointers.clear(); this.releaseListWaiters();
+	}
+
+	async goToPage(page) {
+		if (!Number.isInteger(page) || page < 1 || page > this.totalPages || page === this.currentPage || this.coordinator.isKeyLocked) return;
+		const operation = ++this._navigationGeneration;
+		this.currentPage = page;
+		const generation = await this.renderMonthTransactions();
+		if (generation !== this._renderGeneration || operation !== this._navigationGeneration || this.coordinator.isKeyLocked || this.coordinator.analyticsTarget !== 'cashflow' || !document.getElementById('tab-summary').classList.contains('active')) return;
+		const top = document.getElementById('tx-pagination-controls-top');
+		const target = top.checkVisibility() ? top : document.getElementById('month-tx-list');
+		if (!target.checkVisibility()) return;
+		const headerBottom = Math.max(...Array.from(document.querySelectorAll('header, .nav-tabs'), element => element.getBoundingClientRect().bottom));
+		target.style.scrollMarginTop = `${headerBottom + 12}px`;
+		target.scrollIntoView({ block: 'start', behavior: 'instant' });
+	}
+
+	updatePagination(totalCount) {
+		for (const suffix of ['', '-top']) {
+			document.getElementById(`tx-pagination-controls${suffix}`).style.display = this.totalPages > 1 ? 'flex' : 'none';
+			document.getElementById(`tx-pagination-info${suffix}`).textContent = `${this.currentPage} / ${this.totalPages} ページ (全 ${totalCount} 件)`;
+			document.getElementById(`btn-tx-prev-page${suffix}`).disabled = this.currentPage <= 1;
+			document.getElementById(`btn-tx-next-page${suffix}`).disabled = this.currentPage >= this.totalPages;
+		}
+		const select = document.getElementById('select-tx-page');
+		select.innerHTML = Array.from({ length: this.totalPages }, (_, i) => `<option value="${i + 1}">${i + 1}ページ</option>`).join('');
+		select.value = String(this.currentPage);
 	}
 
 	populateFilterDropdowns(txs = [], masterConfig = {}) {
@@ -248,59 +281,17 @@ export class TransactionListController {
 		}, masterConfig);
 
 		this.coordinator.bulkEditController?.reconcile(filtered);
-		const paginationControls = document.getElementById('tx-pagination-controls');
-		const paginationInfo = document.getElementById('tx-pagination-info');
-		const btnPrev = document.getElementById('btn-tx-prev-page');
-		const btnNext = document.getElementById('btn-tx-next-page');
-
 		this.totalPages = Math.max(1, Math.ceil(filtered.length / this.pageSize));
+		this.currentPage = Math.max(1, Math.min(this.currentPage, this.totalPages));
+		this.updatePagination(filtered.length);
 		if (filtered.length === 0) {
 			const emptyMsg = txs.length > 0 ? '条件に一致する取引はありません' : '取引はありません';
 			list.innerHTML = `<div style="color: var(--text-muted); padding: 12px; text-align: center;">${emptyMsg}</div>`;
-			if (paginationControls) paginationControls.style.display = 'none';
-			return;
+			return generation;
 		}
-
-		// Pagination logic
-		const totalCount = filtered.length;
-		const totalPages = this.totalPages;
-		if (this.currentPage > totalPages) this.currentPage = totalPages;
-		if (this.currentPage < 1) this.currentPage = 1;
-
 		const startIdx = (this.currentPage - 1) * this.pageSize;
 		const pageItems = filtered.slice(startIdx, startIdx + this.pageSize);
-
 		list.innerHTML = pageItems.map(t => this.renderTransactionItemHtml(t, masterConfig, true)).join('');
-
-		// Update pagination controls
-		if (paginationControls) {
-			if (totalCount > this.pageSize) {
-				paginationControls.style.display = 'flex';
-				if (paginationInfo) {
-					paginationInfo.textContent = `${this.currentPage} / ${totalPages} ページ (全 ${totalCount} 件)`;
-				}
-				if (btnPrev) btnPrev.disabled = this.currentPage <= 1;
-				if (btnNext) btnNext.disabled = this.currentPage >= totalPages;
-			} else {
-				paginationControls.style.display = 'none';
-			}
-		}
-
-		if (!this._paginationEventsAttached && paginationControls) {
-			btnPrev?.addEventListener('click', () => {
-				if (this.currentPage > 1) {
-					this.currentPage--;
-					this.renderMonthTransactions();
-				}
-			});
-			btnNext?.addEventListener('click', () => {
-				if (this.currentPage < this.totalPages) {
-					this.currentPage++;
-					this.renderMonthTransactions();
-				}
-			});
-			this._paginationEventsAttached = true;
-		}
 
 		// Attach click listeners to .tx-item.clickable (ignoring clicks on delete button)
 		list.querySelectorAll('.tx-item.clickable').forEach(item => {
@@ -322,6 +313,7 @@ export class TransactionListController {
 				}
 			});
 		});
+		return generation;
 	}
 
 	async renderRecentTransactions() {
