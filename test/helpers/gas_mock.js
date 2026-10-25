@@ -148,6 +148,7 @@ export class MockGasEnvironment {
 		globalThis.PropertiesService = {
 			getScriptProperties: () => ({
 				getProperty: (key) => self.properties.get(key) || null,
+				getProperties: () => Object.fromEntries(self.properties),
 				setProperty: (key, val) => self.properties.set(key, String(val)),
 				deleteProperty: (key) => self.properties.delete(key),
 				deleteAllProperties: () => self.properties.clear()

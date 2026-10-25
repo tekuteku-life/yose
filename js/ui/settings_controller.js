@@ -50,15 +50,17 @@ export class SettingsController {
 			}
 		});
 
-		// Copy public key
-		document.getElementById('btn-copy-public-key')?.addEventListener('click', () => {
+		// Copy public key; notify only after the clipboard operation completes.
+		document.getElementById('btn-copy-public-key')?.addEventListener('click', async () => {
 			const txt = document.getElementById('txt-public-key');
-			if (txt) {
-				txt.select();
-				if (navigator.clipboard) {
-					navigator.clipboard.writeText(txt.value);
-					alert('公開鍵をクリップボードにコピーしました！');
-				}
+			if (!txt) return;
+			txt.select();
+			try {
+				if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+				await navigator.clipboard.writeText(txt.value);
+				alert('公開鍵をクリップボードにコピーしました！');
+			} catch (error) {
+				alert('公開鍵をコピーできませんでした。選択されている公開鍵を手動でコピーしてください。');
 			}
 		});
 
@@ -224,27 +226,10 @@ export class SettingsController {
 			}
 		});
 
-		// One-click register key to GAS
-		const registerInitialKeyHandler = async () => {
-			try {
-				await this.authController.ensureKeyUnlocked();
-				const gasUrl = await this.db.getSetting('gas_url', '');
-				if (!gasUrl) {
-					alert('先にGAS Web App URLを設定・保存してください');
-					return;
-				}
-				if (!this.authController.publicKeyBase64) {
-					alert('公開鍵が生成されていません');
-					return;
-				}
-				const res = await this.syncManager.registerInitialKey(this.authController.publicKeyBase64);
-				alert(`GASへ公開鍵を登録しました！\n${res.message || '登録成功'}`);
-				await this.renderSettings();
-			} catch (err) {
-				alert(`公開鍵登録エラー: ${err.message}`);
-			}
-		};
-		document.getElementById('btn-register-key-gas-direct')?.addEventListener('click', registerInitialKeyHandler);
+		// Owner-controlled setup never sends registration requests to the public endpoint.
+		document.getElementById('btn-show-gas-key-setup')?.addEventListener('click', () => {
+			alert('GASを公開前に、公開鍵をコピーし、GASエディタの「プロジェクトの設定」→「スクリプト プロパティ」で USER_PUBLIC_KEYS に登録してください。鍵の更新もGAS管理画面で行います。');
+		});
 
 		// Toggle key details
 		document.getElementById('btn-toggle-key-details')?.addEventListener('click', () => {

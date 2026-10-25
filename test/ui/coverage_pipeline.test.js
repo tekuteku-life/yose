@@ -320,3 +320,59 @@ describe('Real Node and Chromium coverage collection', () => {
 		});
 	}
 });
+
+// Transport failures belong to the driver, rather than the page under test.
+for (const fd of [3, 4]) it(`rejects pending and subsequent commands on active CDP pipe ${fd} failure`, async t => {
+	const root = workspace(t), d = await open(t, root);
+	const error = Object.assign(new Error('injected pipe reset'), { code: 'ECONNRESET' });
+	const command = d._send('Runtime.evaluate', { expression: '1', returnByValue: true }, d.sessionId);
+	const observed = command.then(value => ({ value }), failure => ({ failure }));
+	assert.doesNotThrow(() => d.proc.stdio[fd].emit('error', error));
+	assert.equal((await observed).failure, error);
+	await assert.rejects(d.evaluate('1'), failure => failure === error);
+	await assert.rejects(d.close(), failure => failure === error);
+	await d.close();
+});
+it('retains an active CDP error without pending commands and reports it on send and close', async t => {
+	const root = workspace(t), d = await open(t, root);
+	const error = Object.assign(new Error('idle pipe reset'), { code: 'ECONNRESET' });
+	assert.equal(d.pending.size, 0);
+	assert.doesNotThrow(() => d.proc.stdio[4].emit('error', error));
+	await assert.rejects(d.evaluate('1'), failure => failure === error);
+	await assert.rejects(d.close(), failure => failure === error);
+	await d.close();
+});
+for (const [fd, code] of [[4, 'ECONNRESET'], [3, 'EPIPE']]) it(`waits for child close after exit and limits expected shutdown pipe errors: ${code}`, async t => {
+	const root = workspace(t), d = await open(t, root), events = [];
+	let uncaught;
+	d.proc.once('exit', () => {
+		events.push('exit');
+		try { d.proc.stdio[fd].emit('error', Object.assign(new Error('shutdown pipe error'), { code })); }
+		catch (error) { uncaught = error; }
+		events.push('pipe-error');
+	});
+	d.proc.once('close', () => events.push('close'));
+	await d.close();
+	assert.equal(uncaught, undefined);
+	assert.deepEqual(events, ['exit', 'pipe-error', 'close']);
+	await d.close();
+	generateCoverageReport(root, path.join(root, 'raw'), path.join(root, 'reports'));
+});
+it('does not ignore a pipe failure during final coverage collection', async t => {
+	const root = workspace(t), d = await open(t, root);
+	const error = Object.assign(new Error('flush pipe reset'), { code: 'ECONNRESET' });
+	const flush = d.flushCoverage.bind(d);
+	d.flushCoverage = async () => { d.proc.stdio[4].emit('error', error); return flush(); };
+	await assert.rejects(d.close(), failure => failure === error);
+	d.flushCoverage = flush;
+	await d.close();
+});
+it('reports unexpected pipe errors even during intentional browser shutdown', async t => {
+	const root = workspace(t), d = await open(t, root);
+	const error = Object.assign(new Error('unexpected shutdown I/O failure'), { code: 'EIO' });
+	let uncaught;
+	d.proc.once('exit', () => { try { d.proc.stdio[4].emit('error', error); } catch (failure) { uncaught = failure; } });
+	await assert.rejects(d.close(), failure => failure === error);
+	assert.equal(uncaught, undefined);
+	await d.close();
+});

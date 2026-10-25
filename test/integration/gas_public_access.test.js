@@ -37,6 +37,17 @@ describe('GAS anonymous transport with registered-key authorization', () => {
 		assert.ok(setup.includes('Googleログイン不要'));
 		assert.ok(setup.indexOf('USER_PUBLIC_KEYS') < setup.indexOf('アクセスできるユーザー'));
 	});
+	it('explains the stopped migration before any setup deployment command or publication checklist', () => {
+		const setup = readFileSync(new URL('../../scripts/setup_gas.js', import.meta.url), 'utf8');
+		const stop = setup.indexOf('旧版の全公開URLを停止');
+		const finished = setup.indexOf('旧版の全実行終了を確認');
+		const wait = setup.indexOf('600,000msを超えて待機');
+		assert.ok(stop >= 0 && stop < finished && finished < wait);
+		assert.ok(wait < setup.indexOf('npx @google/clasp deploy'));
+		assert.ok(wait < setup.indexOf('[デプロイ] -> [新しいデプロイ]'));
+		assert.ok(setup.includes('AUTH_REPLAY_'));
+	});
+
 	it('completes signed bidirectional synchronization without Google login cookies', async () => {
 		await db.putTransaction(transaction('local_public_access'));
 		gas.saveJsonFile('pending_diffs.json', { transactions: [transaction('remote_public_access')] });
@@ -66,6 +77,21 @@ describe('GAS anonymous transport with registered-key authorization', () => {
 		const request = await createSignedRequest('fetch_state', {}, foreign.privateKey);
 		const result = gas.doPost({ postData: { contents: JSON.stringify(request) } });
 		assert.equal(result.success, false); assert.equal(result.master_config, undefined);
+	});
+	it('requires owner-managed setup and keeps the replay ledger private across signed transport', async () => {
+		PropertiesService.getScriptProperties().deleteProperty('USER_PUBLIC_KEYS');
+		const registration = await createSignedRequest('register_initial_key', { publicKey }, keys.privateKey);
+		assert.equal(gas.doPost({ postData: { contents: JSON.stringify(registration) } }).success, false);
+		assert.equal(PropertiesService.getScriptProperties().getProperty('USER_PUBLIC_KEYS'), null);
+		PropertiesService.getScriptProperties().setProperty('USER_PUBLIC_KEYS', publicKey);
+		delete globalThis.CacheService;
+		const request = await createSignedRequest('fetch_state', {}, keys.privateKey);
+		const response = gas.doPost({ postData: { contents: JSON.stringify(request) } });
+		assert.equal(response.success, true);
+		assert.ok([...env.properties.keys()].some(key => key.startsWith('AUTH_REPLAY_')));
+		assert.equal(Object.hasOwn(response, 'auth_replay'), false);
+		assert.equal(JSON.stringify(response).includes('expires_at'), false);
+		assert.equal(gas.doPost({ postData: { contents: JSON.stringify(request) } }).success, false);
 	});
 	it('returns only fixed connection status for an anonymous GET', () => {
 		assert.deepEqual(gas.doGet({}), { status: 'ok', app: 'よせあつめ家計簿 Backend (GAS)' });

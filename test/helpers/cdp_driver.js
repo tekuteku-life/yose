@@ -58,6 +58,9 @@ export class HeadlessBrowserDriver {
 		this.stderr = '';
 		this.decoder = new StringDecoder('utf8');
 		this.proc = null;
+		this.processClosed = null;
+		this.stopping = false;
+		this.transportError = null;
 		this.sessionId = null;
 		this.msgId = 1;
 		this.pending = new Map();
@@ -96,12 +99,19 @@ export class HeadlessBrowserDriver {
 			}
 		);
 
+		this.processClosed = new Promise(resolve => this.proc.once('close', resolve));
 		this.proc.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk).slice(-8000); });
 		const failPending = error => {
 			for (const { reject } of this.pending.values()) reject(error);
 			this.pending.clear();
 		};
-		this.proc.on('error', failPending);
+		const failTransport = error => {
+			if (this.stopping && ['ECONNRESET', 'EPIPE'].includes(error.code)) return;
+			this.transportError ||= error;
+			failPending(this.transportError);
+		};
+		for (const pipe of this.proc.stdio) pipe?.on('error', failTransport);
+		this.proc.on('error', failTransport);
 		this.proc.on('exit', (code, signal) => failPending(new Error(`Chromium exited (${code ?? signal}): ${this.stderr}`)));
 
 		this.proc.stdio[4].on('data', (chunk) => {
@@ -363,6 +373,7 @@ export class HeadlessBrowserDriver {
 	}
 
 	_send(method, params = {}, sessionId = undefined) {
+		if (this.transportError) return Promise.reject(this.transportError);
 		if (!this.proc || this.proc.killed || this.proc.exitCode !== null) {
 			return Promise.reject(new Error(`Chromium process is not running: ${this.stderr}`));
 		}
@@ -552,12 +563,12 @@ export class HeadlessBrowserDriver {
 			p.reject(new Error('Browser closed'));
 		}
 		this.pending.clear();
-		if (this.proc && !this.proc.killed) {
-			await new Promise(resolve => {
-				this.proc.once('exit', resolve);
-				this.proc.kill('SIGKILL');
-			});
-		}
+		this.stopping = true;
+		if (this.proc && !this.proc.killed && this.proc.exitCode === null) this.proc.kill('SIGKILL');
+		if (this.processClosed) await this.processClosed;
+		const transportError = this.transportError;
+		this.transportError = null;
 		if (coverageError) throw coverageError;
+		if (transportError) throw transportError;
 	}
 }
