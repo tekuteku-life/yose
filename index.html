@@ -516,28 +516,14 @@
 
 			<!-- Transactions in Selected Month -->
 			<div class="card" id="card-month-tx-list">
-				<div class="card-title" style="flex-wrap: wrap; gap: 8px;">
-					<span id="month-tx-list-title">📋 当月の明細一覧</span>
-					<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-						<select id="select-type-filter" class="form-control" aria-label="収支種別"><option value="all">すべての種別</option><option value="income">収入</option><option value="expense">支出</option><option value="transfer">振替</option></select>
-						<select id="select-status-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
-							<option value="all">すべて表示</option>
-							<option value="confirmed">確定のみ</option>
-							<option value="planned">予定のみ</option>
-						</select>
-						<select id="select-account-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
-							<option value="all">すべての口座</option>
-						</select>
-						<select id="select-category-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
-							<option value="all">すべての費目</option>
-						</select>
-						<select id="select-tag-filter" class="form-control" style="width: auto; padding: 4px 8px; font-size: 0.85rem;">
-							<option value="all">すべてのタグ</option>
-						</select>
-					</div>
-				</div>
-				<div style="margin-bottom: 10px;">
-					<input type="text" id="input-tx-search" class="form-control form-control-sm" placeholder="🔍 費目・中項目・メモ・タグで絞り込み...">
+				<div class="card-title"><span id="month-tx-list-title">📋 当月の明細一覧</span></div>
+				<div class="tx-filters">
+					<div><label for="select-type-filter">収支種別</label><select id="select-type-filter" class="form-control"><option value="all">すべての種別</option><option value="income">収入</option><option value="expense">支出</option><option value="transfer">振替</option></select></div>
+					<div><label for="select-status-filter">状態</label><select id="select-status-filter" class="form-control"><option value="all">すべて表示</option><option value="confirmed">確定のみ</option><option value="planned">予定のみ</option></select></div>
+					<div><label for="select-account-filter">口座</label><select id="select-account-filter" class="form-control"><option value="all">すべての口座</option></select></div>
+					<div><label for="select-category-filter">費目</label><select id="select-category-filter" class="form-control"><option value="all">すべての費目</option></select></div>
+					<div><label for="select-tag-filter">タグ</label><select id="select-tag-filter" class="form-control"><option value="all">すべてのタグ</option></select></div>
+					<div class="tx-search"><label for="input-tx-search">キーワード</label><input type="text" id="input-tx-search" class="form-control" placeholder="費目・中項目・メモ・タグで絞り込み"></div>
 				</div>
 				<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
 					<span id="bulk-selection-count" aria-live="polite">0件選択</span>
@@ -545,11 +531,17 @@
 					<button type="button" id="btn-bulk-clear" class="btn btn-secondary btn-sm">選択解除</button>
 					<button type="button" id="btn-bulk-edit" class="btn btn-primary btn-sm" disabled>一括編集</button>
 				</div>
+				<div id="tx-pagination-controls-top" class="tx-pagination" role="group" aria-label="明細ページ操作（上側）" style="display:none;">
+					<button type="button" id="btn-tx-prev-page-top" class="btn btn-secondary btn-sm" aria-controls="month-tx-list">◀ 前へ</button>
+					<span id="tx-pagination-info-top" class="tx-pagination-info">1 / 1 ページ (全 0 件)</span>
+					<button type="button" id="btn-tx-next-page-top" class="btn btn-secondary btn-sm" aria-controls="month-tx-list">次へ ▶</button>
+				</div>
 				<div id="month-tx-list" class="tx-list"></div>
-				<div id="tx-pagination-controls" style="display: none; justify-content: center; align-items: center; gap: 12px; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border);">
-					<button type="button" id="btn-tx-prev-page" class="btn btn-secondary btn-sm">◀ 前へ</button>
-					<span id="tx-pagination-info" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500;">1 / 1 ページ (全 0 件)</span>
-					<button type="button" id="btn-tx-next-page" class="btn btn-secondary btn-sm">次へ ▶</button>
+				<div id="tx-pagination-controls" class="tx-pagination" role="group" aria-label="明細ページ操作（下側）" style="display:none;">
+					<button type="button" id="btn-tx-prev-page" class="btn btn-secondary btn-sm" aria-controls="month-tx-list">◀ 前へ</button>
+					<span id="tx-pagination-info" class="tx-pagination-info" aria-live="polite">1 / 1 ページ (全 0 件)</span>
+					<button type="button" id="btn-tx-next-page" class="btn btn-secondary btn-sm" aria-controls="month-tx-list">次へ ▶</button>
+					<label class="tx-page-jump" for="select-tx-page">ページへ移動<select id="select-tx-page" class="form-control" aria-controls="month-tx-list"><option value="1">1ページ</option></select></label>
 				</div>
 			</div>
 		</section>
@@ -559,7 +551,7 @@
 			<div class="card">
 				<h2 class="card-title">税・控除</h2>
 				<label>寄附年<input id="furusato-donation-year" type="number" min="1900" max="9999" step="1" class="form-control"></label>
-				<p>給与・控除・寄附の集計元を費目と内訳から選べます。未記録の項目は年額を入力してください。前年の金額を参照する場合も、寄附年の税制で概算します。</p>
+				<p class="tax-help">給与・控除・寄附の集計元を費目と内訳から選べます。未記録の項目は年額を入力してください。前年の金額を参照する場合も、寄附年の税制で概算します。</p>
 				<div id="furusato-tax-summary" aria-live="polite"></div>
 			</div>
 			<div class="card">
@@ -567,24 +559,24 @@
 				<label>計算方法<select id="furusato-calculation-mode" class="form-control"><option value="income">給与・控除から概算</option><option value="notice">通知書の所得割額・税率から概算</option></select></label>
 				<label>金額参照年<input id="furusato-base-year" type="number" min="1900" max="9999" step="1" class="form-control"></label>
 				<label>所得割の課税区分<select id="furusato-tax-status" class="form-control"><option value="unknown">未確認</option><option value="taxable">所得割課税</option><option value="exempt">所得割非課税</option></select></label>
-				<p>「なし」の項目は0円を入力してください。その他の住民税所得控除には基礎控除・社会保険・生命保険を含めません。人的控除差は扶養等の公定差、その他の所得税控除差は実際の差から人的差を除いた額です。</p>
-				<div id="furusato-input-fields" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;"></div>
-				<details><summary>自動計算する控除の上書き</summary><p>給与所得控除・基礎控除の自動計算は寄附年2025〜2027年に対応します。所得金額調整控除などがある場合は実額で上書きしてください。</p><div id="furusato-auto-fields"></div></details>
+				<p class="tax-help">「なし」の項目は0円を入力してください。その他の住民税所得控除には基礎控除・社会保険・生命保険を含めません。人的控除差は扶養等の公定差、その他の所得税控除差は実際の差から人的差を除いた額です。</p>
+				<div id="furusato-input-fields" class="tax-fields"></div>
+				<details><summary>自動計算する控除の上書き</summary><p class="tax-help">給与所得控除・基礎控除の自動計算は寄附年2025〜2027年に対応します。所得金額調整控除などがある場合は実額で上書きしてください。</p><div id="furusato-auto-fields" class="tax-fields"></div></details>
 				<label><input id="furusato-confirm-ledger" type="checkbox">取得済みの給与・控除明細が金額参照年の年額を満たすことを確認しました</label>
-				<p>明細の金額・分類・状態や集計年を変更すると確認は失効します。手入力は年額として扱います。寄附は当年の現時点実績です。</p>
+				<p class="tax-help">明細の金額・分類・状態や集計年を変更すると確認は失効します。手入力は年額として扱います。寄附は当年の現時点実績です。</p>
 			</div>
 			<div class="card">
 				<h3 class="card-title">生命保険料控除</h3>
 				<label><input id="furusato-life-enabled" type="checkbox">生命保険料控除を利用する</label>
-				<div id="furusato-life-fields" hidden></div>
+				<div id="furusato-life-fields" class="tax-fields" hidden></div>
 				<label><input id="furusato-young-dependent" type="checkbox">寄附年に23歳未満の扶養親族がいる</label>
-				<p>証明書の対象保険料（割戻金等差引後）を指定してください。新契約は2012年1月1日以降です。未割当・未入力の区分は契約なしとして扱います。</p>
+				<p class="tax-help">証明書の対象保険料（割戻金等差引後）を指定してください。新契約は2012年1月1日以降です。未割当・未入力の区分は契約なしとして扱います。</p>
 			</div>
 			<div class="card">
 				<h3 class="card-title">申告方式・住宅ローン控除</h3>
 				<label>寄附の申告方式<select id="furusato-housing-method" class="form-control"><option value="one_stop">ワンストップ特例</option><option value="return">確定申告</option></select></label>
 				<label><input id="furusato-housing-enabled" type="checkbox">住宅ローン控除を利用する</label>
-				<div id="furusato-housing-fields" hidden>
+				<div id="furusato-housing-fields" class="tax-fields" hidden>
 					<label><input id="furusato-housing-applicable" type="checkbox">寄附年の適用条件を満たす</label>
 					<label><input id="furusato-housing-first_year" type="checkbox">住宅ローン控除の初年度</label>
 					<label>本人分の年末残高（円）<input id="furusato-housing-balance" class="form-control" type="number" min="0" step="1"></label>
@@ -592,33 +584,33 @@
 					<label>借入限度額（円）<input id="furusato-housing-limit" class="form-control" type="number" min="0" step="1"></label>
 					<label>控除率（%）<input id="furusato-housing-rate" class="form-control" type="number" min="0" max="2" step="0.01"></label>
 					<label>住民税移行区分<select id="furusato-housing-carry" class="form-control"><option value="5">5%・上限97,500円</option><option value="7">7%・上限136,500円</option></select></label>
-					<p>率・限度額・移行区分は入居年や住宅区分に応じた通知書等の値を使ってください。年間返済額を年末残高へ読み替えず、本人持分だけを入力してください。初年度は確定申告が必要です。</p>
+					<p class="tax-help">率・限度額・移行区分は入居年や住宅区分に応じた通知書等の値を使ってください。年間返済額を年末残高へ読み替えず、本人持分だけを入力してください。初年度は確定申告が必要です。</p>
 				</div>
 			</div>
 			<div class="card">
 				<h3 class="card-title">導出値・ふるさと納税枠</h3>
 				<div id="furusato-calculation-preview" aria-live="polite"></div>
 				<button id="btn-save-furusato-sources" type="button" class="btn btn-primary">計算設定・集計元を保存</button>
-				<p>上限は総合課税・標準所得割10%の参考値です。所得割額×20%÷（90%−特例税率×1.021）＋2,000円を基に、申告方式・住宅ローン控除との競合を比較します。税額端数・他の税額控除・分離課税・損失繰越等を含む確定申告額ではありません。</p>
-				<p><a href="https://www.nta.go.jp/taxes/shiraberu/taxanswer/shotoku/1155.htm" target="_blank" rel="noopener noreferrer">国税庁の制度説明</a></p>
-				<details><summary>支払税額等の参考集計</summary><div id="furusato-reference-fields"></div><div id="furusato-ledger-summary"></div></details>
+				<p class="tax-help">上限は総合課税・標準所得割10%の参考値です。所得割額×20%÷（90%−特例税率×1.021）＋2,000円を基に、申告方式・住宅ローン控除との競合を比較します。税額端数・他の税額控除・分離課税・損失繰越等を含む確定申告額ではありません。</p>
+				<p class="tax-help"><a href="https://www.nta.go.jp/taxes/shiraberu/taxanswer/shotoku/1155.htm" target="_blank" rel="noopener noreferrer">国税庁の制度説明</a></p>
+				<details><summary>支払税額等の参考集計</summary><div id="furusato-reference-fields" class="tax-fields"></div><div id="furusato-ledger-summary"></div></details>
 			</div>
 			<div class="card">
 				<h3 class="card-title">通知書から直接入力</h3>
-				<p>通知書方式は2015〜2037年の制度式による参考値です。支払住民税や源泉所得税をそのまま入れず、調整控除後所得割額と特例控除用税率を確認してください。給与・控除からの住宅併用比較はこの方式には含みません。</p>
+				<p class="tax-help">通知書方式は2015〜2037年の制度式による参考値です。支払住民税や源泉所得税をそのまま入れず、調整控除後所得割額と特例控除用税率を確認してください。給与・控除からの住宅併用比較はこの方式には含みません。</p>
 				<label>住民税所得割額（調整控除後・円）<input id="furusato-resident-tax" class="form-control" type="number" min="0" step="1"></label>
 				<label>特例控除用税率<select id="furusato-tax-rate" class="form-control"><option value="">未入力</option><option value="0">0%</option><option value="5">5%</option><option value="10">10%</option><option value="20">20%</option><option value="23">23%</option><option value="33">33%</option><option value="40">40%</option><option value="45">45%</option></select></label>
 				<button type="button" id="btn-save-furusato" class="btn btn-secondary">通知書の条件を保存・使用</button>
 			</div>
 			<p id="furusato-error" role="alert"></p>
-			<div class="card" id="furusato-records"></div>
+			<div class="card tax-table-scroll" id="furusato-records"></div>
 		</section>
 
 		<section id="tab-settings" class="tab-panel">
 			<div class="card" id="card-data-metadata">
 				<h3 class="card-title">データ情報</h3>
 				<div id="data-metadata" aria-live="polite"></div>
-				<p>取得済みの明細・共有マスタ・集計情報を対象にしています。サイズは削除済みを含むUTF-8 JSONのバイト数です。端末設定・認証鍵・IndexedDBの物理使用量・サーバー上の未取得明細は含みません。平均は最古〜最新の取引日を含む暦月・暦年で割り、空の月・年も含めます。</p>
+				<p class="metadata-note">取得済みの明細・共有マスタ・集計情報を対象にしています。サイズは削除済みを含むUTF-8 JSONのバイト数です。端末設定・認証鍵・IndexedDBの物理使用量・サーバー上の未取得明細は含みません。平均は最古〜最新の取引日を含む暦月・暦年で割り、空の月・年も含めます。</p>
 			</div>
 			<!-- Security & Public Key (Requirement 4.5: Visual Segregation) -->
 			<div class="card" id="card-security-keys">
@@ -900,7 +892,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.17.1</span>
+					<span class="badge badge-info" id="badge-current-version">v1.18.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。

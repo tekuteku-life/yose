@@ -1235,3 +1235,209 @@ input[readonly] {
 	overflow: auto;
 	box-sizing: border-box;
 }
+
+/* Data summaries and labeled transaction navigation */
+.metadata-list {
+	padding-left: 1.4rem;
+	line-height: 1.8;
+}
+
+.metadata-note {
+	margin-top: 18px;
+	padding-top: 12px;
+	border-top: 1px solid var(--border);
+	font-size: 0.8rem;
+	line-height: 1.7;
+	color: var(--text-muted);
+}
+
+.tx-filters {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+	gap: 12px;
+	margin-bottom: 16px;
+}
+
+.tx-filters > div,
+.tx-filters .form-control {
+	min-width: 0;
+}
+
+.tx-filters label {
+	display: block;
+	margin-bottom: 4px;
+	font-size: 0.85rem;
+	font-weight: 600;
+}
+
+.tx-search {
+	grid-column: 1 / -1;
+}
+
+.tx-pagination {
+	justify-content: center;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+	padding: 12px 0;
+}
+
+#tx-pagination-controls {
+	margin-top: 12px;
+	border-top: 1px solid var(--border);
+}
+
+.tx-pagination-info {
+	font-size: 0.85rem;
+	color: var(--text-muted);
+}
+
+.tx-page-jump {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 0.85rem;
+}
+
+.tx-page-jump select {
+	width: auto;
+	padding: 6px 8px;
+}
+
+/* Tax inputs, explanatory text, and calculated values have separate visual roles. */
+#tab-tax label {
+	display: block;
+	font-size: 0.9rem;
+	font-weight: 600;
+	line-height: 1.5;
+	margin-bottom: 12px;
+}
+
+#tab-tax label .form-control {
+	margin-top: 6px;
+	font-weight: 400;
+}
+
+#tab-tax label:has(input[type="checkbox"]) {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+
+#tab-tax details {
+	margin: 16px 0;
+	padding: 12px;
+	background: var(--bg-hover);
+	border-radius: var(--radius-sm);
+}
+
+#tab-tax summary {
+	font-weight: 600;
+	cursor: pointer;
+}
+
+#tab-tax .tax-help {
+	margin: 12px 0 18px;
+	font-size: 0.82rem;
+	line-height: 1.8;
+	color: var(--text-muted);
+}
+
+.tax-fields {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+	gap: 16px;
+	margin: 16px 0;
+}
+
+.tax-fields[hidden] {
+	display: none;
+}
+
+.tax-fields > *,
+#tab-tax .form-control {
+	min-width: 0;
+}
+
+.tax-fields > .tax-help {
+	grid-column: 1 / -1;
+}
+
+.tax-field {
+	padding: 16px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg-card);
+}
+
+.tax-field h4 {
+	font-size: 1rem;
+	margin-bottom: 16px;
+	padding-bottom: 8px;
+	border-bottom: 1px solid var(--border);
+}
+
+.tax-field > select {
+	margin-bottom: 12px;
+}
+
+.tax-adopted-value {
+	background: var(--bg-hover);
+	border-radius: var(--radius-sm);
+	padding: 10px 12px;
+	font-size: 0.95rem;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.tax-adopted-value:empty {
+	display: none;
+}
+
+.tax-result-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+	gap: 12px;
+	margin: 16px 0;
+}
+
+.tax-result {
+	padding: 14px;
+	background: var(--bg-hover);
+	border-radius: var(--radius-sm);
+	overflow-wrap: anywhere;
+}
+
+.tax-result dt {
+	font-size: 0.82rem;
+	color: var(--text-muted);
+	margin-bottom: 6px;
+}
+
+.tax-result dd {
+	font-size: 1.15rem;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
+.tax-result-primary {
+	background: var(--primary-light);
+	border-left: 4px solid var(--primary);
+}
+
+.tax-result-primary dd {
+	font-size: 1.5rem;
+}
+
+.tax-missing {
+	padding: 12px;
+	margin: 12px 0 18px;
+	border-left: 4px solid var(--warning);
+	background: var(--bg-hover);
+	font-size: 0.9rem;
+	line-height: 1.8;
+}
+
+.tax-table-scroll {
+	overflow-x: auto;
+}

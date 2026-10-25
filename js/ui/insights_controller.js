@@ -37,7 +37,14 @@ export class InsightsController {
 		try {
 			const data = await this.db.getDataMetadata();
 			if (generation !== this.metadataGeneration || session !== this.generation || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
-			target.textContent = `明細 ${data.count.toLocaleString()}件（確定 ${data.confirmed.toLocaleString()}件 / 予定 ${data.planned.toLocaleString()}件）・削除済み ${data.deleted.toLocaleString()}件 / 全体サイズ ${data.bytes.toLocaleString()}バイト / 取引日 ${data.firstDate || 'なし'} 〜 ${data.lastDate || 'なし'} / 月平均 ${data.monthlyAverage.toFixed(2)}件（${data.months}か月） / 年平均 ${data.yearlyAverage.toFixed(2)}件（${data.years}年）`;
+			const items = [
+				`明細 ${data.count.toLocaleString()}件（確定 ${data.confirmed.toLocaleString()}件 / 予定 ${data.planned.toLocaleString()}件）・削除済み ${data.deleted.toLocaleString()}件`,
+				`全体サイズ ${data.bytes.toLocaleString()}バイト`,
+				`取引日 ${data.firstDate || 'なし'} 〜 ${data.lastDate || 'なし'}`,
+				`月平均 ${data.monthlyAverage.toFixed(2)}件（${data.months}か月）`,
+				`年平均 ${data.yearlyAverage.toFixed(2)}件（${data.years}年）`
+			];
+			target.innerHTML = `<ul class="metadata-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
 		} catch (error) { if (generation === this.metadataGeneration && session === this.generation && !this.coordinator.isKeyLocked) target.textContent = `データ情報を取得できませんでした: ${error.message}`; }
 	}
 	renderInvestment(config) {
