@@ -1,4 +1,5 @@
 import { escapeHtml } from '../logic.js';
+import { captureRenderSession } from './render_session.js';
 import { referencedArchivedMasterSources, buildMasterMigration, findArchivedReferences } from '../logic/master_maintenance.js';
 
 /** Infrequent, explicit maintenance of already downloaded archived references. */
@@ -61,7 +62,9 @@ export class MaintenanceController {
 		this.updateCount();
 	}
 
-	async refresh() {
+	async refresh({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		this.setup();
 		if (!document.querySelector('details#maintenance-panel')?.hasAttribute('open') || this.busy) return;
 		const generation = ++this.refreshGeneration;
@@ -71,7 +74,7 @@ export class MaintenanceController {
 		try {
 			const db = this.coordinator.db;
 			const [config, records, months] = await Promise.all([db.getMasterConfig(), db.getTransactions(), db.getSetting('downloaded_archive_months', [])]);
-			if (generation !== this.refreshGeneration) return;
+			if (!valid() || generation !== this.refreshGeneration) return;
 			this.config = config;
 			this.records = records;
 			this.sources = referencedArchivedMasterSources(config, records);
@@ -83,12 +86,12 @@ export class MaintenanceController {
 			this.populateTargets();
 			document.getElementById('maintenance-refresh-status').textContent = '一覧を更新しました。';
 		} catch (error) {
-			if (generation === this.refreshGeneration) {
+			if (valid() && generation === this.refreshGeneration) {
 				document.getElementById('maintenance-refresh-status').textContent = '一覧を更新できませんでした。再実行してください。';
 				throw error;
 			}
 		} finally {
-			if (generation === this.refreshGeneration) {
+			if (valid() && generation === this.refreshGeneration) {
 				this.loading = false;
 				this.updateControls();
 			}

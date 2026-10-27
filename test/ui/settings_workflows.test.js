@@ -302,8 +302,12 @@ describe('Settings, files, security rendering, and persistence', { timeout: 1200
 		await d.click('#btn-manual-sync');
 		assert.equal(await d.evaluate('document.getElementById("btn-manual-sync").disabled'), false);
 		await cashflow(d);
+		await d.evaluate(`{const app=window.__yose_app,c=app.summaryController,close=c.handleCloseMonth.bind(c),refresh=app.refreshAllViews.bind(app);c.handleCloseMonth=()=>window.__settingsClosePromise=close();app.refreshAllViews=async(...args)=>{await new Promise(resolve=>window.__releaseSettingsCloseView=resolve);return refresh(...args);};}`);
 		await d.click('#btn-close-month');
 		await waitForDialog(d, '月締めに失敗');
+		await d.waitFor('typeof window.__releaseSettingsCloseView==="function"');
+		assert.equal(await d.evaluate('document.getElementById("btn-close-month").disabled'), true);
+		await d.evaluate('window.__releaseSettingsCloseView();window.__settingsClosePromise');
 		assert.equal(await d.evaluate('document.getElementById("btn-close-month").disabled'), false);
 	});
 	it('calculates annual defaults, filters categories, previews discrepancies, and keeps each year independent', async () => {

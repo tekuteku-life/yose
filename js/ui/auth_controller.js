@@ -97,6 +97,7 @@ export class AuthController {
 
 	invalidateSession() {
 		this.authGeneration++;
+		this.coordinator.summaryController?.cancelClosing();
 		this.coordinator.advanceLinkController?.cancel();
 		this.coordinator.bulkEditController?.cancel();
 		this.coordinator.insightsController?.cancel();

@@ -7,6 +7,7 @@ import { YoseDB } from '../db.js';
 import { SyncManager } from '../sync.js';
 import { formatDate } from '../logic.js';
 import { CURRENT_APP_VERSION, checkAppVersion } from '../version.js';
+import { captureRenderSession } from './render_session.js';
 
 import { AuthController } from './auth_controller.js';
 import { SyncStatusController } from './sync_status_controller.js';
@@ -466,19 +467,30 @@ export class AppCoordinator {
 		}
 	}
 
-	async refreshAllViews() {
-		try {
-			await this.db.processCreditCardAutoSettlements();
-		} catch (e) {
-			console.warn('Auto credit card settlement check skipped:', e.message);
+	async refreshAllViews({ generateSettlements = true, isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this, isSessionValid), options = { isSessionValid: valid };
+		if (!valid()) return;
+		if (generateSettlements) {
+			try {
+				await this.db.processCreditCardAutoSettlements();
+			} catch (e) {
+				console.warn('Auto credit card settlement check skipped:', e.message);
+			}
 		}
-		await this.txInputController.populateMasterDropdowns();
-		await this.txListController.renderRecentTransactions();
-		await this.summaryController.renderSummary();
-		await this.settingsController.renderSettings();
-		if (document.getElementById('tab-tax').classList.contains('active')) await this.furusatoController.render();
-		await this.syncStatusController.updateSyncBadge();
-		await this.maintenanceController.refresh();
+		if (!valid()) return;
+		await this.txInputController.populateMasterDropdowns(options);
+		if (!valid()) return;
+		await this.txListController.renderRecentTransactions(options);
+		if (!valid()) return;
+		await this.summaryController.renderSummary(options);
+		if (!valid()) return;
+		await this.settingsController.renderSettings(options);
+		if (!valid()) return;
+		if (document.getElementById('tab-tax').classList.contains('active')) await this.furusatoController.render(null, options);
+		if (!valid()) return;
+		await this.syncStatusController.updateSyncBadge(options);
+		if (!valid()) return;
+		await this.maintenanceController.refresh(options);
 	}
 
 	async initTheme() {

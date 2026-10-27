@@ -1,4 +1,5 @@
 import { escapeHtml, formatDate } from '../logic.js';
+import { captureRenderSession } from './render_session.js';
 
 const yen = value => value === null ? '未算出' : `¥${value.toLocaleString()}`;
 export class InsightsController {
@@ -30,13 +31,15 @@ export class InsightsController {
 		const selector = '#investment-account,#investment-date,#investment-acquisition-cost,#investment-valuation,#btn-save-investment,#investment-observations button';
 		(/** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll(selector))).forEach(control => { control.disabled = busy; });
 	}
-	async renderMetadata() {
+	async renderMetadata({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const generation = ++this.metadataGeneration, session = this.generation, key = this.db.encryptionKey;
 		const target = document.getElementById('data-metadata');
 		if (this.coordinator.isKeyLocked) return;
 		try {
 			const data = await this.db.getDataMetadata();
-			if (generation !== this.metadataGeneration || session !== this.generation || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+			if (!valid() || generation !== this.metadataGeneration || session !== this.generation || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 			const items = [
 				`明細 ${data.count.toLocaleString()}件（確定 ${data.confirmed.toLocaleString()}件 / 予定 ${data.planned.toLocaleString()}件）・削除済み ${data.deleted.toLocaleString()}件`,
 				`全体サイズ ${data.bytes.toLocaleString()}バイト`,
@@ -45,7 +48,7 @@ export class InsightsController {
 				`年平均 ${data.yearlyAverage.toFixed(2)}件（${data.years}年）`
 			];
 			target.innerHTML = `<ul class="metadata-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
-		} catch (error) { if (generation === this.metadataGeneration && session === this.generation && !this.coordinator.isKeyLocked) target.textContent = `データ情報を取得できませんでした: ${error.message}`; }
+		} catch (error) { if (valid() && generation === this.metadataGeneration && session === this.generation && !this.coordinator.isKeyLocked) target.textContent = `データ情報を取得できませんでした: ${error.message}`; }
 	}
 	renderInvestment(config) {
 		this.investmentConfig = structuredClone(config);

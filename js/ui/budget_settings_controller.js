@@ -1,4 +1,5 @@
 import { aggregateMonthlySummaries, calculateAnnualBudgetDefaults, resolveAnnualTargets, escapeHtml } from '../logic.js';
+import { captureRenderSession } from './render_session.js';
 
 const FIELDS = { expense_budget: 'setting-expense-budget', savings_target_amount: 'setting-savings-target-amount', savings_target_rate: 'setting-savings-target-rate' };
 const PRIMARY = { expense: 'expense_budget', savings: 'savings_target_amount', rate: 'savings_target_rate' };
@@ -39,18 +40,19 @@ export class BudgetSettingsController {
 		this.generation++; this.readVersion++; this.drafts.clear(); this.saving = false; this.loading = false; this.freeze(false);
 	}
 
-	async render() {
-		if (this.saving || this.coordinator.isKeyLocked) return;
+	async render({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid() || this.saving || this.coordinator.isKeyLocked) return;
 		const input = document.getElementById('setting-budget-year');
 		input.value ||= this.coordinator.selectedYear || String(new Date().getFullYear());
 		const year = this.year, read = ++this.readVersion, generation = this.generation, key = this.db.encryptionKey;
 		this.loading = true; this.freeze(true, true);
 		let state;
 		try { state = await this.db.getAnalyticsState(); } catch (error) {
-			if (read === this.readVersion && generation === this.generation && !this.coordinator.isKeyLocked) { this.freeze(true, true); document.getElementById('budget-goal-notice').textContent = `${year}年の年間予算を読み取れませんでした。再表示してください。${error.message}`; }
+			if (valid() && read === this.readVersion && generation === this.generation && !this.coordinator.isKeyLocked) { this.freeze(true, true); document.getElementById('budget-goal-notice').textContent = `${year}年の年間予算を読み取れませんでした。再表示してください。${error.message}`; }
 			return;
 		}
-		if (read !== this.readVersion || generation !== this.generation || key !== this.db.encryptionKey || this.coordinator.isKeyLocked || year !== this.year || this.saving) return;
+		if (!valid() || read !== this.readVersion || generation !== this.generation || key !== this.db.encryptionKey || this.coordinator.isKeyLocked || year !== this.year || this.saving) return;
 		let draft = this.drafts.get(year);
 		if (!draft?.dirty) {
 			const values = structuredClone(state.master_config.annual_budgets?.[year] || {});

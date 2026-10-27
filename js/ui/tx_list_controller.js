@@ -3,6 +3,7 @@
  * Renders monthly transaction breakdown and recent transaction feeds with click-to-edit delegation.
  */
 
+import { captureRenderSession } from './render_session.js';
 import {
 	formatDate,
 	escapeHtml,
@@ -222,7 +223,9 @@ export class TransactionListController {
 		`;
 	}
 
-	async renderMonthTransactions() {
+	async renderMonthTransactions({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const generation = ++this._renderGeneration;
 		const key = this.db.encryptionKey;
 		const list = document.getElementById('month-tx-list');
@@ -255,10 +258,11 @@ export class TransactionListController {
 
 		txs.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.created_at || '').localeCompare(a.created_at || ''));
 
-		if (generation !== this._renderGeneration) return;
+		if (!valid() || generation !== this._renderGeneration) return;
 		const masterConfig = await this.db.getMasterConfig();
+		if (!valid()) return;
 		await this.waitForListIdle(list);
-		if (generation !== this._renderGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+		if (!valid() || generation !== this._renderGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 		if (titleEl) titleEl.textContent = title;
 
 		this.populateFilterDropdowns(txs, masterConfig);
@@ -316,7 +320,9 @@ export class TransactionListController {
 		return generation;
 	}
 
-	async renderRecentTransactions() {
+	async renderRecentTransactions({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const generation = ++this._recentRenderGeneration, key = this.db.encryptionKey;
 		const list = document.getElementById('recent-tx-list');
 		if (!list) return;
@@ -324,8 +330,9 @@ export class TransactionListController {
 			this.db.getTransactions(),
 			this.db.getMasterConfig()
 		]);
+		if (!valid()) return;
 		await this.waitForListIdle(list);
-		if (generation !== this._recentRenderGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+		if (!valid() || generation !== this._recentRenderGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 		const sorted = all.sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 5);
 
 		if (sorted.length === 0) {

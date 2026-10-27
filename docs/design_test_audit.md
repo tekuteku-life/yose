@@ -1,5 +1,38 @@
 # 外部・内部設計と既存テストの網羅性監査
 
+## R/E/I-3.63 工程再入時の確認表
+
+[資産表示・個別参照・年間月締め](asset_trends_annual_closing.md)に従う。既存の候補実装・試験をそのまま承認済みとは扱わず、Phase 2/3の独立レビューで観点を再評価する。
+
+| 契約 | 具体的assertと層 | 再入時の不足/予定 |
+| --- | --- | --- |
+| 資産表示の階層 | 実Chart.jsの1180/390/320px描画、ページscrollWidthとinput/表の配置である | ライト/ダークと投資の保存/訂正/削除は既存data_insightsも回帰する |
+| 個別系列の参照 | analytics_usability UIの点・線途中・1本指・円金額・DPR=2・欠測で非表示・非表示系列・重なり1件である | 曲線/階段の途中・負数/0・領域外・ピンチ・ズーム後・最寄り観測点を補完する |
+| 年次の承認/停止 | 同UIの12月までの順序・予定ID・取消・未入力で全月未送信・3月で停止/再実行・年送り/重複・ロックと単月維持である | 事前読込失敗・最終表示失敗・ロック/再解除・承認後変更・全原本保持を補完する |
+| 既存同期の再利用 | annual_closing_scenario systemで実署名→GASモック→暗号化snapshot/12archives・予定確定・再締め残高不変である | 予定の競合/サーバー未入力・途中応答喪失/ローカル保存失敗・最新締め月が後年の再締めを補完する |
+| 共通回帰/最終受入 | chart_controls/daily_usability/data_insights等の既存UIとunit/integration/system、統合coverageのmanifestである | 最新mainへ移した後に全4層・統合計測・原本一致を再実行し、未達ファイルを記録する |
+
+前作業ブランチ上のNode1100/UI507という記録は過去の候補検証であり、このmain起点の最終結果へ流用しない。独立レビュー記録はreview64である。
+
+### Phase 5からの再入と追加要求
+
+最終表示中に旧口座読取を保留した実ロック/再解除で、新しい口座名へ戻した画面が旧名で上書きされることを再現した。最終表示更新を含む各非同期描画に認証有効関数を伝播し、口座/分類/候補内部状態、Settings配下、badge、Maintenanceを保留する先行回帰を補完する。既存settings_workflowsの締めエラー試験も実Promise完了まで待つ。
+
+R/E/I-3.64は通常共有group_idの単件/複数/過去月編集、金融役割と旧空補助情報の保護、種別混在と原因説明、DBでの後発関連/CAS/暗号化/締め承認取消、実UIの保存とXSSを先行試験へ対応付ける。本人から有効親/アーカイブ済み内訳・異なる金額・現金→クレカと分類変更という条件を受領し、この条件を直接検査する。本人データのgroup_idや金融役割は未取得であり、合成再現と同一原因とは断定しない。
+
+追加のキャンセル/戻る指摘はbulk_modal_navigationの実Chromium先行試験で検査する。5経路の未変更/変更破棄拒否/承認、履歴ガード復元、アプリ離脱確認とnative beforeunloadの不発生、全raw原本/選択保持、再表示/focus、4寸法での操作常時表示、保存中の閉じる拒否と失敗後復帰を直接assertする。既存master_modal_navigation/data_insights等は共通処理の横展開回帰である。工程と測定はreview65に記録する。
+
+| 再入した契約 | 直接assertする試験 |
+| --- | --- |
+| 最終更新中の実lock/unlockと新batchの保護 | annual_closing_edgesの新口座名/入力保持・旧refresh例外での新busy/通知不変である |
+| 各非同期描画の反映前の親有効性 | render_session_edgesの23葉で口座/分類/候補状態/各設定/バッジ/保守のDOM・内部状態とcatch/finally不変を検査する |
+| R/E/I-3.63と[R-3.19](requirements.md#r-3-19)・[E-3.19](external_design.md#e-3-19)・[E-3.40](external_design.md#e-3-40)のメモ履歴分類反映 | memo_session_edgesの9件で実TagMemoInputの文字列callback/入力Eventの通常適用、getMaster中の実lock/unlock後の新分類/メモ保持、計上/実態それぞれの中項目await後の旧反映抑止、同一セッションの別メモ保持、旧read失敗通知の抑止、現在セッションの失敗通知を直接assertする |
+| 同一有効関数の伝播/後続停止 | annual_closing unitでread-only flag、有効関数、失効後の描画呼出なしを検査する |
+| 過去通常共有groupと金融役割の区別/原因 | bulk_edit_eligibility unitで許可フィールド/入力元非変更/理由の原因ID/役割を比較する |
+| 原子的保存と最新関係の再検証 | bulk_edit_eligibility integrationとdata_insights_storageで未選択原本、後発実役割、承認取消/暗号化失敗のraw不変を検査する |
+| 本人条件の実操作と現在内訳の表示 | bulk_edit_eligibility UIで別/共有groupの現金→クレカ・有効子/親子変更、各金額/実態分類/未選択raw保持、archived現在値、理由aria/XSSを検査する |
+| 一括編集の実境界と棚卸し後の回帰 | bulk_edit_eligibility unitの通常振替先・同じ親指定時の旧子/同額税情報保持・最小削除墓標・groupなし選択/複数逆参照を直接比較する。Chartの重複領域判定除去後もanalytics_usabilityの軸/凡例/ピンチによるactive解除を実入力で検査する |
+
 ## 結論
 
 **既存テストが外部・内部設計を完全に網羅するとは確認できない。** 多数の入力・保存・同期・暗号・復旧に直接assertがある一方、未検証の境界/実環境と、要求に対する実装の未達が残る。全テスト合格、設計IDの対応表登録、コードの行/分岐カバレッジを別の指標として扱う。

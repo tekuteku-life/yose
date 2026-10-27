@@ -1,5 +1,6 @@
 /** Explicit complete-import confirmation and pending-operation management. */
 import { IMPORT_CONFIRMATION_WORD } from '../db/backup_replacement.js';
+import { captureRenderSession } from './render_session.js';
 
 const TYPE_NAMES = { full_backup: '全データ', transactions: '取引明細', master_config: 'マスタ設定', annual_budgets: '年間予算', summary_snapshot: '残高スナップショット' };
 
@@ -76,8 +77,11 @@ export class BackupImportController {
 		}
 	}
 
-	async renderPending() {
+	async renderPending({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const pending = await this.coordinator.db.getPendingImport();
+		if (!valid()) return;
 		const panel = document.getElementById('pending-import-panel');
 		panel.hidden = !pending;
 		document.getElementById('pending-import-status').textContent = pending ? `${TYPE_NAMES[pending.detectedType]}の完全インポートが送信待ちです。手動同期でサーバーに反映します。版競合で停止した場合は、再確認して最新のサーバーデータの置換を承認してください。` : '';

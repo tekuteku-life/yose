@@ -1,4 +1,4 @@
-import { bulkEditableFields, buildBulkEdit } from '../logic/bulk_edit.js';
+import { bulkEditCapabilities, buildBulkEdit } from '../logic/bulk_edit.js';
 import { escapeHtml } from '../logic.js';
 
 const FIELDS = { memo: 'メモ', tags: 'タグ（カンマ区切り・空欄で解除）', date: '取引日', target_month: '計上月', status: '状態', amount: '金額', account_id: '支払・受取口座', to_account_id: '振替先口座', category_id: '計上費目', subcategory_id: '計上中項目', actual_category_id: '実態費目', actual_subcategory_id: '実態中項目' };
@@ -22,6 +22,7 @@ export class BulkEditController {
 		document.getElementById('btn-bulk-clear').addEventListener('click', () => this.clearSelection());
 		document.getElementById('btn-bulk-edit').addEventListener('click', () => this.open());
 		document.getElementById('btn-close-bulk').addEventListener('click', () => this.requestClose());
+		document.getElementById('btn-cancel-bulk').addEventListener('click', () => this.requestClose());
 		document.getElementById('btn-save-bulk').addEventListener('click', () => this.save());
 		const modal = document.getElementById('modal-bulk-edit');
 		modal.addEventListener('click', event => { if (event.target === modal) this.requestClose(); });
@@ -62,6 +63,7 @@ export class BulkEditController {
 		this.busy = busy;
 		document.getElementById('btn-save-bulk').disabled = busy;
 		document.getElementById('btn-close-bulk').disabled = busy;
+		document.getElementById('btn-cancel-bulk').disabled = busy;
 		for (const field of Object.keys(FIELDS)) {
 			const apply = document.getElementById(`bulk-apply-${field}`), value = document.getElementById(`bulk-value-${field}`);
 			apply.disabled = busy || !this.allowedFields.includes(field);
@@ -79,33 +81,43 @@ export class BulkEditController {
 			const originals = all.filter(tx => ids.has(tx.id));
 			if (originals.length !== ids.size) throw new Error('選択した明細が変更されています。一覧を更新してください。');
 			this.originals = originals; this.all = all; this.config = config; this.dirty = false;
-			const allowed = this.allowedFields = bulkEditableFields(originals, all);
+			const { fields: allowed, reasons } = bulkEditCapabilities(originals, all);
+			this.allowedFields = allowed;
 			const options = (list, valueKey = 'id') => list.map(row => `<option value="${escapeHtml(row[valueKey])}">${escapeHtml(row.name)}</option>`).join('');
 			document.getElementById('bulk-edit-fields').innerHTML = Object.entries(FIELDS).map(([field, label]) => {
 				const common = originals.every(tx => JSON.stringify(tx[field]) === JSON.stringify(originals[0][field])) ? originals[0][field] : '';
+				const reasonId = `bulk-reason-${field}`;
+				const description = `aria-describedby="bulk-edit-scope${allowed.includes(field) ? '' : ` ${reasonId}`}"`;
+				const inputLabel = `aria-labelledby="bulk-label-${field}" ${description}`;
 				let input;
-				if (field.endsWith('account_id')) input = `<select class="form-control" id="bulk-value-${field}" disabled>${options(config.accounts.filter(a => !a.is_archived))}</select>`;
-				else if (field === 'category_id' || field === 'actual_category_id') input = `<select class="form-control" id="bulk-value-${field}" disabled><option value="">未分類</option>${options(config.categories.filter(c => !c.is_archived && c.type === originals[0].type))}</select>`;
-				else if (field.endsWith('subcategory_id')) input = `<select class="form-control" id="bulk-value-${field}" disabled></select>`;
-				else if (field === 'status') input = `<select class="form-control" id="bulk-value-${field}" disabled><option value="confirmed">確定</option><option value="planned">予定</option></select>`;
-				else input = `<input class="form-control" id="bulk-value-${field}" type="${({ date: 'date', target_month: 'month', amount: 'number' })[field] || 'text'}" ${field === 'amount' ? 'min="0" step="1"' : ''} value="${escapeHtml(field === 'tags' && Array.isArray(common) ? common.join(', ') : common ?? '')}" disabled>`;
-				return `<div class="form-group"><label><input type="checkbox" id="bulk-apply-${field}" data-apply-field="${field}" ${allowed.includes(field) ? '' : 'disabled'}> ${label}を変更</label>${input}</div>`;
+				if (field.endsWith('account_id')) input = `<select class="form-control" id="bulk-value-${field}" ${inputLabel} disabled>${options(config.accounts.filter(a => !a.is_archived))}</select>`;
+				else if (field === 'category_id' || field === 'actual_category_id') input = `<select class="form-control" id="bulk-value-${field}" ${inputLabel} disabled><option value="">未分類</option>${options(config.categories.filter(c => !c.is_archived && c.type === originals[0].type))}</select>`;
+				else if (field.endsWith('subcategory_id')) input = `<select class="form-control" id="bulk-value-${field}" ${inputLabel} disabled></select>`;
+				else if (field === 'status') input = `<select class="form-control" id="bulk-value-${field}" ${inputLabel} disabled><option value="confirmed">確定</option><option value="planned">予定</option></select>`;
+				else input = `<input class="form-control" id="bulk-value-${field}" ${inputLabel} type="${({ date: 'date', target_month: 'month', amount: 'number' })[field] || 'text'}" ${field === 'amount' ? 'min="0" step="1"' : ''} value="${escapeHtml(field === 'tags' && Array.isArray(common) ? common.join(', ') : common ?? '')}" disabled>`;
+				const explanation = allowed.includes(field) ? '' : `<p class="bulk-field-reason" id="${reasonId}">${reasons[field].map(escapeHtml).join(' / ')}</p>`;
+				return `<div class="form-group"><label id="bulk-label-${field}"><input type="checkbox" id="bulk-apply-${field}" data-apply-field="${field}" ${description} ${allowed.includes(field) ? '' : 'disabled'}> ${label}を変更</label>${input}${explanation}</div>`;
 			}).join('');
 			for (const field of ['account_id', 'to_account_id', 'category_id', 'actual_category_id', 'status']) {
 				const common = originals.every(tx => tx[field] === originals[0][field]) ? originals[0][field] : '';
 				if (common != null) document.getElementById(`bulk-value-${field}`).value = common;
 			}
-			this.populateSubcategories(''); this.populateSubcategories('actual_');
+			this.populateSubcategories('', true); this.populateSubcategories('actual_', true);
 			document.getElementById('bulk-edit-error').textContent = '';
 			document.getElementById('bulk-edit-scope').textContent = `${originals.length}件を編集します。変更する項目だけチェックしてください。種別・関連情報は保持します。関連明細を含む場合、金融条件は個別の専用編集から変更してください。`;
 			this.setBusy(false);
 			document.getElementById('modal-bulk-edit').classList.add('active');
 		} catch (error) { if (generation === this.generation && !this.coordinator.isKeyLocked) alert(error.message); }
 	}
-	populateSubcategories(prefix) {
+	populateSubcategories(prefix, restoreOriginal = false) {
 		const category = this.config.categories.find(c => c.id === document.getElementById(`bulk-value-${prefix}category_id`).value);
 		const input = document.getElementById(`bulk-value-${prefix}subcategory_id`);
-		input.innerHTML = '<option value="">未分類</option>' + (category?.subcategories || []).filter(sub => !sub.is_archived).map(sub => `<option value="${escapeHtml(sub.id)}">${escapeHtml(sub.name)}</option>`).join('');
+		const field = `${prefix}subcategory_id`;
+		const common = restoreOriginal && this.originals.every(tx => tx[`${prefix}category_id`] === category?.id && tx[field] === this.originals[0][field]) ? this.originals[0][field] : null;
+		const children = category?.subcategories || [];
+		const original = children.find(sub => sub.id === common);
+		input.innerHTML = '<option value="">未分類</option>' + children.filter(sub => !sub.is_archived).map(sub => `<option value="${escapeHtml(sub.id)}">${escapeHtml(sub.name)}</option>`).join('') + (original?.is_archived ? `<option value="${escapeHtml(original.id)}" disabled>${escapeHtml(original.name)}（アーカイブ済み・現在値）</option>` : '');
+		if (original) input.value = original.id;
 	}
 	async save() {
 		if (this.busy || !this.originals.length || this.coordinator.isKeyLocked) return;

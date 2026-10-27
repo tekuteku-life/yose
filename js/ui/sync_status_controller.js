@@ -3,6 +3,8 @@
  * Manages Online/Offline badges, unsynced count indicators, and manual sync triggers.
  */
 
+import { captureRenderSession } from './render_session.js';
+
 export class SyncStatusController {
 	constructor(coordinator) {
 		this.coordinator = coordinator;
@@ -52,7 +54,9 @@ export class SyncStatusController {
 		}
 	}
 
-	async updateSyncBadge() {
+	async updateSyncBadge({ isSessionValid = null } = {}) {
+		if (isSessionValid && !isSessionValid()) return;
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
 		const badge = document.getElementById('sync-badge');
 		if (!badge) return;
 		const showProgress = () => {
@@ -76,8 +80,11 @@ export class SyncStatusController {
 			return;
 		}
 		const unsynced = await this.db.getUnsyncedTransactions();
+		if (!valid()) return;
 		const masterPending = await this.db.hasUnsyncedMasterConfig();
+		if (!valid()) return;
 		const importPending = await this.db.getPendingImport();
+		if (!valid()) return;
 		if (showProgress()) return;
 		const count = unsynced?.length || 0;
 		const masterConflict = (this.syncManager.masterConflictPaths?.length || 0) > 0;

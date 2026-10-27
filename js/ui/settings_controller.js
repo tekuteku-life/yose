@@ -4,6 +4,7 @@
  */
 
 import { BackupImportController } from './backup_import_controller.js';
+import { captureRenderSession } from './render_session.js';
 
 import {
 	formatDate,
@@ -413,14 +414,20 @@ export class SettingsController {
 		});
 	}
 
-	async renderPendingImport() {
-		await this.backupImportController.renderPending();
+	async renderPendingImport({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
+		await this.backupImportController.renderPending({ isSessionValid: valid });
 	}
 
-	async renderSettings() {
+	async renderSettings({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid), options = { isSessionValid: valid };
+		if (!valid()) return;
 		const gasUrlGeneration = this.gasUrlGeneration;
-		await this.coordinator.insightsController?.renderMetadata();
-		await this.renderPendingImport();
+		await this.coordinator.insightsController?.renderMetadata(options);
+		if (!valid()) return;
+		await this.renderPendingImport(options);
+		if (!valid()) return;
 		this.authController.updateKeyDisplay();
 		const badgeVer = document.getElementById('badge-current-version');
 		if (badgeVer) badgeVer.textContent = `v${CURRENT_APP_VERSION}`;
@@ -431,6 +438,7 @@ export class SettingsController {
 		if (themeRadio) themeRadio.checked = true;
 
 		const gasUrl = await this.db.getSetting('gas_url', '');
+		if (!valid()) return;
 		const urlInput = document.getElementById('input-gas-url');
 		if (urlInput && !this.gasUrlDirty && gasUrlGeneration === this.gasUrlGeneration) urlInput.value = gasUrl;
 
@@ -456,6 +464,7 @@ export class SettingsController {
 		}
 
 		const config = await this.db.getMasterConfig();
+		if (!valid()) return;
 		const info = document.getElementById('master-summary-info');
 		if (info && config) {
 			const accCount = (config.accounts || []).length;
@@ -466,13 +475,15 @@ export class SettingsController {
 		}
 
 		const credential = await this.db.getSecurityKey('webauthn_credential');
+		if (!valid()) return;
 		const btnClearWebauthn = document.getElementById('btn-clear-webauthn');
 		if (btnClearWebauthn) btnClearWebauthn.style.display = credential ? 'inline-block' : 'none';
 		const status = document.getElementById('synced-passkey-status');
 		if (status) status.textContent = credential?.prfWrap ? 'パスキー登録済み・PIN入力なしで解除可能です' : credential ? '認証用パスキー登録済み・復号にはPINが必要です。PIN省略には対応パスキーを再登録してください。' : 'パスキー未登録・PINで利用可能です';
 
-		await this.coordinator.budgetSettingsController.render();
-		await this.coordinator.masterController.renderMasterManagement();
+		await this.coordinator.budgetSettingsController.render(options);
+		if (!valid()) return;
+		await this.coordinator.masterController.renderMasterManagement(options);
 	}
 
 }

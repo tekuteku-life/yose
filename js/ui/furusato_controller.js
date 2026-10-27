@@ -1,4 +1,5 @@
 import { escapeHtml } from '../logic.js';
+import { captureRenderSession } from './render_session.js';
 import { buildFurusatoSummary, buildFurusatoLedgerSummary } from '../logic/data_insights.js';
 import { FURUSATO_FIELDS, getFurusatoSetting, getFurusatoInputMode, getFurusatoLedgerFingerprint, calculateFurusatoFromLedger, estimateFurusatoLimit } from '../logic/furusato_calculator.js';
 const el = id => /** @type {HTMLInputElement & HTMLSelectElement} */ (document.getElementById(id));
@@ -89,12 +90,15 @@ export class FurusatoController {
 		el('furusato-housing-carry').value = housing.carry_rate;
 		el('furusato-confirm-ledger').checked = Boolean(this.confirmationToken);
 	}
-	async render(state = null) {
+	async render(state = null, { isSessionValid = null } = {}) {
+		const sessionValid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!sessionValid()) return;
 		const render = ++this.renderVersion, generation = this.generation, key = this.db.encryptionKey, year = String(this.coordinator.selectedYear);
-		const valid = () => render === this.renderVersion && generation === this.generation && key === this.db.encryptionKey && !this.coordinator.isKeyLocked && year === String(this.coordinator.selectedYear);
+		const valid = () => sessionValid() && render === this.renderVersion && generation === this.generation && key === this.db.encryptionKey && !this.coordinator.isKeyLocked && year === String(this.coordinator.selectedYear);
 		if (this.coordinator.isKeyLocked) return;
 		try {
 			state ||= await this.db.getAnalyticsState();
+			if (!valid()) return;
 			const fingerprint = await this.fingerprint(state.transactions, state.master_config, year);
 			if (!valid()) return;
 			const edit = this.editVersion;

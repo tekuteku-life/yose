@@ -41,6 +41,7 @@ window.Chart = class Chart {
 	}
 };
 window.Chart.defaults = {};
+window.Chart.Interaction = { modes: {} };
 `;
 
 export class CdpProtocolError extends Error {}

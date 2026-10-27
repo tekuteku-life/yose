@@ -16,6 +16,7 @@ import {
 
 import { TagMemoInput } from './tag_memo_input.js';
 import { linkedRepayment } from '../logic/advance_links.js';
+import { captureRenderSession } from './render_session.js';
 
 export class TransactionInputController {
 	constructor(coordinator) {
@@ -113,19 +114,20 @@ export class TransactionInputController {
 		}
 
 		// Memo autocomplete & auto-categorization (Requirement 3.19 & 3.40.1)
-		const handleMemoChange = async (e) => {
-			const val = (e?.target?.value ?? (typeof e === 'string' ? e : '')).trim();
+		const handleMemoChange = async (val, valid) => {
+			if (!valid()) return;
 			const match = this.memoHistoryMap[val];
 			if (match && match.category_id) {
 				const config = await this.db.getMasterConfig();
+				if (!valid()) return;
 				const type = document.getElementById('input-type')?.value === 'income' ? 'income' : 'expense';
 				const category = config.categories?.find(candidate => candidate.id === match.category_id && !candidate.is_archived && (candidate.type || 'expense') === type);
 				if (!category || (match.subcategory_id && !category.subcategories?.some(child => child.id === match.subcategory_id && !child.is_archived))) return;
-				if (typeof e !== 'string' && e?.target?.value.trim() !== val) return;
 				const catSelect = document.getElementById('select-category');
 				if (catSelect) {
 					catSelect.value = match.category_id;
-					await this.updateSubcategories(match.category_id, 'select-subcategory');
+					await this.updateSubcategories(match.category_id, 'select-subcategory', null, false, { isSessionValid: valid });
+					if (!valid() || catSelect.value !== match.category_id) return;
 					const subSelect = document.getElementById('select-subcategory');
 					if (subSelect) {
 						subSelect.value = match.subcategory_id || '';
@@ -136,7 +138,8 @@ export class TransactionInputController {
 					const actCatSelect = document.getElementById('select-actual-category');
 					if (actCatSelect) {
 						actCatSelect.value = match.category_id;
-						await this.updateSubcategories(match.category_id, 'select-actual-subcategory');
+						await this.updateSubcategories(match.category_id, 'select-actual-subcategory', null, false, { isSessionValid: valid });
+						if (!valid() || actCatSelect.value !== match.category_id) return;
 						const actSubSelect = document.getElementById('select-actual-subcategory');
 						if (actSubSelect) {
 							actSubSelect.value = match.subcategory_id || '';
@@ -146,8 +149,11 @@ export class TransactionInputController {
 			}
 		};
 		const safelyHandleMemoChange = async event => {
-			try { await handleMemoChange(event); }
-			catch (error) { if (!this.coordinator.isKeyLocked) alert(`分類候補を反映できませんでした: ${error.message}`); }
+			const sessionValid = captureRenderSession(this.coordinator);
+			const val = (event?.target?.value ?? (typeof event === 'string' ? event : '')).trim();
+			const valid = () => sessionValid() && document.getElementById('input-memo')?.value.trim() === val;
+			try { await handleMemoChange(val, valid); }
+			catch (error) { if (valid()) alert(`分類候補を反映できませんでした: ${error.message}`); }
 		};
 		this.handleMemoChange = safelyHandleMemoChange;
 
@@ -276,9 +282,11 @@ export class TransactionInputController {
 		if (Array.from(select.options).some(option => option.value === previous)) select.value = previous;
 	}
 
-	async populateMasterDropdowns() {
+	async populateMasterDropdowns({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid), options = { isSessionValid: valid };
+		if (!valid()) return;
 		const config = await this.db.getMasterConfig();
-		if (!config) return;
+		if (!valid() || !config) return;
 
 		// Accounts
 		const accSelect = document.getElementById('select-account');
@@ -302,17 +310,22 @@ export class TransactionInputController {
 
 		// Categories filtered by current input-type
 		const currentType = document.getElementById('input-type')?.value || 'expense';
-		await this.populateCategoryDropdowns(currentType);
+		await this.populateCategoryDropdowns(currentType, options);
+		if (!valid()) return;
 
 		// Tag & Memo suggestions & unsettled advances (Requirements 3.18, 3.19, 3.20)
-		await this.updateTagAndMemoSuggestions();
-		await this.renderUnsettledAdvanceList();
+		await this.updateTagAndMemoSuggestions(options);
+		if (!valid()) return;
+		await this.renderUnsettledAdvanceList(options);
+		if (!valid()) return;
 		this.renderTagChips();
 	}
 
-	async populateCategoryDropdowns(type = 'expense') {
+	async populateCategoryDropdowns(type = 'expense', { isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid), options = { isSessionValid: valid };
+		if (!valid()) return;
 		const config = await this.db.getMasterConfig();
-		if (!config) return;
+		if (!valid() || !config) return;
 
 		const catSelect = document.getElementById('select-category');
 		const actCatSelect = document.getElementById('select-actual-category');
@@ -332,8 +345,9 @@ export class TransactionInputController {
 		this.replaceOptionsKeepingSelection(actCatSelect, buildCategoryOptions());
 
 		if (activeCategories.length > 0) {
-			await this.updateSubcategories(catSelect?.value || activeCategories[0].id, 'select-subcategory', null, catSelect?.value === previousCategory);
-			await this.updateSubcategories(actCatSelect?.value || activeCategories[0].id, 'select-actual-subcategory', null, actCatSelect?.value === previousActual);
+			await this.updateSubcategories(catSelect?.value || activeCategories[0].id, 'select-subcategory', null, catSelect?.value === previousCategory, options);
+			if (!valid()) return;
+			await this.updateSubcategories(actCatSelect?.value || activeCategories[0].id, 'select-actual-subcategory', null, actCatSelect?.value === previousActual, options);
 		} else {
 			const subSelect = document.getElementById('select-subcategory');
 			const actSubSelect = document.getElementById('select-actual-subcategory');
@@ -342,10 +356,13 @@ export class TransactionInputController {
 		}
 	}
 
-	async updateSubcategories(categoryId, targetSelectId, preserveId = null, keepSelection = false) {
+	async updateSubcategories(categoryId, targetSelectId, preserveId = null, keepSelection = false, { isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const select = /** @type {HTMLSelectElement} */ (document.getElementById(targetSelectId));
 		if (!select) return;
 		const config = await this.db.getMasterConfig();
+		if (!valid()) return;
 		const parentIds = { 'select-subcategory': 'select-category', 'select-actual-subcategory': 'select-actual-category', 'edit-tx-subcategory': 'edit-tx-category', 'edit-tx-actual-subcategory': 'edit-tx-actual-category' };
 		const parent = document.getElementById(parentIds[targetSelectId]);
 		if (parent && parent.value !== categoryId) return;
@@ -366,21 +383,27 @@ export class TransactionInputController {
 
 	addTag(tagStr) { this.tagMemoInput.addTag(tagStr); }
 
-	async updateTagAndMemoSuggestions() {
-		this.availableTags = await this.db.getUniqueTags();
-		this.memoHistoryMap = await this.db.getMemoHistory();
+	async updateTagAndMemoSuggestions({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
+		const [tags, memos] = await Promise.all([this.db.getUniqueTags(), this.db.getMemoHistory()]);
+		if (!valid()) return;
+		this.availableTags = tags; this.memoHistoryMap = memos;
 	}
 
 	renderMemoSuggestions(query = '') { this.tagMemoInput.renderMemoSuggestions(query); }
 
 	renderTagSuggestions(query = '') { this.tagMemoInput.renderTagSuggestions(query); }
 
-	async renderUnsettledAdvanceList() {
+	async renderUnsettledAdvanceList({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const list = document.getElementById('unsettled-advance-list');
 		const countBadge = document.getElementById('unsettled-advance-count');
 		if (!list) return;
 
 		const unsettled = await this.db.getUnsettledAdvancePayments();
+		if (!valid()) return;
 		if (countBadge) countBadge.textContent = `${unsettled.length}件`;
 
 		if (unsettled.length === 0) {

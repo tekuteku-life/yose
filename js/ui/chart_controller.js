@@ -1,6 +1,7 @@
 import { formatDoughnutTooltipLabel, escapeHtml } from '../logic.js';
 import { markerRadii } from '../logic/chart_geometry.js';
 import { ChartViewport } from './chart_viewport.js';
+import { registerFocusedInteraction, focusedBoundary } from './chart_interaction.js';
 
 export class ChartController {
 	constructor(coordinator) {
@@ -61,8 +62,10 @@ export class ChartController {
 			canvas.style.display = 'block'; fallback.style.display = 'none'; if (container) container.style.display = 'block';
 			this[slot] = new window.Chart(canvas, {
 				type, data: { labels: source.labels.slice(), datasets },
-				options: { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false }, ...options, scales: structuredClone(options.scales || { y: {} }),
-					plugins: { legend: { position: 'bottom', onClick: (_event, item) => toggle(item.datasetIndex) } } }
+				plugins: [focusedBoundary],
+				options: { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: registerFocusedInteraction(window.Chart), intersect: true }, ...options, scales: structuredClone(options.scales || { y: {} }),
+					plugins: { legend: { position: 'bottom', onClick: (_event, item) => toggle(item.datasetIndex) },
+						tooltip: { callbacks: { label: context => `${context.dataset.label}: ¥${context.parsed.y.toLocaleString('ja-JP')}` } } } }
 			});
 			this.viewports.set(slot, new ChartViewport(this[slot], canvas, reset, () => !this.coordinator.isKeyLocked));
 		} else {

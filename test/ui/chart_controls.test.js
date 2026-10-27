@@ -5,6 +5,14 @@ const f = useBrowser({ realCharts: true });
 const range = d => d.evaluate(`(()=>{const c=window.__yose_app.chartController.categoryTrendChart;return {min:c.scales.y.min,max:c.scales.y.max,labels:c.data.labels.length,points:c.data.datasets[0].data.length};})()`);
 async function plotPoint(d) { return d.evaluate(`(()=>{const c=window.__yose_app.chartController.categoryTrendChart;c.canvas.scrollIntoView({block:'center',behavior:'instant'});const r=c.canvas.getBoundingClientRect(),a=c.chartArea;return {x:r.left+(a.left+a.right)/2,y:r.top+a.bottom-10};})()`); }
 async function incomeSeed(d) { await seed(d,[transaction('normal',{amount:100}),transaction('spike',{date:'2026-10-21',amount:100000}),transaction('salary',{type:'income',category_id:'cat_income_main',actual_category_id:'cat_income_main',amount:1000}),transaction('planned-income',{type:'income',category_id:'cat_income_main',actual_category_id:'cat_income_main',amount:500,status:'planned'})]);await cashflow(d); }
+async function observeBudgetSettings(d) {
+	await d.evaluate(`{const c=window.__yose_app.settingsController,render=c.renderSettings;window.__budgetSettingsPending=null;window.__restoreBudgetSettings=()=>{c.renderSettings=render;};c.renderSettings=(...args)=>{const pending=render.apply(c,args);window.__budgetSettingsPending=pending;return pending;};}`);
+}
+async function completeBudgetSettings(d) {
+	await d.waitFor('Boolean(window.__budgetSettingsPending)');
+	await d.evaluate('(async()=>{try{await window.__budgetSettingsPending;}finally{window.__restoreBudgetSettings();}})()');
+	await d.waitFor('window.__yose_app.budgetSettingsController.year==="2026" && Boolean(window.__yose_app.budgetSettingsController.draft) && !window.__yose_app.budgetSettingsController.loading && !document.querySelector("#setting-goal-basis").disabled');
+}
 describe('real Chart.js trend controls', () => {
 	it('changes only the money axis on native Ctrl+wheel, resets it, and leaves regular wheel alone', async () => {
 		const d=f.driver;await incomeSeed(d);await d.click('#control-granularity [data-granularity="daily"]');
@@ -70,14 +78,28 @@ describe('real Chart.js trend controls', () => {
 		assert.equal(await d.evaluate('window.__yose_app.chartController.categoryTrendChart.isDatasetVisible(0)'),true);
 	});
 	it('keeps an unsaved budget draft through refresh and rejects stale or locked saves', async () => {
-		const d=f.driver;await incomeSeed(d);await settings(d);
+		const d=f.driver;await incomeSeed(d);await observeBudgetSettings(d);await settings(d);await completeBudgetSettings(d);
 		await d.select('#setting-goal-basis','rate');await d.fill('#setting-savings-target-rate','25');
+		await d.waitFor('window.__yose_app.budgetSettingsController.draft.values.savings_target_rate===25 && window.__yose_app.budgetSettingsController.draft.dirty');
 		await d.evaluate('window.__yose_app.refreshAllViews()');
 		assert.equal(await value(d,'#setting-savings-target-rate'),'25');
 		await d.evaluate(`window.__yose_app.db.mutateMasterConfig(c=>{c.annual_budgets[2026]={goal_basis:'rate',savings_target_rate:40};})`);
 		await d.click('#btn-save-annual-budget');
 		await d.waitFor('window.__dialogs.some(x=>x.message.includes("失敗"))');
 		assert.equal(await d.evaluate('(async()=>(await window.__yose_app.db.getAnnualBudget("2026")).savings_target_rate)()'),40);
+	});
+	it('waits for the actual settings transition even when delayed metadata leaves the old budget inputs enabled', async () => {
+		const d=f.driver;await incomeSeed(d);await settings(d);await d.evaluate('window.__yose_app.settingsController.renderSettings()');await cashflow(d);
+		await d.evaluate(`{const c=window.__yose_app.insightsController,render=c.renderMetadata.bind(c);let once=true;c.renderMetadata=async()=>{if(once){once=false;await new Promise(r=>window.__releaseBudgetMetadata=r);}return render();};}`);
+		await observeBudgetSettings(d);await settings(d);await d.waitFor('typeof window.__releaseBudgetMetadata==="function"');
+		assert.equal(await d.evaluate('Boolean(window.__yose_app.budgetSettingsController.draft) && !window.__yose_app.budgetSettingsController.loading && !document.querySelector("#setting-goal-basis").disabled'),true);
+		await d.evaluate('window.__settingsTransitionDone=false;window.__budgetSettingsPending.then(()=>{window.__settingsTransitionDone=true;});void 0;');
+		assert.equal(await d.evaluate('window.__settingsTransitionDone'),false);
+		await d.evaluate('window.__releaseBudgetMetadata()');await completeBudgetSettings(d);
+		assert.equal(await d.evaluate('window.__settingsTransitionDone'),true);
+		await d.select('#setting-goal-basis','rate');await d.fill('#setting-savings-target-rate','25');
+		await d.waitFor('window.__yose_app.budgetSettingsController.draft.values.savings_target_rate===25 && window.__yose_app.budgetSettingsController.draft.dirty');
+		await d.evaluate('window.__yose_app.refreshAllViews()');assert.equal(await value(d,'#setting-savings-target-rate'),'25');
 	});
 
 	it('keeps legend and checkbox selection together, resets zoom on period changes and renders safe fallback tables', async () => {

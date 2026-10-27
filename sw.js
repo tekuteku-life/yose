@@ -2,7 +2,7 @@
  * Yoseatsume Kakeibo - Service Worker (Offline Cache Control & Forced Update)
  */
 
-const CACHE_NAME = 'yose-cache-v1.18.1';
+const CACHE_NAME = 'yose-cache-v1.20.1';
 const ASSETS_TO_CACHE = [
 	'./',
 	'./index.html',
@@ -31,6 +31,8 @@ const ASSETS_TO_CACHE = [
 	'./js/logic/category_trend.js',
 	'./js/logic/chart_geometry.js',
 	'./js/ui/chart_viewport.js',
+	'./js/ui/chart_interaction.js',
+	'./js/ui/render_session.js',
 	'./js/ui/budget_settings_controller.js',
 	'./js/crypto.js',
 	'./js/webauthn.js',
