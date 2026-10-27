@@ -517,7 +517,7 @@ ES ModulesではglobalThisが存在するため、暗号APIの既定値にある
 
 getAnalyticsStateはmaster/transactions/snapshot rawを二重取得し一致を確認してから同じraw集合を復号する。不一致は再取得し、鍵変更は拒否する。メタ情報と資産表示はこの一貫読取を共用する。資産KPIと資産履歴は同じ取得状態を渡す。
 
-bulk_edit純関数は選択明細と全関連明細から共通能力を導出し、許可項目以外を拒否する。単なるgroup_idだけで関連とみなさず、同グループ複数件/補助情報/連携役割から判定する。DBのbulkEditTransactionsは開いた原本・認証鍵・最新設定/全明細をmutateBusiness内で比較/検証し原子的保存する。updated_at=max(現在時刻,原本updated_at+1ms)、sync_status=unsyncedを全対象へ適用する。既存previous_target_monthを保持し、未設定の移動時だけ原本target_monthを記録する。承認は既存と今回のreclose_approved_monthsの和集合とし、保存時点の締め境界に必要な全月の承認を再検証する。金額変更時tax_metaをクリアし、金額未入力を明示解除する。保存後描画失敗は保存失敗と分離する。モーダルを開く読取後に選択ID集合を再確認する。
+bulk_edit純関数は選択明細と全関連明細から共通能力を導出し、許可項目以外を拒否する。group_idの共有だけでは関連とみなさず、補助情報/明示参照/金融役割と、同グループ内の実際の金融役割から判定する。DBのbulkEditTransactionsは開いた原本・認証鍵・最新設定/全明細をmutateBusiness内で比較/検証し原子的保存する。updated_at=max(現在時刻,原本updated_at+1ms)、sync_status=unsyncedを全対象へ適用する。既存previous_target_monthを保持し、未設定の移動時だけ原本target_monthを記録する。承認は既存と今回のreclose_approved_monthsの和集合とし、保存時点の締め境界に必要な全月の承認を再検証する。金額変更時tax_metaをクリアし、金額未入力を明示解除する。保存後描画失敗は保存失敗と分離する。モーダルを開く読取後に選択ID集合を再確認する。
 
 ふるさと納税は取引日で寄附年/前年確定収入を判定する。年度予算内furusato_estimate={resident_tax,income_tax_rate}に通知書入力値を保持する。furusato_sources={salary:[],income_tax:[],resident_tax:[],social_insurance:[]}は各要素{category_id,subcategory_id:nullまたはID}の計上分類参照である。salaryはincome、残りはexpense分類だけである。親指定は全子を含み、同項目内はORで一度だけ数える。異なる項目に同じ親/子が重なる指定は拒否する。共有validatorは形・必須参照・種別・重複を検証する。年度ごとに前年/当年の確定・金額既知・非削除・指定収支種別・取引年一致を集計する。実態分類は使わない。集計元だけの保存は通知書入力を変更しない。予定/金額未入力だけの年も枠を表示し、未入力は額を合計せず別件数とする。税率0%と所得割0円を区別し、所得割0円だけ上限0円とする。前年収入は取得済み確定額であり、snapshotと混ぜて二重計上せず、未取得を年収0円と断定しない。
 
@@ -564,3 +564,24 @@ TransactionListControllerは初期化時に上下前後ボタンと番号セレ�
 ## I-4.9 GAS認証の是正
 
 [認証是正設計](gas_auth_hardening.md)を検証順序、鍵/点の検証、ロック・永続台帳と障害時中断の正本とする。OAuthスコープ、署名対象形式、業務保存スキーマは維持する。公開鍵登録クライアントAPIと公開登録用UIを削除する。
+
+
+<a id="i-3-63"></a>
+## I-3.63 個別系列のヒット判定と年次締めの制御
+
+詳細と工程再入時の契約は[資産表示・個別参照・年間月締め設計](asset_trends_annual_closing.md)を正本とする。
+
+asset専用CSSでフォーム、定義リスト、注記、系列選択、表の階層を表現する。投資のDOM ID・入力イベント・保存処理は保持する。
+
+ChartController.drawTimeはChart.jsの独自interaction modeを登録し、hoverとtooltipへ共通適用する。棒はnearest/intersectで1件を返す。折れ線は可視系列の非skip点と、LineElement.pathから作ったPath2DへのisPointInStrokeで判定する。Canvasのtransformを一時解除し、Chartの論理座標で曲線・階段・欠測を実描画と揃える。線の近傍幅は6px＋線幅の半分である。線の距離を比較し、通常線は最寄り点、取得原価の階段線は現在x以下の直近点を1件返す。領域外/2本指時はイベント後処理でも両activeを明示解除する。既存のズーム・点密度・系列選択は維持し、2本指操作はtooltip対象外とする。新モジュールをService Workerの事前キャッシュへ追加する。
+
+SummaryController.handleCloseMonthは開始時の粒度・年/月・鍵・認証世代を保持する。年別なら1〜12月の明細を取得し、全対象月のamount_pending検査とplanned集合の取得後に一度確認する。承認集合を月ごとに既存SyncManager.closeMonthへ渡して逐次実行し、既存の予定内容版検査、送信順序、応答の原子的保存を利用する。単一の年次サーバートランザクションにはしない。成功応答ごとに完了月を蓄積し、失敗では完了月/停止月を通知する。closingMonthsとボタン無効化で重複起動を防ぎ、各月の開始前に鍵・認証世代を検査する。認証失効後は後続処理と旧セッションの画面再取得を行わない。年次操作の表示更新は共通renderClosingActionで行い、実行中の進捗を再描画で上書きしない。
+
+未送信の取消/検査失敗では再取得しない。送信試行後のみrefreshAllViews({generateSettlements:false})で金融生成を伴わず描画し、表示例外を締め結果と分離して捕捉する。省略時の既存自動引落生成は維持する。最終描画が終わるまでbusyと無効状態を保持する。
+
+<a id="i-3-64"></a>
+## I-3.64 一括編集能力の共通判定
+
+[一括編集可否設計](bulk_edit_eligibility.md)を正本とする。純関数で項目ごとの能力と理由を導出し、group_idだけの一致と金融役割のある同グループを区別する。UI/buildBulkEdit/DB再検証を共通化し、CAS・暗号原子性・締め月検査を保持する。従来I-3.56の同グループ複数件は金融役割のあるグループへ具体化する。
+
+閉じる経路をBulkEditController.requestCloseへ集約し、キャンセルの無効状態をsetBusyと同期する。履歴/キー操作は既存のAppCoordinatorの共通guardへ統合し、独自の履歴リスナーを増やさない。一括編集専用flex構成で入力領域だけを縮小・スクロール可能とする。

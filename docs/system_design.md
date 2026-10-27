@@ -11,6 +11,8 @@
 | [設計テスト監査](design_test_audit.md) | 外部/内部設計と既存assertの対応、不足、仕様乖離、実行結果である。 |
 | [UIテスト監査](ui_test_audit.md) | UI回帰の追加経緯と領域別確認である。 |
 | [グラフ・年間目標設計](chart_budget_improvements.md) | 推移操作、収入内訳、目標連動の正本である。 |
+| [過去明細の一括編集可否](bulk_edit_eligibility.md) | R/E/I-3.64の共通能力・金融構造保護・制限理由・キャンセルと戻る操作である。 |
+| [資産表示・個別参照・年間月締め](asset_trends_annual_closing.md) | R/E/I-3.63の表示階層・ヒット判定・年次締め・工程再入の詳細である。 |
 | [GAS認証是正](gas_auth_hardening.md) | 管理登録・時刻/点検証・永続再送拒否の正本である。 |
 | [開発プロセス](development_process.md) | 変更手順と独立レビュー、受入基準である。 |
 
@@ -95,6 +97,8 @@ I欄は主な実現方式の入口であり、一つの内部節だけで当該�
 | <a id="349-パスキー解除と既存立替回収"></a>3.49 | パスキー単独解除・日本語種別・既存回収の関連付け | [R-3.49](requirements.md#r-3-49) | [E-3.49](external_design.md#e-3-49) | [I-3.49](internal_design.md#i-3-49) |
 | 3.55〜58 | データメタ情報・明細一括編集・ふるさと納税枠・投資推移 | [R-3.55](requirements.md#r-3-55)〜[R-3.58](requirements.md#r-3-58) | [E-3.55〜58](external_design.md#e-3-55) | [I-3.55〜58](internal_design.md#i-3-55) |
 | 3.61 | データ情報・税控除の表示階層と明細ページ操作 | [R-3.61](requirements.md#r-3-61) | [E-3.61](external_design.md#e-3-61) | [I-3.61](internal_design.md#i-3-61) |
+| 3.63 | 資産表示・個別系列参照・年間月締め | [R-3.63](requirements.md#r-3-63) | [E-3.63](external_design.md#e-3-63) | [I-3.63](internal_design.md#i-3-63) |
+| 3.64 | 過去明細の一括編集可否 | [R-3.64](requirements.md#r-3-64) | [E-3.64](external_design.md#e-3-64) | [I-3.64](internal_design.md#i-3-64) |
 
 ## 改訂と監査
 
