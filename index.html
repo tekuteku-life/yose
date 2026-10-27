@@ -321,21 +321,33 @@
 
 			<div class="card" id="asset-history-card" style="display: none;">
 				<h2 class="card-title">資産推移</h2>
-				<label class="form-label" for="select-asset-period">資産推移の表示期間</label>
-				<select id="select-asset-period" class="form-control">
-					<option value="month">月間</option>
-					<option value="year">年間</option>
-					<option value="range">期間指定</option>
-					<option value="all">すべての期間</option>
-				</select>
-				<div id="asset-custom-period" style="display:none;gap:8px;flex-wrap:wrap;margin-top:12px;">
-					<label>開始日 <input type="date" id="asset-period-start" class="form-control"></label>
-					<label>終了日 <input type="date" id="asset-period-end" class="form-control"></label>
-					<button type="button" id="btn-apply-asset-period" class="btn btn-secondary">期間を適用</button>
+				<div class="asset-form-grid asset-filter-panel">
+					<div class="asset-field">
+						<label for="select-asset-period">表示期間</label>
+						<select id="select-asset-period" class="form-control">
+							<option value="month">月間</option>
+							<option value="year">年間</option>
+							<option value="range">期間指定</option>
+							<option value="all">すべての期間</option>
+						</select>
+					</div>
+					<div class="asset-field">
+						<label for="asset-investment-account">投資推移の対象口座</label>
+						<select id="asset-investment-account" class="form-control"><option value="all">全投資口座</option></select>
+					</div>
+					<div id="asset-custom-period" class="asset-date-range" style="display:none;">
+						<div class="asset-field"><label for="asset-period-start">開始日</label><input type="date" id="asset-period-start" class="form-control"></div>
+						<div class="asset-field"><label for="asset-period-end">終了日</label><input type="date" id="asset-period-end" class="form-control"></div>
+						<button type="button" id="btn-apply-asset-period" class="btn btn-secondary">期間を適用</button>
+					</div>
 				</div>
-				<label>投資推移の対象口座<select id="asset-investment-account" class="form-control"><option value="all">全投資口座</option></select></label>
-				<p>投資額は保有商品の取得原価です。直近の記録値を次の記録まで据え置きます。口座評価額は預り金を含む口座全体の日末記録と、その後の確定入出金による参考値です。市場価格は自動反映しません。取得原価との差額は含み損益を表しません。</p>
-				<p id="asset-history-notice" aria-live="polite"></p>
+				<dl class="asset-metric-guide">
+					<div><dt>取得原価</dt><dd>保有商品の取得原価合計。直近の記録値を次の記録まで据え置きます。</dd></div>
+					<div><dt>口座評価額</dt><dd>預り金を含む口座全体の日末記録と、その後の確定入出金による参考値です。</dd></div>
+				</dl>
+				<p class="asset-help">市場価格は自動反映しません。取得原価と口座評価額の差額は含み損益を表しません。</p>
+				<p id="asset-history-notice" class="asset-help" aria-live="polite"></p>
+				<h3 class="asset-section-title">グラフの表示項目</h3>
 				<div id="asset-history-series" class="chart-series-controls" aria-label="描画項目"></div>
 				<div class="chart-zoom-controls"><button type="button" id="asset-history-reset" class="btn btn-secondary btn-sm">金額軸を戻す</button><small>Ctrl＋スクロール・2本指のピンチで金額軸を拡大縮小できます。</small></div>
 				<div style="height:280px;position:relative;"><canvas id="asset-history-chart"></canvas></div>
@@ -344,16 +356,24 @@
 
 			<div class="card" id="investment-record-card" style="display:none;">
 				<h3 class="card-title">投資口座の評価記録</h3>
-				<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;">
-					<label>投資口座<select id="investment-account" class="form-control"></select></label>
-					<label>評価日（日末）<input type="date" id="investment-date" class="form-control"></label>
-					<label>取得原価（保有商品合計・円）<input type="number" min="0" step="1" id="investment-acquisition-cost" class="form-control"></label>
-					<label>口座評価額（預り金込・円）<input type="number" min="0" step="1" id="investment-valuation" class="form-control"></label>
-					<button type="button" class="btn btn-primary" id="btn-save-investment">評価記録を保存</button>
+				<h4 class="asset-section-title">口座と評価日</h4>
+				<div class="asset-form-grid">
+					<div class="asset-field"><label for="investment-account">投資口座</label><select id="investment-account" class="form-control"></select></div>
+					<div class="asset-field"><label for="investment-date">評価日（日末）</label><input type="date" id="investment-date" class="form-control"></div>
 				</div>
-				<p>同日の記録がある場合は訂正します。証券会社の保有商品一覧等を確認し、買付・売却後は残存する商品の取得原価合計を記録してください。月末予測は現在評価額に予定入出金等の差を加えた参考値です。</p>
+				<h4 class="asset-section-title">記録する金額</h4>
+				<div class="asset-form-grid">
+					<div class="asset-field"><label for="investment-acquisition-cost">取得原価（円）</label><input type="number" min="0" step="1" id="investment-acquisition-cost" class="form-control" aria-describedby="investment-cost-help"><small id="investment-cost-help">保有商品のみの取得原価合計。売買後は残存商品の合計を確認してください。</small></div>
+					<div class="asset-field"><label for="investment-valuation">口座評価額（円）</label><input type="number" min="0" step="1" id="investment-valuation" class="form-control" aria-describedby="investment-valuation-help"><small id="investment-valuation-help">預り金を含む口座全体の評価額。証券会社の画面等で確認してください。</small></div>
+				</div>
+				<div class="investment-save-actions">
+					<button type="button" class="btn btn-primary" id="btn-save-investment">評価記録を保存</button>
+					<p class="asset-help">同じ口座・評価日の記録がある場合は訂正します。</p>
+				</div>
+				<p class="asset-help">月末予測は現在評価額に予定入出金等の差を加えた参考値です。</p>
 				<p id="investment-error" role="alert"></p>
-				<div id="investment-observations"></div>
+				<h4 class="asset-section-title">保存済みの記録</h4>
+				<div id="investment-observations" class="investment-records-scroll" role="region" aria-label="保存済みの投資評価記録" tabindex="0"></div>
 			</div>
 
 			<!-- Realtime Cashflow Stats (Visible when target === 'cashflow') -->
@@ -502,8 +522,9 @@
 			<!-- Monthly Operations & Month Closing -->
 			<div class="card" id="card-monthly-operations">
 				<div class="card-title">
-					<span>月次アクション</span>
+					<span id="monthly-operations-title">月次アクション</span>
 				</div>
+				<p id="closing-scope-notice" class="asset-help"></p>
 				<div style="display: flex; gap: 12px; flex-wrap: wrap;">
 					<button id="btn-generate-recurring" class="btn btn-secondary">
 						📅 当月の定期予定を一括生成
@@ -892,7 +913,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.18.1</span>
+					<span class="badge badge-info" id="badge-current-version">v1.20.1</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。
@@ -1038,12 +1059,17 @@
 	</div>
 
 	<div id="modal-bulk-edit" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bulk-edit-title">
-		<div class="modal">
+		<div class="modal bulk-edit-modal">
 			<div class="modal-header"><h3 id="bulk-edit-title" class="modal-title">明細の一括編集</h3><button type="button" class="close-btn" id="btn-close-bulk" aria-label="閉じる">&times;</button></div>
-			<p id="bulk-edit-scope"></p>
-			<div id="bulk-edit-fields"></div>
-			<p id="bulk-edit-error" role="alert"></p>
-			<button type="button" id="btn-save-bulk" class="btn btn-primary">選択明細へ保存</button>
+			<div id="bulk-edit-body" class="bulk-edit-body">
+				<p id="bulk-edit-scope"></p>
+				<div id="bulk-edit-fields"></div>
+				<p id="bulk-edit-error" role="alert"></p>
+			</div>
+			<div class="bulk-edit-actions">
+				<button type="button" id="btn-cancel-bulk" class="btn btn-secondary">キャンセル</button>
+				<button type="button" id="btn-save-bulk" class="btn btn-primary">選択明細へ保存</button>
+			</div>
 		</div>
 	</div>
 

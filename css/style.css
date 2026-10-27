@@ -445,6 +445,36 @@ header {
 	color: var(--text-muted);
 }
 
+.bulk-edit-modal {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.bulk-edit-modal > .modal-header,
+.bulk-edit-actions {
+	flex-shrink: 0;
+}
+
+.bulk-edit-body {
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior-y: contain;
+}
+
+.bulk-edit-actions {
+	display: flex;
+	gap: 12px;
+	margin-top: 16px;
+	padding-top: 12px;
+	border-top: 1px solid var(--border);
+}
+
+.bulk-edit-actions > .btn {
+	flex: 1;
+	min-width: 0;
+}
+
 /* Chart Canvas Container */
 .chart-container {
 	position: relative;
@@ -1225,6 +1255,84 @@ header {
 }
 .chart-zoom-controls small {
 	color: var(--text-muted);
+}
+
+/* Separate asset inputs, definitions and supporting notes at every screen width. */
+.asset-form-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+}
+.asset-filter-panel {
+	padding: 16px;
+	background: var(--bg-hover);
+	border-radius: 8px;
+	margin-bottom: 20px;
+}
+.asset-field { min-width: 0; }
+.asset-field > label {
+	display: block;
+	font-size: 0.9rem;
+	font-weight: 700;
+	margin-bottom: 6px;
+}
+.asset-field .form-control { min-width: 0; max-width: 100%; }
+.asset-field > small, .asset-help {
+	font-size: 0.8rem;
+	color: var(--text-muted);
+	line-height: 1.7;
+}
+.asset-field > small { display: block; margin-top: 6px; }
+.asset-date-range {
+	grid-column: 1 / -1;
+	gap: 12px;
+	flex-wrap: wrap;
+	align-items: end;
+}
+.asset-date-range > .asset-field { flex: 1 1 160px; }
+.asset-metric-guide {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+	margin: 0 0 12px;
+}
+.asset-metric-guide > div { border-left: 3px solid var(--primary); padding-left: 12px; }
+.asset-metric-guide dt { font-size: 0.9rem; font-weight: 700; margin-bottom: 4px; }
+.asset-metric-guide dd { margin: 0; font-size: 0.85rem; line-height: 1.7; }
+.asset-section-title {
+	font-size: 0.95rem;
+	font-weight: 700;
+	margin: 24px 0 12px;
+	padding-top: 16px;
+	border-top: 1px solid var(--border);
+}
+#asset-history-series label {
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-hover);
+}
+.investment-save-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 16px;
+	margin-top: 20px;
+}
+.investment-save-actions p { margin: 0; }
+.investment-records-scroll { overflow-x: auto; }
+.investment-records-scroll th, .investment-records-scroll td { white-space: nowrap; }
+#investment-error { color: var(--danger); }
+.bulk-field-reason {
+	margin-top: 6px;
+	font-size: 0.8rem;
+	line-height: 1.6;
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+}
+@media (max-width: 540px) {
+	.asset-form-grid, .asset-metric-guide { grid-template-columns: minmax(0, 1fr); }
+	.asset-filter-panel { padding: 12px; }
 }
 input[readonly] {
 	background: var(--bg-hover);

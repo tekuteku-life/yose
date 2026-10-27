@@ -21,6 +21,7 @@ import {
 import { buildAssetHistory, formatDate } from '../logic.js';
 import { applyInvestmentValuations } from '../logic/investment.js';
 import { buildCategoryTrend } from '../logic/category_trend.js';
+import { captureRenderSession } from './render_session.js';
 
 export class SummaryController {
 	constructor(coordinator) {
@@ -31,6 +32,7 @@ export class SummaryController {
 		this.lastTransactions = null;
 		this.assetPeriod = 'month';
 		this.renderVersion = 0;
+		this.closingMonths = false; this.closingAuthGeneration = null;
 	}
 
 	get db() {
@@ -226,23 +228,81 @@ export class SummaryController {
 
 	async handleCloseMonth() {
 		const btn = document.getElementById('btn-close-month');
-		if (btn?.disabled) return;
+		if (this.closingMonths || btn?.disabled || this.coordinator.isKeyLocked) return;
+		this.closingMonths = true;
 		if (btn) btn.disabled = true;
+		const annual = this.coordinator.analyticsGranularity === 'yearly';
+		const year = this.coordinator.selectedYear;
+		const months = annual ? Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`) : [this.coordinator.currentMonth];
+		const completed = [];
+		let submitted = false;
+		let current = months[0];
+		const authGeneration = this.coordinator.authController.authGeneration;
+		this.closingAuthGeneration = authGeneration;
+		const valid = captureRenderSession(this.coordinator);
+		const assertSession = () => {
+			if (!valid()) throw new Error('認証状態が変更されました。ロックを解除して再実行してください。');
+		};
 		try {
-			const records = await this.db.getTransactions({ target_month: this.coordinator.currentMonth });
-			if (records.some(tx => tx.amount_pending)) { alert('金額未入力の予定があります。金額を入力してから月締めしてください。'); return; }
-			const planned = records.filter(tx => tx.status === 'planned');
-			if (planned.length && !confirm(`${this.coordinator.currentMonth} には未確定の予定が ${planned.length} 件あります。内容を確認して確定・月締めしますか？`)) return;
-			await this.syncManager.closeMonth(this.coordinator.currentMonth, { approvedPlanned: planned });
-			alert(`${this.coordinator.currentMonth} の月締めが正常に完了しました！アーカイブが保存されました。`);
-		} catch (error) { alert(`月締めに失敗しました: ${error.message}`); }
-		finally { if (btn) btn.disabled = false; await this.coordinator.refreshAllViews(); }
+			const plans = [];
+			for (const month of months) {
+				current = month;
+				const records = await this.db.getTransactions({ target_month: month });
+				assertSession();
+				if (records.some(tx => tx.amount_pending)) { alert(`${month}: 金額未入力の予定があります。金額を入力してから月締めしてください。`); return; }
+				plans.push(records.filter(tx => tx.status === 'planned'));
+			}
+			if (annual) {
+				const count = plans.reduce((sum, planned) => sum + planned.length, 0);
+				const future = months.at(-1) > formatDate(new Date()).slice(0, 7) ? '\n未来の月も対象です。締めた月には定期予定を生成できなくなります。' : '';
+				if (!confirm(`${year}年の12か月（${months[0]}〜${months.at(-1)}）を1月から順に月締めします。\n手元の未確定の予定 ${count} 件を確定します。締め済みの月は再締めします。${future}\n途中で失敗した場合、完了済みの月締めは保持されます。実行しますか？`)) return;
+			} else if (plans[0].length && !confirm(`${months[0]} には未確定の予定が ${plans[0].length} 件あります。内容を確認して確定・月締めしますか？`)) return;
+			for (const [index, month] of months.entries()) {
+				current = month; assertSession();
+				if (btn && annual) btn.textContent = `🔒 ${month} を月締め中（${index + 1}/12）`;
+				submitted = true;
+				await this.syncManager.closeMonth(month, { approvedPlanned: plans[index] });
+				if (!valid()) return;
+				completed.push(month);
+			}
+			alert(annual ? `${year}年の12か月の月締めが完了しました。アーカイブが保存されました。` : `${months[0]} の月締めが正常に完了しました！アーカイブが保存されました。`);
+		} catch (error) {
+			if (valid()) alert(annual ? `年の一括月締めに失敗しました。\n完了済み: ${completed.join('、') || 'なし'}\n停止した月: ${current}\n${error.message}\n停止した月のサーバー反映状況を同期で確認してから再実行してください。` : `月締めに失敗しました: ${error.message}`);
+		} finally {
+			if (submitted && valid()) {
+				try { await this.coordinator.refreshAllViews({ generateSettlements: false, isSessionValid: valid }); }
+				catch (error) { if (valid()) alert(`月締めの処理結果は変更されませんが、表示更新に失敗しました。再表示してください: ${error.message}`); }
+			}
+			if (valid() && this.closingAuthGeneration === authGeneration) {
+				this.closingMonths = false; this.closingAuthGeneration = null;
+				if (btn) btn.disabled = false;
+				this.renderClosingAction();
+			}
+		}
 	}
 
-	async renderSummary() {
+	cancelClosing() {
+		this.closingMonths = false; this.closingAuthGeneration = null;
+		const btn = document.getElementById('btn-close-month');
+		if (btn) btn.disabled = false;
+		this.renderClosingAction();
+	}
+
+	renderClosingAction() {
+		if (this.closingMonths) return;
+		const annual = this.coordinator.analyticsGranularity === 'yearly';
+		document.getElementById('monthly-operations-title').textContent = annual ? '年次アクション' : '月次アクション';
+		document.getElementById('btn-close-month').textContent = annual ? `🔒 ${this.coordinator.selectedYear}年を一括月締めする (GASへ送信)` : '🔒 この月を月締めする (GASへ送信)';
+		document.getElementById('closing-scope-notice').textContent = annual ? `${this.coordinator.selectedYear}年の1〜12月が対象です。定期予定の生成は選択月のみが対象です。` : `${this.coordinator.currentMonth} が月締め・定期予定生成の対象です。`;
+	}
+
+	async renderSummary({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const renderId = ++this.renderVersion, key = this.db.encryptionKey;
 		const target = this.coordinator.analyticsTarget || 'cashflow';
 		const granularity = this.coordinator.analyticsGranularity || 'monthly';
+		this.renderClosingAction();
 
 		const periodDisplay = document.getElementById('period-display');
 		if (periodDisplay) {
@@ -263,7 +323,7 @@ export class SummaryController {
 		const snapshot = assetState.summary_snapshot;
 		const config = assetState.master_config;
 		const transactions = assetState.transactions.filter(tx => !tx.is_deleted);
-		if (renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+		if (!valid() || renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 
 		const summary = calculateBalancesAndSummaries(snapshot, target === 'assets' ? transactions.filter(tx => tx.status !== 'confirmed' || tx.date <= formatDate(new Date())) : transactions, this.coordinator.currentMonth);
 		if (target === 'assets') {
@@ -307,9 +367,9 @@ export class SummaryController {
 		if (historyCard) historyCard.style.display = target === 'assets' ? 'block' : 'none';
 		document.getElementById('investment-record-card').style.display = target === 'assets' ? 'block' : 'none';
 		document.getElementById('furusato-card').style.display = 'none';
-		if (target === 'budget') await this.coordinator.furusatoController.render(assetState);
-		if (target === 'assets') { this.coordinator.insightsController.renderInvestment(config); await this.renderAssetHistory(assetState); }
-		if (renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+		if (target === 'budget') await this.coordinator.furusatoController.render(assetState, { isSessionValid: valid });
+		if (target === 'assets') { this.coordinator.insightsController.renderInvestment(config); await this.renderAssetHistory(assetState, { isSessionValid: valid }); }
+		if (!valid() || renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 		const cardPeriodControls = document.getElementById('card-period-controls');
 		const granularityRow = document.getElementById('granularity-control-row');
 		const catCard = document.getElementById('card-category-breakdown');
@@ -385,19 +445,21 @@ export class SummaryController {
 		}
 
 		// Render Account Balances / Expenses / Budget Breakdown
-		await this.renderAccountBalances(summary, transactions, config);
-		if (renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+		await this.renderAccountBalances(summary, transactions, config, { isSessionValid: valid });
+		if (!valid() || renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 
 		// Render Tag Analytics & Breakdown (when in cashflow)
 		if (target === 'cashflow') {
 			this.lastTransactions = transactions;
 			this.renderTagAnalytics(transactions);
 			this.renderCrossMatrix(transactions, config);
-			await this.coordinator.txListController.renderMonthTransactions();
+			await this.coordinator.txListController.renderMonthTransactions({ isSessionValid: valid });
 		}
 	}
 
-	async renderAssetHistory(assetState = null) {
+	async renderAssetHistory(assetState = null, { isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const generation = this.assetHistoryGeneration = (this.assetHistoryGeneration || 0) + 1, key = this.db.encryptionKey;
 		try {
 			const today = formatDate(new Date());
@@ -406,7 +468,7 @@ export class SummaryController {
 			if (!end.value) end.value = today;
 			const state = assetState || await this.db.getAnalyticsState();
 			const { summary_snapshot: snapshot, transactions, master_config: config, historyOptions } = state;
-			if (generation !== this.assetHistoryGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+			if (!valid() || generation !== this.assetHistoryGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 			const history = buildAssetHistory(snapshot, transactions, config.accounts, {
 				mode: this.assetPeriod, month: this.coordinator.currentMonth, year: this.coordinator.selectedYear, start: start.value, end: end.value, today,
 				...historyOptions, investmentAccountId: document.getElementById('asset-investment-account').value
@@ -414,7 +476,7 @@ export class SummaryController {
 			this.chartController.renderAssetHistory(history);
 			document.getElementById('asset-history-notice').textContent = history.notice + (history.points.some(point => point.investment_acquisition_cost === null) ? ' 保有商品の取得原価が未記録の期間・口座があります。取得原価を記録してください。' : '');
 			document.getElementById('asset-history-card').dataset.period = this.assetPeriod;
-		} catch (error) { if (generation === this.assetHistoryGeneration && !this.coordinator.isKeyLocked) alert(error.message); }
+		} catch (error) { if (valid() && generation === this.assetHistoryGeneration && !this.coordinator.isKeyLocked) alert(error.message); }
 	}
 
 	async applyDrilldownFilter({ accountId = 'all', categoryId = 'all', tag = 'all', type = 'all' } = {}) {
@@ -1190,13 +1252,15 @@ export class SummaryController {
 		this.chartController.renderChartForAssets(totalAssetSummary);
 	}
 
-	async renderCategoryBreakdownList(categoriesData, config = null, renderId = this.renderVersion) {
+	async renderCategoryBreakdownList(categoriesData, config = null, renderId = this.renderVersion, { isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const key = this.db.encryptionKey;
 		const list = document.getElementById('category-breakdown-list');
 		if (!list) return;
 
 		config = config || await this.db.getMasterConfig();
-		if (renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+		if (!valid() || renderId !== this.renderVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 		const catMap = new Map();
 		for (const c of config?.categories || []) {
 			catMap.set(c.id, c.name);
@@ -1219,10 +1283,13 @@ export class SummaryController {
 
 	}
 
-	async renderAccountBalances(summary, transactions = [], config = null) {
+	async renderAccountBalances(summary, transactions = [], config = null, { isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const list = document.getElementById('account-balances-list');
 		if (!list) return;
 		const cfg = config || await this.db.getMasterConfig();
+		if (!valid()) return;
 		const accounts = (cfg?.accounts || []).filter(a => !a.is_archived);
 		const target = this.coordinator.analyticsTarget || 'cashflow';
 		const granularity = this.coordinator.analyticsGranularity || 'monthly';

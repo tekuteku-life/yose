@@ -3,6 +3,7 @@
  * Manages Master Data settings, CRUD modals (Accounts, Categories, Recurring Rules, Holidays, Assets), and GAS sync.
  */
 
+import { captureRenderSession } from './render_session.js';
 import {
 	formatDate,
 	JAPANESE_HOLIDAYS_PRESET,
@@ -211,9 +212,11 @@ export class MasterController {
 		document.getElementById('modal-master-item')?.classList.remove('active');
 	}
 
-	async renderMasterManagement() {
+	async renderMasterManagement({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		const config = await this.db.getMasterConfig();
-		if (!config) return;
+		if (!valid() || !config) return;
 
 		// 1. Accounts
 		const accList = document.getElementById('master-accounts-list');
