@@ -40,8 +40,10 @@ describe('insights and bulk updates at the repository boundary', () => {
 		const originals = await db.getTransactions();
 		await assert.rejects(db.bulkEditTransactions(originals, { account_id: 'missing' }, []));
 		assert.equal((await db.getTransaction('a')).account_id, 'acc_wallet');
-		await db.putTransaction(transaction('sibling', { group_id: originals[0].group_id }));
+		await db.putTransaction(transaction('sibling', { group_id: originals[0].group_id, is_point_split: true }));
+		const raw = await db.captureImportState();
 		await assert.rejects(db.bulkEditTransactions(originals, { amount: 300 }, []), /項目/);
+		assert.deepEqual(await db.captureImportState(), raw);
 	});
 	it('stores and compares investment observations by account/date without overwriting another date', async () => {
 		const id = 'acc_investment_main';
@@ -120,9 +122,10 @@ it('metadata excludes local settings, retries changed business snapshots, and re
 });
 it('rechecks latest business state after an encryption-time race and accumulates existing permissions', async () => {
 	const db = new YoseDB(); await db.init(); db.setEncryptionKey(await generateDatabaseMasterKey()); await db.putTransactions([transaction('a'), transaction('b')]);
-	const originals = await db.getTransactions(); const encrypt = db.encryptRecord.bind(db); let once = true;
-	db.encryptRecord = async (...args) => { if (once) { once = false; await db.putTransaction(transaction('sibling', { group_id: originals[0].group_id })); } return encrypt(...args); };
+	const originals = await db.getTransactions(); const encrypt = db.encryptRecord.bind(db); let once = true, racedState;
+	db.encryptRecord = async (...args) => { if (once) { once = false; await db.putTransaction(transaction('sibling', { group_id: originals[0].group_id, is_point_split: true })); racedState = await db.captureImportState(); } return encrypt(...args); };
 	await assert.rejects(db.bulkEditTransactions(originals, { amount: 300 }, []), /項目/);
+	assert.deepEqual(await db.captureImportState(), racedState, 'rejecting the raced financial role must preserve all originals and the newly arrived sibling');
 	assert.equal((await db.getTransaction('a')).amount, 100); assert.equal((await db.getTransaction('b')).amount, 100);
 	db.encryptRecord = encrypt;
 	const a = await db.getTransaction('a'); await db.putTransaction({ ...a, reclose_approved_months: ['2026-08'] });
