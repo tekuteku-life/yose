@@ -70,6 +70,12 @@ AppCoordinatorはDB/同期の依存注入、期間・表示軸・入力モード
 
 各コントローラーの相互操作はcoordinator経由を基本とする。実際の依存はimportと生成箇所を正とし、旧文書の「10ファイル固定」「循環参照100%防止」は保証条件としない。
 
+同じ配布版のindex.htmlに常設されるpanel/KPI/selectorと、AppCoordinatorが構築するcontrollerを必須構成とする。非表示/ロックでもこれらのroot要素自体は破棄しない。必須構成の欠損を正常なoptional componentとするfallbackは不要であり、静的HTML/構築順/全callerの根拠を確認した箇所を簡素化する。動的行/選択肢、Chart未読込、ブラウザAPI差異、認証/操作世代の失効は別の有効状態として維持する。
+
+calculateTagSummaryの内部出力はtagListとtag/expense/income/netを正規形とする。旧UI向けの別形式を推測する描画fallbackは現返値へ統一できるが、保存済み旧明細/snapshotの移行契約は維持する。AppCoordinatorの既存facadeは引数・返値・例外の委譲互換を維持する。詳細な棚卸しとassertは[受入是正設計](coverage_acceptance.md)を正本とする。
+
+旧masterで省略可能なaccounts等を表示側が必須の配列として使う場合は、表示adapterで空collectionへ正規化する。DB原本/共有基点を書換えず、未知の正規口座型を別型へ置き換えない。名称だけの編集ではelectronic_moneyを含む正規型を保持する。
+
 <a id="i-4-7"></a>
 ## I-4.7 コアモジュールの責務
 
@@ -175,6 +181,8 @@ SyncManagerは同期実行中、最後のエラー/同期時刻、設定再送�
 `doGet`は固定の疎通状態だけを返す。`doPost`はJSON解析、action/署名・timestamp検証、script lock取得、時刻/登録鍵再確認、認証台帳確定、業務復旧/操作の順に処理する。公開APIからの鍵登録は禁止し、管理画面に事前設定した公開鍵で要求を検証する（I-4.9）。
 
 既存actionはpush_diff、close_month、retroactive_update、fetch_state、fetch_master、update_master、replace_importおよび互換経路のupdate_external_assetsである。候補全体の不整合は保存前に拒否する。close_monthは予定集合と内容版の承認を照合し、未入力金額を確定しない。遡及更新は元月を保持して移動/削除を扱い、履歴を最新締め月まで再計算する。
+
+previous_target_monthとreclose_approved_monthsは送信版の再締め用補助情報であり、永続化時に除去しても、push_diff/retroactive_updateの受信時に共通validatorで形式を検証する。previousは既存のYYYY-MM検査、approvedは任意配列/各要素YYYY-MMを適用する。retroのトップレベルpreviousはプロパティの存在でtransactionへ統合し、空文字や0を未指定として黙殺しない。送信batchの補助情報の診断だけを正確なpathで取り出す事前検査と、保存候補全体の既存検査を併用する。正当な承認月を拒否せず、補助情報をサーバーの明細へ永続化しない。
 
 <a id="i-4-3"></a>
 ## I-4.3 端末内暗号化
@@ -585,3 +593,44 @@ SummaryController.handleCloseMonthは開始時の粒度・年/月・鍵・認証
 [一括編集可否設計](bulk_edit_eligibility.md)を正本とする。純関数で項目ごとの能力と理由を導出し、group_idだけの一致と金融役割のある同グループを区別する。UI/buildBulkEdit/DB再検証を共通化し、CAS・暗号原子性・締め月検査を保持する。従来I-3.56の同グループ複数件は金融役割のあるグループへ具体化する。
 
 閉じる経路をBulkEditController.requestCloseへ集約し、キャンセルの無効状態をsetBusyと同期する。履歴/キー操作は既存のAppCoordinatorの共通guardへ統合し、独自の履歴リスナーを増やさない。一括編集専用flex構成で入力領域だけを縮小・スクロール可能とする。
+
+<a id="i-3-65"></a>
+## I-3.65 同期の変更結果
+
+[明細操作改善設計](transaction_workflow_improvements.md)を正本とする。DB commitのbefore/afterとサーバー受理結果から業務項目別の結果を生成し、既存件数APIを保ったまま同期結果へ追加する。並行ローカル変更を受信へ含めない。
+
+<a id="i-3-66"></a>
+## I-3.66 一括削除の原子境界
+
+専用DB操作で原本CAS/最新関連/締め承認/有効関数を検査し、選択明細の墓標を単一mutateBusinessで保存する。単件APIのループによる部分保存を行わない。
+
+<a id="i-3-67"></a>
+## I-3.67 状態のみの確定操作
+
+専用DB操作でplanned/金額既知/原本一致を検査し、statusと保存メタ情報だけを更新する。既存関連validatorを通し、アーカイブ分類の旧参照を保持する。
+
+<a id="i-3-68"></a>
+## I-3.68 busy所有権と保存draft
+
+開始元認証・子処理への伝播・busy所有権・保存済み応答の境界は[非同期操作設計](async_session_boundaries.md)を適用する。
+
+共通busy helperでフォームと関連ボタンの元状態を保持する。最初のawait前にdraftを固定し、操作ID/鍵/認証世代をDBへ伝播する。旧catch/finallyの通知/復元/閉鎖を禁止する。
+
+<a id="i-3-69"></a>
+## I-3.69 復号再利用と差分書込
+
+20,000件上限の暗号文/鍵世代付き復号LRUとinflight共有を使用する。clone返値・鍵変更時消去・旧Promise失効を守る。全store CAS後の同一IDB transactionで差分put/deleteを行い、全clearを避ける。ネット同期と非表示タブ更新をローカル描画から分離し、archive検索を索引化する。
+
+<a id="i-3-70"></a>
+## I-3.70 最新状態での生成判定
+
+同ルール充足を先に除外し、ルール未関連の通常手入力を計上月/種別/両口座/計上親子/金額で1対1消費する。DB専用操作が最新明細・ルール版・締め状態を再検査して安定IDを原子的に生成する。
+
+<a id="i-3-71"></a>
+## I-3.71 共有ポイント既定
+
+point_payment_defaultsを任意のnullまたは{category_id,subcategory_id}として共有射影/validator/取込/GASへ通し、親子一体で三者競合を扱う。factoryは設定された相殺分類を受け、固定IDを補完しない。
+
+### I-3.47.1 移行操作の認証所有権
+
+MaintenanceControllerは移行開始時のcaptureRenderSessionと操作ownerを承認から表示完了まで保持する。cancelでowner/refresh世代を更新し、previewとbusy/loadingを破棄する。YoseDB.migrateArchivedMasterの第6任意options.isSessionValidをmutateBusinessへ合成し、開始元失効後のcommitを拒否する。旧catch/finallyは新ownerへ通知・選択・busyを反映しない。

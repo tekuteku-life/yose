@@ -1,0 +1,106 @@
+# Auth / Coordinator / SyncStatus の開始元寿命設計
+
+本書はreview67の認証境界再入設計である。確認済み製品再現と、先行検証を要する静的候補を区別する。データ形式、金融検証、CAS、GAS署名、公開facadeの既存引数/結果/例外伝播を維持する。
+
+## 確認状況
+
+|入口|最初の待機と後続作用|現状/必要契約|
+|---|---|---|
+|Coordinator.finishAppInit:88|gas_url読取→現在privateKeyでmanager生成→SW/DOM設定→theme/pane→refresh→update|auditor実再現済み。旧read後に再認証し新URLを保存すると新managerへ旧URLを採用する。入口capture＋初期化owner、捕捉したprivateKeyを使用、全子へ同parentを渡す。旧ownerはmanager detach/生成、DOM、SW応答、更新modalへ作用しない。|
+|Coordinator.initTheme:570|master読取→theme/localStorage/Chart変更→media listener|親なし。開始時sessionと読取後を検査し、旧失敗はsystem fallbackも適用しない。新initが旧media listenerを置き換えるか、一度だけ登録した現session非依存の純粋listenerへ統一する。|
+|Coordinator.applyCollapsedPanesState:372|master読取→各pane class/aria変更|親なし。開始時session＋親、await後の同predicateを必要とする。旧catchから空mapを新UIへ適用しない。|
+|Coordinator.checkStartupUpdate:424|version fetch→availableUpdateVersion/modal|親なし。開始時session＋init ownerを保持。旧成功/失敗は新version候補/modalを変更しない。timerはfinallyで必ず清算する。正常offline/Storage/AbortController差異を維持する。|
+|Coordinator.approveClosedChanges:317|snapshot読取→alert/confirm|親なし。callerは承認後にvalidを検査しても、旧prompt自体を止められない。任意第3options.isSessionValidを追加し、無効開始/旧readはnull（取消）を返し、通知/confirmせず現在のsnapshot/金融条件の検査を維持する。全callerの既存親をこの入口へ渡す。|
+|Coordinator.setPaneCollapsed:393 / setTheme:625|即時UI変更→persist→error toast|開始時captureなし。親無効なら即時DOM変更もしない。保存後失効はcommitを保ち旧toastを停止する。|
+|Coordinator.persistDisplaySetting:614|前の保存queue待機→mutateMasterConfig|鍵identityだけでauthGeneration/keyGeneration/親を失う。入口captureをqueue前に行い、queue待ち後にも検査しDBへ同isSessionValidを渡す。末尾queue合流/順序と現認証errorを維持する。|
+|Coordinator.refreshAllViews:459|自動引落→input/list/summary/settings/tax/badge/maintenance|概ねparent有り。自動引落のcatch警告は失効時にも出すためvalid時だけの診断へ合わせる。既存生成処理は削らない。|
+|Coordinator.refreshAfterTransactionChange:485 / scheduleTransactionMaintenance:510 / runTransactionMaintenance:531|保存済み描画/背景生成/送信|開始capture済み。syncPendingDiffsへ同taskの認証parentを明示する。通常closeをbackground失効条件へ混ぜない。task own lifetimeと認証 lifetimeを混同しない。|
+|SyncStatus.handleManualSync:112|ensure→syncBidirectional→承認callbacks→結果/refresh|caller有効性は有るがbackendへisSessionValid未伝播。実native入口の同validをsyncBidirectionalへ渡し、callback/DB/metadata/listenerもsecurityのproviderと合成する。|
+|SyncStatus.bindSyncManager:38|遅延master/state callbacks→refresh/badge|manager identity検査のみ。backendは試行entryでcaptureSessionを一度捕捉し遅延listenerまで有効性を保持する。providerはmanager生成時の世代で永久固定しない。|
+|Auth.initSecurityAndAuthGate:126|pkg/pubkey読取→auth UI/event setup|認証試行ownerなし。旧初期化が新auth gate/handlerへ干渉しないことを検査する。native handlersは下記のintentと成功後sessionを分ける。|
+|Auth.unlockWithPin:23 / unlockWithPasskey:86|security読取/crypto/credential→restore|authGenerationは有るが各await後の一貫したintent/key epochを持たない。正当な解除自身のDB鍵変更を旧認証のcaptureRenderSessionで禁止してはならない。|
+|Auth.restoreMasterKeys:31|import/proof→DMK仮設置→全暗号data読取→legacy shared/key削除→最終検査→active化|legacy cleanup前後に親がなく、旧intentが新認証へ削除する静的候補。old catchのkey identityだけのclearは同key新epochを消し得る。仮設置したkeyのowner/epochを保持し、そのclaimをまだ所有する場合だけclearする。新intentは未完了の旧claimを引き継がない。秘密buffer finally wipeを維持する。|
+|Auth.registerPasskey:63|ensureKeyUnlocked待機→その後generation/現在key捕捉→create/get/保存|originを最初のawait後に取り直す静的候補。入口の鍵/auth epochとkey-operation ownerを捕捉し、各await後/保存/返却を検査する。|
+|Auth.generateNewKeyPair:200|prompt→authGeneration++→pkg/crypto→atomic key保存→UI|DB鍵世代をpredicateへ含めない。旧catchが新authへalertする候補。own key transition後も自分を誤って失効させないownerが必要である。正常鍵更新とPRF invalidationを維持する。|
+|Auth.showLockScreen:187 / lockPrivateKey:242|invalidate→credential読取→gate描画/alert|旧lock read完了が新unlock後に画面を戻す候補。gateの鍵失効は直ちに行い、読取後のUI/通知は同lock ownerだけが行う。|
+|Settings WebAuthn登録/解除:262–291|register後alert/render / authGeneration++→security削除→master cleanup→alert/render|file/exportのsecurity担当領域とは別である。解除は開始元intentをDB削除まで伝播し、登録も旧返却を通知/描画しない。deleteSecurityKey/deleteRawは現parent未対応である。|
+
+## 認証intentと画面owner
+
+既存authGenerationと操作object identityを利用し、新counterを重ねない。PIN/パスキー解除・初期設定は鍵をロードする正当な状態遷移を持つため、intent ownerと期待key epoch（自分が設置したkey claim）を保持する。世代変更/新intent/外部key epoch変更なら旧intentを止める。自分が設置・消去したkeyについてだけ期待epochを進め、新intentのkeyをold catchが消さない。
+
+native callerはAuthメソッドの同期entryで作られるintentを最初のawait以前に捕捉する。解除成功後は新しい通常captureRenderSessionに同intentを親として合成し、有効性を確認して入力消去/画面hideを行ってから、同parent付きfinishAppInitを開始する。従来の正常解除タイミングを維持し、全refresh完了までauth gateを残す変更は行わない。初期設定も業務初期保存後の現session確認→入力消去/hide→finish開始の順とする。旧失敗はauth-errorや新入力を変更しない。finishは各子awaitと応答で現owner/sessionを検査し、旧unlockが新auth画面を隠すことはない。
+
+鍵再生成/登録のauthGeneration進行は既存DMKを維持する正当なsoft intentである。Root選択Bのowner-finallyと合わせ、古いDB保存/通知/dirty解除を禁止しつつ、同じ画面ownerを保持している旧finallyのbusy解放は認証失効後も許す。ロック/cancel/新draftでownerが交換された場合は旧finallyが新busyを解除しない。soft intentのために全draftを無条件に捨てない。鍵操作自身の正常なsigning-key更新でそのintentが誤失効しないようにする。
+
+### 初期PIN設定の単一所有権と再試行
+
+初期PIN設定は最初の保存済み鍵読取より前に単一setup ownerと入力PINを固定し、初期設定区画のinput/buttonをdisabled、aria-busyとspinnerで進行を示す。二重のnative押下および直接handler再呼出は新しい鍵生成・保存を開始しない。一般draftの最新intent勝ちを初期DMK作成へ適用しない。ロック/新認証はsetup ownerを同期破棄し、旧finallyが新画面のbusyを解除しない。
+
+setupのbusy ownerと認証寿命を分離する。own-DMK復元後の保存・描画sessionは成功したDB鍵/鍵世代・署名秘密鍵・認証世代を保持する。正常finallyでbusy ownerを解放しても、finishAppInitが起動した更新確認の背景応答まで失効させない。ロック/認証取消はauthGenerationを進めるため旧保存/描画を停止でき、busy解放条件だけはsetup owner一致を維持する。
+
+開始時に保存済みmaster_keys_packageを読み、既存pairがある場合は新DMKを生成せずPIN解除/復旧導線へ移す。public/packageは同じ有効intentを親に既存putSecurityKeysへまとめ、原子的に保存する。pair前の失敗は両鍵とbusiness/settings原本を保持し、busy解放後に同じ初期設定を再試行できる。pair後の復元・描画等が失敗しても確定済みpairを巻き戻さず、新しい鍵を上書き生成しない。既存PINによる解除を案内し、次のsetup再呼出も最初の保存済みpair確認で止める。読取失敗を「pair不在」と解釈して新規生成してはならない。
+
+現認証errorは明示し、旧完了は新UI/keyを更新しない。既存暗号形式は変えない。cross-tab CASの追加は本稿だけで承認されたと扱わず、必要性を別途実再現する。先行はnative二重押下時の実crypto/handler件数、実第2security put abort後の全raw/再試行正常性、実pair保存後の故障と再試行時の鍵生成0・pair保持・既存PIN解除を検査する。旧「2setup最新勝ち」の先行REDは設計変更前の履歴として保持し、受入結果に流用しない。
+
+## API連携案
+
+- finishAppInit({isSessionValid}={})、initTheme({isSessionValid}={})、applyCollapsedPanesState({isSessionValid}={})、checkStartupUpdate({isSessionValid}={})。既存無引数利用を維持する。
+- setPaneCollapsed(paneId,isCollapsed,{isSessionValid}={})、persistDisplaySetting(mutator,{isSessionValid}={})。setThemeも入口sessionを捕捉し同親をpersistへ渡す。
+- approveClosedChanges(changes,originals=[],{isSessionValid}={})。既存2引数は維持し、全controllerの既存validを3番目へ伝播する。
+- SyncManager constructorのcaptureSession:()=>captureRenderSession(app,()=>app.syncManager===manager)はentryで一度だけproviderを呼ぶ。manualはisSessionValidを同時に明示する。
+- deleteSecurityKey/deleteRawの親原子guardはsecurityへ再現証拠とともに依頼する。現read APIの失効rejectは現在sessionのErrorまで隠さない。
+- YoseDB.saveSnapshot(snapshot,{isSessionValid}={})は既存1引数互換を維持し、同predicateをmutateBusinessへ渡す。初期setupのown-DMK復元後は、その成功した認証とsetup ownerを捕捉した親をmaster/snapshotの業務writeへ渡す。commit済み原本は保持し、旧応答だけを採用しない。
+
+## 先行試験案
+
+finish最初gas read（確定再現）／theme read／collapsed read／SW registration／version fetchの保留を実lock/PIN解除が跨ぎ、新URL・manager identity・theme/localStorage・pane/aria・入力draft・更新modalを保持する。実native解除callerの旧成功と旧失敗を別に検査する。
+
+pane/themeの実保存queue待ち・commit後返却を同じkeyの新auth intentが跨ぎ、全raw/現表示/旧toastを検査する。approveの実snapshot read後は旧confirm/alertが出ず、実edit callerの保存も行わない。
+
+manualはnative buttonから実manager.syncBidirectional optionsの同parentを確認し、実Ed25519 key intent holdでauth+1/dbgen同一のまま旧realAPIを解放しDB原本/metadata/UIが不変であることを確認する。standalone/provider省略の既存互換も回帰する。
+
+Authはnative PIN/Passkey/登録/削除/鍵再生成の最初security read、実crypto、legacy cleanup、commit後返却、showLock credential readで、新intent/新UI/新keyを守ることを検査する。すべてのgateをfinallyで解放し、実Promiseを最後まで待ち秘密buffer wipeも確認する。
+
+### 登録の初期無効要求
+
+registerPasskeyはlocked・DMKなし・署名秘密鍵なしを既存ensureKeyUnlockedの条件で拒否し、authGenerationと進行中の復元claimを変更しない。有効な開始だけが新しい認証intentを取得する。実native PIN解除の読取中にこの初期無効な公開要求が来ても、PINの実Promiseと新しい認証状態を失効させない。
+
+## 認証鍵材料の原子的CAS
+
+署名秘密鍵identityの検査はメモリ上の鍵交換後を検知するが、security_keysへのpair commitからメモリ公開までの間を検知しない。またPIN packageだけが変更された場合は秘密鍵identityが変わらない。実native鍵生成後の保留中に成功したPIN変更が旧PINの再生成結果へ上書きされる順序と、実pair commit後の応答を保留した依存故障モデルで旧privateを包んだPIN packageが新publicの後に保存される順序を区別する。前者は成功PINの喪失であり、後者は両PINで解除できないpublic/private不一致である。
+
+UI全体の鍵mutexは同じ画面の競合を減らせるが、別tabのnative書込を防げずstorage側の整合条件にはならない。既存のローカルbusy/owner・共通署名鍵snapshotを維持し、security_keysのpublic/packageおよび必要credentialを同一native IDB transaction内で比較するCASを採用する。新しいglobal鍵owner/counterを重ねない。CAS不一致では当該security transactionを全拒否し、確定済みの鍵やbusiness/settingsを変更せず、開始元が現行の場合だけ競合を案内する。memoryのprivate/public/PRF成功表示はCAS成功と開始元sessionの再検査後に採用する。
+
+|変更入口|変更する鍵|原子的に比較する開始元材料|
+|---|---|---|
+|PIN変更|master_keys_package|暗号化素材のmemory privateと組の開始public、および開始時package|
+|署名鍵再生成|public/package、既存credentialのPRF無効化|開始memory public、現在PIN検証に使用したpackage、開始credential|
+|PRF登録/上書き|webauthn_credential|開始memory public、開始package、開始credential|
+|PRF解除|webauthn_credentialの削除|開始memory public、開始package、解除対象credential|
+|初期setup|public/package|保存済みpackage不在および開始public。既存pairを見つけた場合は従来どおりPIN復旧へ移る|
+
+PIN変更等は期待publicをDBから後で読み直して採用しない。署名privateと組である開始memory publicを最初のawait以前に固定する。package/credentialは操作開始の読取で固定し、WebAuthnや鍵生成・暗号化後に最新値を採用し直さない。期待材料は比較のためだけに使う。getSecurityKeyStates(keys,{isSessionValid}={})は同一readonly transactionで存在と値を取得し、各keyを{exists:false}または{exists:true,value}としてcloneして返す。欠落と保存済みnullを同一視しない。putSecurityKeys(entries,isSessionValid,{expectedSecurityKeys=null,deleteKeys=[]}={})は同じreadwrite transaction内で期待keyの存在と全値を比較し、親を再検査してput/deleteを全件commitする。配列とplain recordの全own値を比較し、objectのkey順は問わない。比較不一致は競合errorとして全件拒否する。saveSecurityKey/deleteSecurityKeyの任意optionsにもexpectedSecurityKeysを受けて同batchへ伝播し、旧引数を維持する。PRF解除のcredential/vault削除は1batchとし、自分の先行削除を後続CASの比較基準へ採用し直さない。native transaction完了/中断、request成功時の親失効検査はDB側へ統一する。旧引数で使用するstorage APIの互換性を保つ一方、この表のUI callerは必須の期待材料を省略しない。
+
+先行では実native各入口、実CryptoKey、暗号化IndexedDBを用いる。鍵生成前後の両順序、PIN先行成功の保持、commit後応答保留の明示的依存故障モデル、異なるtabのstorage writerを検査する。CASが通った正常変更のPIN/PRF解除・再解除も維持し、通常明細の入力/保存をglobal busyで阻害しない対照を置く。全raw比較・実native handler終端・secret buffer wipe・旧auth通知抑止を保持する。
+
+## owned DB epochの取消理由の伝播
+
+Auth内部の認証世代・開始鍵・DB鍵世代が失効した場合は、通常の復号/読取エラーと区別できる取消としてcallerへ伝える。restoreMasterKeysはcatchに入った時点、まだ自分のcandidate keyをclearする前に有効性を判定する。新epochへ失効していれば取消とし、新claimをclearせず、native PIN/PRF callerはauthGenerationが同じ場合も旧auth-errorや入力を更新しない。初期setupも取消を既存PIN復旧として処理せず、新lock intentや新epoch消去を開始しない。
+
+自分が所有するcandidate keyで現在のAES検証が失敗した場合は、所有keyのclearによってDB鍵世代が進んでも現在の元エラーとして伝える。cleanup後の鍵世代差だけで現在の復号エラーを取消と判断してはならない。PIN/PRFの現在の認証失敗は従来どおり表示し、secret buffer wipeを維持する。own-DMK/privateの公開と同じ同期区間で、成功session predicateとそのauthGenerationを1つの完了snapshotに固定する。公開unlock戻値(undefined/boolean)は変更しない。native callerと初期setupは自分のentry generationと当該完了snapshotの一致を確認して使い、成功応答のawait後に現在の鍵/DB世代へ捕捉し直さない。lock/新intentは当該snapshotを失効させる。PRF非対応のfalse返却はown鍵転移を持たないため、entryの認証snapshotを保った場合だけPIN案内へ反映する。その後のread/write/finish失敗も同じ寿命で採否を判断する。CAS競合は、開始元が現在なら案内する競合であり、Authの期限切れ取消と同一視しない。
+
+先行は実native PIN/PRF/初期setupのcandidate DMK設置後の実master読取を保留し、公開setEncryptionKey(same CryptoKey)でDB鍵世代だけを進める。旧解放後の認証世代・新claim・全raw・auth-error・新intent不発を検査する。別の対照では実ciphertext破損による現在のAES失敗を発生させ、自分のcandidateだけをclearして現在のエラーを表示する。
+
+
+### 解除componentの初期有効性
+
+SettingsのPRF解除componentはconfirmやbeginAuthenticationより前に開始元sessionを捕捉して検査する。初期locked/失効であれば確認・新intent・保存を開始しない。確認APIが認証変更を跨いで返った場合も同じ開始元を再検査し、新しい認証を捕捉し直して解除しない。実native PIN読取保留中の公開HTMLElement.click component境界と、確認依存が実lockを発生させるモデルで、元PIN/lock owner・確認件数・全rawを検査する。
+
+## 最終受入の未実行境界補完
+
+固定全体診断の未実行branchに対し、`auth_boundaries67` はPIN復号完了、PRFの開始credential/再読取/実認証/復号、登録のtuple読取/実create/実assertion/PRF暗号化/commit応答、公開初期表示のpackage/public読取と実import、成功後finish故障、復元末尾で実credentialが置換された競合を追加する。`auth_setup_boundaries67` は初期tuple、実DMK/Ed生成、PIN暗号化、pair commit/復号、初期master/snapshotの読取/commit応答を追加する。
+
+すべて実DB/crypto/WebAuthnを委譲し、その応答だけを一度保留する。復元末尾のcredential競合は実登録した二つのcredentialを用い、業務状態flagや計測counterを作らない。旧応答を実lock/PIN解除が跨いだ場合は新draft・全raw・認証状態・通知を保持する。初期pair前後の実lockでは旧業務保存を開始せず、確定済みpair/rawを保持し、現lockを解除しない。各gateをfinallyで解放し、開始した実handlerの終端を待つ。公開初期表示の再要求はAPI境界の検査であり、ネイティブ起動イベントを再現したとの主張には用いない。
+
+復旧の補完試験は、実lockのcredential読取失敗、初期setupの最初のstate読取/初期master保存故障、その後のstate再読取・lock表示読取の成功/失敗を区別する。故障モデルは実APIを委譲する境界で明示し、現在なら具体エラーを表示し、実lockで旧authになった場合は新epoch・鍵原本・auth-errorを変更しない。setup短PINはネイティブボタンの実handler1件と全raw不変を検査する。PIN/PRFの成功後finish失敗は、別native認証と同CryptoKeyのDB epoch更新の二種類を設け、authGenerationだけで旧エラーを採用しないことを検査する。
