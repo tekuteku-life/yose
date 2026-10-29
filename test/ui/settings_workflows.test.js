@@ -1,6 +1,25 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { useBrowser, openBrowser, transaction, seed, records, settings, value, submit, waitForDialog, dialogs, cashflow } from '../helpers/ui_fixture.js';
+import { readyBudget67 } from '../helpers/budget_ui67.js';
+
+async function completeSettingsAsync67(driver, controller, method, action) {
+	await driver.evaluate(`(()=>{const owner=window.__yose_app[${JSON.stringify(controller)}],original=owner[${JSON.stringify(method)}];window.__settingsAsyncJobs67=[];owner[${JSON.stringify(method)}]=function(...args){const pending=original.apply(this,args);window.__settingsAsyncJobs67.push(pending);return pending;};window.__restoreSettingsAsync67=()=>owner[${JSON.stringify(method)}]=original;})()`);
+	try {
+		await action();assert.ok(await driver.evaluate('window.__settingsAsyncJobs67.length>0'),'the real operation must actually start');
+		assert.equal(await driver.evaluate('window.__settingsAsyncJobs67.every(job=>typeof job?.then==="function")'),true);
+		await driver.evaluate('(async()=>{let count=-1;while(count!==window.__settingsAsyncJobs67.length){count=window.__settingsAsyncJobs67.length;await Promise.all(window.__settingsAsyncJobs67);}})()');
+	} finally { await driver.evaluate('(async()=>{try{await Promise.allSettled(window.__settingsAsyncJobs67);}finally{window.__restoreSettingsAsync67();}})()'); }
+}
+
+async function completeMasterUi(driver, method, action) {
+	await driver.evaluate(`(()=>{const owner=window.__yose_app.masterController,original=owner[${JSON.stringify(method)}];window.__settingsMasterPromise67=null;owner[${JSON.stringify(method)}]=function(...args){const pending=original.apply(this,args);window.__settingsMasterPromise67=pending;return pending;};window.__restoreSettingsMaster67=()=>owner[${JSON.stringify(method)}]=original;})()`);
+	try {
+		await action(); await driver.waitFor('window.__settingsMasterPromise67!==null');
+		assert.equal(await driver.evaluate('typeof window.__settingsMasterPromise67.then'), 'function');
+		await driver.evaluate('window.__settingsMasterPromise67');
+	} finally { await driver.evaluate('window.__restoreSettingsMaster67()'); }
+}
 
 describe('Settings, files, security rendering, and persistence', { timeout: 120000 }, () => {
 	const fixture = useBrowser();
@@ -184,7 +203,7 @@ describe('Settings, files, security rendering, and persistence', { timeout: 1200
 	it('creates an insurance account with a recurring premium and deactivates it on archive', async () => {
 		const d = fixture.driver;
 		await settings(d, 'accounts');
-		await d.click('#btn-add-account');
+		await completeMasterUi(d, 'openMasterModal', () => d.click('#btn-add-account'));
 		await d.fill('#m-acc-id', 'acc_insurance_ui');
 		await d.fill('#m-acc-name', '積立保険');
 		await d.select('#m-acc-type', 'insurance');
@@ -194,18 +213,18 @@ describe('Settings, files, security rendering, and persistence', { timeout: 1200
 		await d.fill('#m-acc-premium-amount', '12000');
 		await d.select('#m-acc-premium-pay-account', 'acc_bank_main');
 		await d.select('#m-acc-premium-cat', 'cat_housing');
-		await submit(d, '#form-master-account');
+		await completeMasterUi(d, 'runMasterOperation', () => submit(d, '#form-master-account'));
 		await d.waitFor('!document.getElementById("modal-master-item").classList.contains("active") && document.querySelector(".btn-edit-account[data-id=acc_insurance_ui]") !== null');
 		let config = await d.evaluate('window.__yose_app.db.getMasterConfig()');
 		let rule = config.recurring_rules.find(r => r.id === 'rec_ins_acc_insurance_ui');
 		assert.equal(rule.amount, 12000);
 		assert.equal(rule.end_date, '2030-03-31');
 		assert.equal(rule.is_active, true);
-		await d.click('.btn-archive-account[data-id="acc_insurance_ui"]');
+		await completeMasterUi(d, 'runMasterOperation', () => d.click('.btn-archive-account[data-id="acc_insurance_ui"]'));
 		config = await d.evaluate('window.__yose_app.db.getMasterConfig()');
 		rule = config.recurring_rules.find(r => r.id === 'rec_ins_acc_insurance_ui');
 		assert.equal(rule.is_active, false);
-		await d.click('.btn-archive-account[data-id="acc_insurance_ui"]');
+		await completeMasterUi(d, 'runMasterOperation', () => d.click('.btn-archive-account[data-id="acc_insurance_ui"]'));
 		config = await d.evaluate('window.__yose_app.db.getMasterConfig()');
 		assert.equal(config.recurring_rules.find(r => r.id === 'rec_ins_acc_insurance_ui').is_active, true);
 	});
@@ -213,19 +232,19 @@ describe('Settings, files, security rendering, and persistence', { timeout: 1200
 	it('edits, pauses, resumes, cancels deletion, and deletes recurring rules', async () => {
 		const d = fixture.driver;
 		await settings(d, 'recurring');
-		await d.click('.btn-edit-recurring[data-id="rec_rent"]');
+		await completeMasterUi(d, 'openMasterModal', () => d.click('.btn-edit-recurring[data-id="rec_rent"]'));
 		await d.fill('#m-rec-name', '変更家賃');
 		await d.fill('#m-rec-amount', '80000');
-		await submit(d, '#form-master-recurring');
+		await completeMasterUi(d, 'runMasterOperation', () => submit(d, '#form-master-recurring'));
 		await d.waitFor('!document.getElementById("modal-master-item").classList.contains("active") && document.getElementById("master-recurring-list").textContent.includes("変更家賃")');
-		await d.click('.btn-toggle-recurring[data-id="rec_rent"]');
+		await completeMasterUi(d, 'runMasterOperation', () => d.click('.btn-toggle-recurring[data-id="rec_rent"]'));
 		assert.equal((await d.evaluate('window.__yose_app.db.getMasterConfig()')).recurring_rules[0].is_active, false);
-		await d.click('.btn-toggle-recurring[data-id="rec_rent"]');
+		await completeMasterUi(d, 'runMasterOperation', () => d.click('.btn-toggle-recurring[data-id="rec_rent"]'));
 		await d.setConfirm(false);
-		await d.click('.btn-delete-recurring[data-id="rec_rent"]');
+		await completeMasterUi(d, 'runMasterOperation', () => d.click('.btn-delete-recurring[data-id="rec_rent"]'));
 		assert.equal((await d.evaluate('window.__yose_app.db.getMasterConfig()')).recurring_rules.length, 1);
 		await d.setConfirm(true);
-		await d.click('.btn-delete-recurring[data-id="rec_rent"]');
+		await completeMasterUi(d, 'runMasterOperation', () => d.click('.btn-delete-recurring[data-id="rec_rent"]'));
 		await d.waitFor('!document.querySelector(".btn-edit-recurring")');
 	});
 
@@ -316,23 +335,29 @@ describe('Settings, files, security rendering, and persistence', { timeout: 1200
 			transaction('prev_expense', { date: '2025-10-01', target_month: '2025-10', amount: 12345 }),
 			transaction('prev_income', { date: '2025-10-01', target_month: '2025-10', amount: 100000, type: 'income', category_id: 'cat_income_main', actual_category_id: 'cat_income_main' })
 		]);
-		await settings(d);
+		await readyBudget67(d);
+		assert.equal(await d.evaluate('document.querySelector("#btn-budget-auto-calc").disabled'),false);
 		await d.click('#btn-budget-auto-calc');
 		await waitForDialog(d, '推奨予算値');
 		assert.equal(await value(d, '#setting-expense-budget'), '12000');
 		assert.equal(await value(d, '.input-cat-budget[data-cat-id="cat_food"]'), '12000');
 		await d.fill('#setting-expense-budget', '24000');
 		await d.fill('.input-cat-budget[data-cat-id="cat_food"]', '12000');
+		assert.equal(await d.evaluate('window.__yose_app.budgetSettingsController.draft.values.expense_budget'),24000);
+		assert.equal(await d.evaluate('window.__yose_app.budgetSettingsController.draft.values.category_budgets.cat_food'),12000);
 		assert.ok((await d.textContent('#budget-monthly-preview')).includes('¥2,000'));
 		await d.fill('#input-budget-cat-search', '食費');
 		assert.equal(await d.evaluate('Array.from(document.querySelectorAll(".budget-cat-item")).filter(el => el.checkVisibility()).length'), 1);
-		await d.click('#btn-save-annual-budget');
+		await completeSettingsAsync67(d,'budgetSettingsController','save',()=>d.click('#btn-save-annual-budget'));
 		await waitForDialog(d, '2026年の年間予算');
-		await d.fill('#setting-budget-year', '2027');
+		assert.equal(await d.evaluate('(async()=>(await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].expense_budget)()'),24000);
+		await completeSettingsAsync67(d,'budgetSettingsController','render',()=>d.fill('#setting-budget-year', '2027'));
+		assert.equal(await d.evaluate('window.__yose_app.budgetSettingsController.year'),'2027');
 		assert.equal(await value(d, '#setting-expense-budget'), '');
-		await d.fill('#setting-budget-year', '2026');
+		await completeSettingsAsync67(d,'budgetSettingsController','render',()=>d.fill('#setting-budget-year', '2026'));
+		assert.equal(await d.evaluate('window.__yose_app.budgetSettingsController.year'),'2026');
 		assert.equal(await value(d, '#setting-expense-budget'), '24000');
-		await d.click('.tab-btn[data-analytics-target="budget"]');
+		await completeSettingsAsync67(d,'summaryController','renderSummary',()=>d.click('.tab-btn[data-analytics-target="budget"]'));
 		assert.ok((await d.textContent('#stat-budget-expense')).includes('¥24,000'));
 	});
 

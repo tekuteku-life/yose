@@ -293,6 +293,7 @@ describe('System Test - Yoseatsume Kakeibo End-to-End Complete Scenario', () => 
 		// Step 12: Point Payment Linked Transaction Creation
 		// -------------------------------------------------------------
 		const pointTxs = createPointPaymentTransactions({
+			offsetCategoryId: 'cat_point_income', offsetSubcategoryId: 'sub_point_offset',
 			date: '2026-10-22',
 			totalAmount: 10000,
 			pointUsed: 3000,

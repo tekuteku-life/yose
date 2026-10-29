@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createPrepaidAmortizationTransactions, createAdvancePaymentTransactions, createPointPaymentTransactions, createCreditCardSettlementTransaction, generateRecurringTransactions, calculateBalancesAndSummaries } from '../../js/logic.js';
 
-const base = { date: '2026-10-01', paymentDate: '2026-10-01', payingAccountId: 'acc_wallet', categoryId: 'cat_a', subcategoryId: 'sub_a', actualCategoryId: 'cat_b', totalAmount: 100, selfAmount: 100, advanceAmount: 0, pointUsed: 0, amortizeMonths: 1 };
+const base = { date: '2026-10-01', paymentDate: '2026-10-01', payingAccountId: 'acc_wallet', categoryId: 'cat_a', subcategoryId: 'sub_a', actualCategoryId: 'cat_b', totalAmount: 100, selfAmount: 100, advanceAmount: 0, pointUsed: 0, amortizeMonths: 1, offsetCategoryId: 'cat_point_income', offsetSubcategoryId: 'sub_point_offset' };
 const factories = [
 	['prepaid', input => createPrepaidAmortizationTransactions(input)],
 	['advance', input => createAdvancePaymentTransactions(input)],

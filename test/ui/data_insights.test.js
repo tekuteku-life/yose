@@ -2,6 +2,40 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { useBrowser, seed, transaction, cashflow, settings } from '../helpers/ui_fixture.js';
 const fixture = useBrowser();
+
+async function observeAnnualSettings(d) {
+	await d.evaluate(`(()=>{
+		const app=window.__yose_app,restores=[];window.__annualJobs=[];
+		for(const [owner,names] of [[app.settingsController,['renderSettings']],[app.budgetSettingsController,['render','save']],[app.furusatoController,['render','saveFurusato']],[app.summaryController,['renderSummary']]])for(const name of names){
+			const original=owner[name];owner[name]=function(...args){const promise=original.apply(this,args);window.__annualJobs.push(promise);return promise;};restores.push(()=>owner[name]=original);
+		}
+		window.__restoreAnnualSettings=()=>restores.reverse().forEach(restore=>restore());
+	})()`);
+}
+
+async function settleAnnualSettings(d) {
+	await d.evaluate('(async()=>{let count=-1;while(count!==window.__annualJobs.length){count=window.__annualJobs.length;await Promise.all(window.__annualJobs);}})()');
+}
+
+async function readyAnnualBudget(d) {
+	await settings(d); await settleAnnualSettings(d);
+	await d.waitFor('(()=>{const owner=window.__yose_app.budgetSettingsController,input=document.querySelector("#setting-expense-budget");return owner.year==="2026"&&owner.draft&&!owner.loading&&!owner.saving&&!input.disabled&&!input.readOnly&&!document.querySelector("#btn-save-annual-budget").disabled;})()');
+}
+
+async function readyDonation(d) {
+	await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]'); await settleAnnualSettings(d);
+	await d.waitFor('(()=>{const owner=window.__yose_app.furusatoController;return owner.taxDraft?.year==="2026"&&!owner.taxBusy&&!document.querySelector("#furusato-resident-tax").disabled&&!document.querySelector("#btn-save-furusato").disabled;})()');
+}
+
+async function delayAnnualRead(d, stage) {
+	await d.evaluate(`(()=>{
+		const app=window.__yose_app,owner=${stage === 'metadata' ? 'app.insightsController' : 'app.db'},name=${JSON.stringify(stage === 'metadata' ? 'renderMetadata' : 'getAnalyticsState')},original=owner[name];let once=true;
+		let armed=${stage === 'metadata'},restoreBudget=()=>{};
+		if(!armed){const budget=app.budgetSettingsController,render=budget.render;budget.render=function(...args){armed=true;return render.apply(this,args);};restoreBudget=()=>budget.render=render;}
+		owner[name]=async function(...args){if(armed&&once){once=false;await new Promise(resolve=>window.__annualReadRelease=resolve);}return original.apply(this,args);};
+		window.__restoreAnnualRead=()=>{owner[name]=original;restoreBudget();};
+	})()`);
+}
 describe('metadata, bulk editing, donations, and investment UI', () => {
 	it('shows acquired record counts, UTF-8 bytes and averages in Settings', async () => {
 		const d = fixture.driver; await seed(d, [transaction('a'), transaction('b', { status: 'planned' })]);
@@ -76,8 +110,9 @@ describe('bulk editing browser boundaries', () => {
 	});
 	it('reports committed data when a subsequent refresh fails', async () => {
 		const d = fixture.driver; await seed(d, [transaction('a')]); await open(d); await d.click('#bulk-apply-memo'); await d.fill('#bulk-value-memo', 'saved');
-		await d.evaluate('window.__yose_app.refreshAllViews=async()=>{throw new Error("refresh failed")};'); await d.click('#btn-save-bulk');
-		await d.waitFor('window.__dialogs.some(x=>x.message.includes("保存済み"))');
+		await d.evaluate('(()=>{const app=window.__yose_app,bulk=app.bulkEditController,save=bulk.save.bind(bulk);app.refreshAfterTransactionChange=async()=>{throw new Error("refresh failed")};bulk.save=(...args)=>window.__bulkCommittedRefresh=save(...args);})()'); await d.click('#btn-save-bulk');
+		await d.waitFor('Boolean(window.__bulkCommittedRefresh)'); await d.evaluate('window.__bulkCommittedRefresh');
+		assert.ok(await d.evaluate('window.__dialogs.some(x=>x.message.includes("保存済み"))'));
 		assert.equal(await d.evaluate('(async()=> (await window.__yose_app.db.getTransaction("a")).memo)()'), 'saved');
 		assert.equal(await d.isVisible('#modal-bulk-edit'), false); assert.ok((await d.textContent('#bulk-selection-count')).includes('0件'));
 	});
@@ -142,16 +177,32 @@ describe('draft and validation UI boundaries', () => {
 		await d.waitFor('(async()=> (await window.__yose_app.db.getTransactions()).every(t=>t.actual_category_id==="cat_housing"))()');
 		assert.equal(await d.evaluate('(async()=> (await window.__yose_app.db.getTransaction("a")).category_id)()'), 'cat_food');
 	});
-	it('keeps donation inputs when normal annual budgets are saved and vice versa', async () => {
-		const d = fixture.driver; await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]');
-		await d.fill('#furusato-resident-tax', '200000'); await d.select('#furusato-tax-rate', '20'); await d.click('#btn-save-furusato');
-		await d.waitFor('document.querySelector("#furusato-summary").textContent.includes("59,487")'); await settings(d);
-		await d.fill('#setting-expense-budget', '500000'); await d.click('#btn-save-annual-budget');
-		await d.waitFor('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].expense_budget===500000)()');
-		assert.equal(await d.evaluate('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_estimate.resident_tax)()'), 200000);
-		await d.click('[data-analytics-target="budget"]'); await d.click('[data-tab="tab-tax"]'); await d.fill('#furusato-resident-tax', '300000'); await d.click('#btn-save-furusato');
-		await d.waitFor('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].furusato_estimate.resident_tax===300000)()');
-		assert.equal(await d.evaluate('(async()=> (await window.__yose_app.db.getMasterConfig()).annual_budgets[2026].expense_budget)()'), 500000);
+	for (const stage of [null, 'metadata', 'budget']) it(`keeps donation inputs when normal annual budgets are saved and vice versa${stage ? ` with delayed ${stage} reading` : ''}`, async () => {
+		const d = fixture.driver; await observeAnnualSettings(d); let opening;
+		try {
+			await seed(d, [transaction('gift', { tags: ['ふるさと納税'] })]); await readyDonation(d);
+			await d.fill('#furusato-resident-tax', '200000'); await d.select('#furusato-tax-rate', '20');
+			assert.equal(await d.evaluate('window.__yose_app.furusatoController.taxDirty'), true);
+			await d.click('#btn-save-furusato'); await settleAnnualSettings(d);
+			assert.ok((await d.textContent('#furusato-summary')).includes('59,487'));
+			if (stage) {
+				await delayAnnualRead(d, stage); opening = readyAnnualBudget(d);
+				await d.waitFor('typeof window.__annualReadRelease==="function"');
+				if (stage === 'budget') assert.deepEqual(await d.evaluate('({loading:window.__yose_app.budgetSettingsController.loading,disabled:document.querySelector("#setting-expense-budget").disabled})'), { loading: true, disabled: true });
+				await d.evaluate('window.__annualReadRelease()'); await opening;
+			} else await readyAnnualBudget(d);
+			await d.fill('#setting-expense-budget', '500000');
+			await d.waitFor('window.__yose_app.budgetSettingsController.draft?.dirty&&window.__yose_app.budgetSettingsController.draft.values.expense_budget===500000');
+			await d.click('#btn-save-annual-budget'); await settleAnnualSettings(d);
+			assert.deepEqual(await d.evaluate('(async()=>{const annual=(await window.__yose_app.db.getMasterConfig()).annual_budgets[2026];return {budget:annual.expense_budget,tax:annual.furusato_estimate.resident_tax};})()'), { budget: 500000, tax: 200000 });
+			await readyDonation(d); await d.fill('#furusato-resident-tax', '300000');
+			assert.equal(await d.evaluate('window.__yose_app.furusatoController.taxDirty'), true);
+			await d.click('#btn-save-furusato'); await settleAnnualSettings(d);
+			assert.deepEqual(await d.evaluate('(async()=>{const annual=(await window.__yose_app.db.getMasterConfig()).annual_budgets[2026];return {budget:annual.expense_budget,tax:annual.furusato_estimate.resident_tax};})()'), { budget: 500000, tax: 300000 });
+		} finally {
+			await d.evaluate('window.__annualReadRelease?.()'); if (opening) await opening;
+			try { await settleAnnualSettings(d); } finally { await d.evaluate('window.__restoreAnnualRead?.();window.__restoreAnnualSettings()'); }
+		}
 	});
 });
 

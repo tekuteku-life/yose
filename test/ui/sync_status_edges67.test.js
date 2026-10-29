@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import {useBrowser,value} from '../helpers/ui_fixture.js';
+import {uiCase67,observeNativeEvent67} from '../helpers/ui_workflows67.js';
+import {gateMethod,waitGate,releaseGate,unlockWorkflow} from '../helpers/workflow_ui_fixture.js';
+const f=useBrowser();
+const raw=d=>d.evaluate('(async()=>({business:await window.__yose_app.db.captureImportState(),keys:await window.__yose_app.db.getAllRaw("security_keys"),settings:await window.__yose_app.db.getAllRaw("settings")}))()');
+const view=d=>d.evaluate('({badge:document.querySelector("#sync-badge").textContent,title:document.querySelector("#sync-badge").title,busy:document.querySelector("#sync-badge").getAttribute("aria-busy"),result:document.querySelector("#sync-last-result").textContent,header:document.querySelector("#btn-header-sync").disabled,manual:document.querySelector("#btn-manual-sync").disabled})');
+uiCase67(f,'keeps the new badge and draft after an obsolete pending-import badge read completes',async d=>{
+	await gateMethod(d,'window.__yose_app.db','getPendingImport',{afterRead:true});
+	try{
+		await d.evaluate('void(window.__oldBadge67=window.__yose_app.syncStatusController.updateSyncBadge())');await waitGate(d);await unlockWorkflow(d);await d.fill('#input-memo','NEW_BADGE_DRAFT');
+		const expected=await view(d),before=await raw(d);await releaseGate(d);await d.evaluate('window.__oldBadge67');
+		assert.deepEqual(await view(d),expected);assert.equal(await value(d,'#input-memo'),'NEW_BADGE_DRAFT');assert.deepEqual(await raw(d),before);
+	}finally{await d.evaluate('window.__workflowGates.forEach(g=>g.release?.())');await d.evaluate('Promise.allSettled([window.__oldBadge67])');}
+});
+uiCase67(f,'keeps real synchronization progress when a prior badge read resumes before its queued state listener',async d=>{
+	await gateMethod(d,'window.__yose_app.db','getPendingImport',{afterRead:true});
+	try{
+		await d.evaluate('void(window.__oldBadge67=window.__yose_app.syncStatusController.updateSyncBadge())');await waitGate(d);await gateMethod(d,'window.__yose_app.db','getUnsyncedTransactions');
+		await d.evaluate(`(()=>{const app=window.__yose_app,descriptor=Object.getOwnPropertyDescriptor(HTMLButtonElement.prototype,'disabled');window.__oldBadgeGeneration67=app.syncStatusController.badgeGeneration;window.__actualProgress67=[];window.__badgeText67=[];Object.defineProperty(HTMLButtonElement.prototype,'disabled',{...descriptor,set(value){if(this.id==='btn-header-sync')window.__actualProgress67.push({generation:app.syncStatusController.badgeGeneration,value});return descriptor.set.call(this,value);}});window.__badgeObserver67=new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)window.__badgeText67.push(node.textContent);});window.__badgeObserver67.observe(document.querySelector('#sync-badge'),{childList:true});window.__restores67.push(()=>{Object.defineProperty(HTMLButtonElement.prototype,'disabled',descriptor);window.__badgeObserver67.disconnect();});window.__workflowGates[0].release();queueMicrotask(()=>queueMicrotask(()=>{window.__actualSync67=app.syncManager.syncPendingDiffs();window.__actualSync67.catch(()=>{});}));})()`);
+		await waitGate(d,2);await d.evaluate('window.__oldBadge67');
+		const generation=await d.evaluate('window.__oldBadgeGeneration67'),trace=await d.evaluate('window.__actualProgress67');
+		assert.ok(trace.some(write=>write.generation===generation&&write.value),'the original badge continuation must actually observe the started SyncManager operation');
+		assert.equal(await d.evaluate('window.__yose_app.syncManager.isSyncing'),true);assert.equal(await d.textContent('#sync-badge'),'同期中…');assert.equal(await d.evaluate('document.querySelector("#sync-badge").getAttribute("aria-busy")'),'true');
+		assert.equal(await d.evaluate('document.querySelector("#btn-header-sync").disabled&&document.querySelector("#btn-manual-sync").disabled'),true);assert.equal(await d.evaluate('window.__badgeText67.includes("同期済")'),false);
+		await releaseGate(d,1);assert.equal((await d.evaluate('window.__actualSync67')).status,'up_to_date');
+	}finally{await d.evaluate('window.__workflowGates.forEach(g=>g.release?.())');await d.evaluate('Promise.allSettled([window.__oldBadge67,window.__actualSync67])');}
+});
+uiCase67(f,'never starts an old manual attempt after its actual unlocked check was held across PIN reauthentication',async d=>{
+	await observeNativeEvent67(d,'#btn-header-sync');await gateMethod(d,'window.__yose_app.authController','ensureKeyUnlocked',{afterRead:true});
+	await d.evaluate(`(()=>{const manager=window.__yose_app.syncManager,original=manager.syncBidirectional;window.__oldManualStarts67=0;manager.syncBidirectional=function(...args){window.__oldManualStarts67++;return original.apply(this,args);};window.__restores67.push(()=>manager.syncBidirectional=original);})()`);
+	try{
+		await d.click('#btn-header-sync');await waitGate(d);await unlockWorkflow(d);await d.fill('#input-memo','NEW_MANUAL_DRAFT');const before=await raw(d),expected=await view(d),count=await d.evaluate('window.__dialogs.length');
+		await releaseGate(d);await d.evaluate('window.__masterNativeJobs67[0]');assert.equal(await d.evaluate('window.__oldManualStarts67'),0);assert.equal(await value(d,'#input-memo'),'NEW_MANUAL_DRAFT');assert.deepEqual(await view(d),expected);assert.deepEqual(await raw(d),before);assert.deepEqual(await d.evaluate(`window.__dialogs.slice(${count})`),[]);
+	}finally{await d.evaluate('window.__workflowGates.forEach(g=>g.release?.())');await d.evaluate('Promise.allSettled(window.__masterNativeJobs67)');}
+});
+uiCase67(f,'does not warn or redraw the new session after a completed real manual sync has an obsolete refresh failure',async d=>{
+	await d.evaluate(`(async()=>{const app=window.__yose_app,{SyncManager}=await import('/js/sync.js'),{captureRenderSession}=await import('/js/ui/render_session.js'),{sharedMasterConfig}=await import('/js/logic/master_sync.js'),{verifySignedRequest}=await import('/js/crypto.js'),remote={master_config:sharedMasterConfig(await app.db.getMasterConfig()),snapshot:await app.db.getSnapshot(),pending_diffs:[],archived_transactions:[],archive_months:[]};app.syncManager.detachEventListeners();let manager;manager=new SyncManager({db:app.db,privateKey:app.privateKey,gasUrl:'https://status.fixture/exec',captureSession:()=>captureRenderSession(app,()=>app.syncManager===manager),customFetch:async(_url,options)=>{const request=JSON.parse(options.body);if(!(await verifySignedRequest(request,app.authController.publicKey)).valid)throw new Error('STATUS_SIGNATURE_FAILURE');return{ok:true,text:async()=>JSON.stringify({success:true,...remote,...(request.action==='update_master'?{master_config:request.payload.master_config}:{}),accepted_ids:request.payload.transactions?.map(tx=>tx.id)||[]})};}});app.syncManager=manager;app.syncStatusController.bindSyncManager();const sync=manager.syncBidirectional,refresh=app.refreshAllViews;window.__manualFinished67=false;manager.syncBidirectional=async function(...args){const result=await sync.apply(this,args);window.__manualFinished67=true;return result;};let once=true;app.refreshAllViews=async function(...args){const result=await refresh.apply(this,args);if(once&&window.__manualFinished67&&typeof args[0]?.isSessionValid==='function'){once=false;const gate={release:null};window.__workflowGates.push(gate);await new Promise(resolve=>gate.release=resolve);throw new Error('OLD_MANUAL_REFRESH_FAILURE');}return result;};window.__restores67.push(()=>{manager.syncBidirectional=sync;app.refreshAllViews=refresh;});})()`);
+	await observeNativeEvent67(d,'#btn-header-sync');
+	try{
+		await d.click('#btn-header-sync');await d.evaluate('window.__manualSettled67=false;void window.__masterNativeJobs67[0].then(()=>window.__manualSettled67=true,()=>window.__manualSettled67=true)');await waitGate(d);assert.equal(await d.evaluate('window.__manualSettled67'),false);assert.equal(await d.evaluate('window.__yose_app.syncManager.lastResult.status'),'synced');await unlockWorkflow(d);await d.fill('#input-memo','NEW_REFRESH_DRAFT');
+		await d.evaluate(`(()=>{const app=window.__yose_app,render=app.syncStatusController.renderLastResult,warn=console.warn;window.__oldRender67=0;window.__oldWarn67=[];app.syncStatusController.renderLastResult=function(...args){window.__oldRender67++;return render.apply(this,args);};console.warn=function(...args){window.__oldWarn67.push(args.map(String).join(' '));return warn.apply(this,args);};window.__restores67.push(()=>{app.syncStatusController.renderLastResult=render;console.warn=warn;});})()`);
+		const before=await raw(d),expected=await view(d),count=await d.evaluate('window.__dialogs.length');await releaseGate(d);await d.evaluate('window.__masterNativeJobs67[0]');
+		assert.deepEqual(await d.evaluate('window.__oldWarn67'),[]);assert.equal(await d.evaluate('window.__oldRender67'),0);assert.equal(await value(d,'#input-memo'),'NEW_REFRESH_DRAFT');assert.deepEqual(await view(d),expected);assert.deepEqual(await raw(d),before);assert.deepEqual(await d.evaluate(`window.__dialogs.slice(${count})`),[]);
+	}finally{await d.evaluate('window.__workflowGates.forEach(g=>g.release?.())');await d.evaluate('Promise.allSettled(window.__masterNativeJobs67)');}
+});

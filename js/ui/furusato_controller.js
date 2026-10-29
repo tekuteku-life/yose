@@ -45,12 +45,13 @@ export class FurusatoController {
 		if (this.taxBusy || !this.state) return;
 		this.sourceDirty = true;
 		if (!el('furusato-confirm-ledger').checked) { this.clearConfirmation(); this.preview(); return; }
-		const generation = this.generation, edit = ++this.editVersion, key = this.db.encryptionKey, year = this.sourceDraft?.year;
+		const generation = this.generation, edit = ++this.editVersion, year = this.sourceDraft?.year;
+		const valid = captureRenderSession(this.coordinator, () => generation === this.generation && edit === this.editVersion);
 		try {
 			const config = this.draftConfig(), token = await this.fingerprint(this.state.transactions, config, year);
-			if (generation !== this.generation || edit !== this.editVersion || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+			if (!valid()) return;
 			this.confirmationToken = token; this.currentFingerprint = token; this.sourceDirty = true; this.preview();
-		} catch (error) { if (generation === this.generation && edit === this.editVersion) { this.clearConfirmation(); el('furusato-error').textContent = error.message; } }
+		} catch (error) { if (valid()) { this.clearConfirmation(); el('furusato-error').textContent = error.message; } }
 	}
 	readSources() {
 		return Object.fromEntries(Object.keys(FURUSATO_FIELDS).map(field => [field, [...el(`furusato-source-${field}`).selectedOptions].map(o => JSON.parse(o.value))]));
@@ -93,9 +94,8 @@ export class FurusatoController {
 	async render(state = null, { isSessionValid = null } = {}) {
 		const sessionValid = captureRenderSession(this.coordinator, isSessionValid);
 		if (!sessionValid()) return;
-		const render = ++this.renderVersion, generation = this.generation, key = this.db.encryptionKey, year = String(this.coordinator.selectedYear);
-		const valid = () => sessionValid() && render === this.renderVersion && generation === this.generation && key === this.db.encryptionKey && !this.coordinator.isKeyLocked && year === String(this.coordinator.selectedYear);
-		if (this.coordinator.isKeyLocked) return;
+		const render = ++this.renderVersion, generation = this.generation, year = String(this.coordinator.selectedYear);
+		const valid = () => sessionValid() && render === this.renderVersion && generation === this.generation && year === String(this.coordinator.selectedYear);
 		try {
 			state ||= await this.db.getAnalyticsState();
 			if (!valid()) return;
@@ -158,8 +158,8 @@ export class FurusatoController {
 	async save(notice) {
 		const draft = notice ? this.taxDraft : this.sourceDraft;
 		if (this.taxBusy || !draft || this.coordinator.isKeyLocked) return;
-		const generation = this.generation, key = this.db.encryptionKey;
-		const valid = () => generation === this.generation && key === this.db.encryptionKey && !this.coordinator.isKeyLocked;
+		const generation = this.generation;
+		const valid = captureRenderSession(this.coordinator, () => generation === this.generation);
 		this.setFormBusy(true); let committed = false;
 		try {
 			const config = notice ? structuredClone(draft.config) : this.draftConfig(), baseline = structuredClone(draft.config);
@@ -187,9 +187,9 @@ export class FurusatoController {
 			if (!notice && this.sourceDraft === draft) this.sourceDirty = false;
 			el('furusato-error').textContent = ''; this.coordinator.showToast('税・控除の設定を保存しました。');
 			void this.coordinator.syncManager?.queueMasterSync();
-			await this.coordinator.refreshAllViews();
+			await this.coordinator.refreshAllViews({ isSessionValid: valid });
 		} catch (error) { if (valid()) el('furusato-error').textContent = `${committed ? '保存済みです。表示を更新してください。' : ''}${error.message}`; }
-		finally { if (valid()) this.setFormBusy(false); }
+		finally { if (generation === this.generation) this.setFormBusy(false); }
 	}
 	cancel() {
 		this.generation++; this.renderVersion++; this.editVersion++; this.taxDraft = null; this.sourceDraft = null; this.state = null;

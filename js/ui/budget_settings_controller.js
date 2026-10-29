@@ -42,17 +42,17 @@ export class BudgetSettingsController {
 
 	async render({ isSessionValid = null } = {}) {
 		const valid = captureRenderSession(this.coordinator, isSessionValid);
-		if (!valid() || this.saving || this.coordinator.isKeyLocked) return;
+		if (!valid() || this.saving) return;
 		const input = document.getElementById('setting-budget-year');
 		input.value ||= this.coordinator.selectedYear || String(new Date().getFullYear());
-		const year = this.year, read = ++this.readVersion, generation = this.generation, key = this.db.encryptionKey;
+		const year = this.year, read = ++this.readVersion, generation = this.generation;
 		this.loading = true; this.freeze(true, true);
 		let state;
 		try { state = await this.db.getAnalyticsState(); } catch (error) {
-			if (valid() && read === this.readVersion && generation === this.generation && !this.coordinator.isKeyLocked) { this.freeze(true, true); document.getElementById('budget-goal-notice').textContent = `${year}年の年間予算を読み取れませんでした。再表示してください。${error.message}`; }
+			if (valid() && read === this.readVersion && generation === this.generation) { this.freeze(true, true); document.getElementById('budget-goal-notice').textContent = `${year}年の年間予算を読み取れませんでした。再表示してください。${error.message}`; }
 			return;
 		}
-		if (!valid() || read !== this.readVersion || generation !== this.generation || key !== this.db.encryptionKey || this.coordinator.isKeyLocked || year !== this.year || this.saving) return;
+		if (!valid() || read !== this.readVersion || generation !== this.generation || year !== this.year || this.saving) return;
 		let draft = this.drafts.get(year);
 		if (!draft?.dirty) {
 			const values = structuredClone(state.master_config.annual_budgets?.[year] || {});
@@ -68,8 +68,8 @@ export class BudgetSettingsController {
 	renderCategories(draft, year) {
 		const previous = aggregateMonthlySummaries(draft.state.transactions.filter(tx => !tx.is_deleted), String(Number(year) - 1), draft.state.summary_snapshot?.monthly_summaries || {});
 		const amounts = new Map();
-		for (const month of Object.values(previous.months)) for (const [id, amount] of Object.entries(month.by_category || {})) amounts.set(id, (amounts.get(id) || 0) + Number(amount.total ?? amount));
-		const categories = draft.state.master_config.categories.filter(cat => !cat.is_archived && cat.type === 'expense');
+		for (const month of Object.values(previous.months)) for (const [id, amount] of Object.entries(month.by_category)) amounts.set(id, (amounts.get(id) || 0) + amount);
+		const categories = (draft.state.master_config.categories || []).filter(cat => !cat.is_archived && cat.type === 'expense');
 		document.getElementById('budget-categories-list-container').innerHTML = categories.map(cat => {
 			const amount = draft.values.category_budgets[cat.id] ?? '';
 			return `<div class="budget-cat-item" data-cat-id="${escapeHtml(cat.id)}" data-cat-name="${escapeHtml(cat.name)}"><div style="flex:2;min-width:140px"><strong>${escapeHtml(cat.icon || '🏷️')} ${escapeHtml(cat.name)}</strong><div style="font-size:0.75rem">前年実績(${Number(year) - 1}年): ¥${(amounts.get(cat.id) || 0).toLocaleString()}</div></div><div style="flex:2;display:flex;gap:6px;align-items:center"><input type="number" class="form-control form-control-sm input-cat-budget" data-cat-id="${escapeHtml(cat.id)}" value="${escapeHtml(String(amount))}" min="0" step="1"><span class="cat-monthly-hint"></span></div></div>`;
@@ -120,21 +120,28 @@ export class BudgetSettingsController {
 	}
 
 	async save() {
-		const draft = this.draft, year = this.year, generation = this.generation, key = this.db.encryptionKey;
+		const draft = this.draft, year = this.year;
 		if (!draft || this.saving || this.loading || this.coordinator.isKeyLocked) return;
+		const generation = ++this.generation;
 		this.saving = true; this.freeze(true);
-		const valid = () => generation === this.generation && key === this.db.encryptionKey && !this.coordinator.isKeyLocked && year === this.year && this.draft === draft;
+		const viewValid = captureRenderSession(this.coordinator, () => generation === this.generation && year === this.year);
+		const valid = () => viewValid() && this.draft === draft;
+		let committed = false;
 		try {
 			if (!/^\d{4}$/.test(year) || !resolveAnnualTargets(draft.values, draft.income).valid) throw new Error('対象年と目標の数値・範囲を確認してください。');
 			const candidate = structuredClone(draft.baseline); candidate.annual_budgets ||= {};
 			candidate.annual_budgets[year] = { ...draft.values, target_savings_rate: draft.values.savings_target_rate };
 			await this.db.saveMasterConfig(candidate, { expectedConfig: draft.baseline, isSessionValid: valid });
+			committed = true;
 			if (!valid()) return;
 			draft.dirty = false;
 			alert(`${year}年の年間予算・費目別目標を保存しました！`);
 			void this.coordinator.syncManager.queueMasterSync();
 		} catch (error) { if (valid()) alert(`年間予算の保存に失敗しました: ${error.message}`); }
 		finally { if (generation === this.generation) { this.saving = false; this.loading = false; this.freeze(false); } }
-		if (generation === this.generation && !this.coordinator.isKeyLocked) await this.coordinator.refreshAllViews();
+		if (committed && valid()) {
+			try { await this.coordinator.refreshAllViews({ isSessionValid: viewValid }); }
+			catch (error) { if (viewValid()) alert(`年間予算は保存済みです。表示の更新に失敗しました。設定を開き直してください: ${error.message}`); }
+		}
 	}
 }

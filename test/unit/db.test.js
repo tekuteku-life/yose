@@ -292,6 +292,7 @@ describe('js/db.js - Unit Tests', () => {
 			}));
 
 			const initialConfig = await db.getMasterConfig();
+			initialConfig.point_payment_defaults = null;
 			initialConfig.accounts = [
 				{ id: 'acc_wallet', name: '財布', type: 'cash', is_archived: false }
 			];

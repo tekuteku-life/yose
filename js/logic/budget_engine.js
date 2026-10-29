@@ -24,7 +24,6 @@ export function resolveAnnualTargets(config = {}, income = 0) {
 		if (basis === 'savings') expense = income - savings; else savings = income - expense;
 		rate = income > 0 ? savings / income * 100 : null;
 	} else if (![expense, savings].every(n => Number.isSafeInteger(n) && n >= 0) || typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0 || rate > 100) return invalid;
-	if (![expense, savings].every(Number.isSafeInteger)) return invalid;
 	return { valid: true, expense_budget: expense, savings_target_amount: savings, savings_target_rate: rate };
 }
 

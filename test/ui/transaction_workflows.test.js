@@ -2,12 +2,20 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { useBrowser, transaction, seed, records, value, cashflow, submit, dialogs, settings, waitForDialog } from '../helpers/ui_fixture.js';
 
+async function nativeModeTransition67(d, action) {
+	await d.evaluate(`(()=>{const c=window.__yose_app.txInputController,change=c.switchInputMode;window.__modeTransitionJobs67=[];c.switchInputMode=function(...args){const job=change.apply(this,args);window.__modeTransitionJobs67.push(job);return job;};window.__restoreModeTransition67=()=>c.switchInputMode=change;})()`);
+	try {
+		await action();assert.equal(await d.evaluate('window.__modeTransitionJobs67.length'),1,'the real native mode transition must start exactly once');
+		await d.evaluate('Promise.all(window.__modeTransitionJobs67)');
+	} finally { await d.evaluate('(async()=>{try{await Promise.allSettled(window.__modeTransitionJobs67);}finally{window.__restoreModeTransition67();}})()'); }
+}
+
 describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 	const fixture = useBrowser();
 
 	it('registers income, transfers, and independent accounting / actual categories', async () => {
 		const d = fixture.driver;
-		await d.select('#input-type', 'income');
+		await nativeModeTransition67(d, () => d.select('#input-type', 'income'));
 		assert.equal(await value(d, '#select-category'), 'cat_income_main');
 		await d.fill('#input-amount', '300000');
 		await d.select('#select-account', 'acc_bank_main');
@@ -51,9 +59,9 @@ describe('Transaction workflows and regressions', { timeout: 120000 }, () => {
 	for (const mode of ['advance', 'prepaid', 'point', 'normal']) {
 		it(`rebuilds expense categories when switching from income using the ${mode} mode button`, async () => {
 			const d = fixture.driver;
-			await d.select('#input-type', 'income');
-			if (mode === 'normal') await d.click('.mode-tab-btn[data-mode="repay"]');
-			await d.click(`.mode-tab-btn[data-mode="${mode}"]`);
+			await nativeModeTransition67(d, () => d.select('#input-type', 'income'));
+			if (mode === 'normal') await nativeModeTransition67(d, () => d.click('.mode-tab-btn[data-mode="repay"]'));
+			await nativeModeTransition67(d, () => d.click(`.mode-tab-btn[data-mode="${mode}"]`));
 			assert.equal(await value(d, '#input-type'), mode === 'normal' ? 'expense' : mode);
 			assert.equal(await value(d, '#select-category'), 'cat_food');
 			const options = await d.evaluate('Array.from(document.getElementById("select-category").options, o => o.value)');

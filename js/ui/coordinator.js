@@ -7,7 +7,7 @@ import { YoseDB } from '../db.js';
 import { SyncManager } from '../sync.js';
 import { formatDate } from '../logic.js';
 import { CURRENT_APP_VERSION, checkAppVersion } from '../version.js';
-import { captureRenderSession } from './render_session.js';
+import { captureRenderSession, readInRenderSession } from './render_session.js';
 
 import { AuthController } from './auth_controller.js';
 import { SyncStatusController } from './sync_status_controller.js';
@@ -85,24 +85,32 @@ export class AppCoordinator {
 		await this.authController.initSecurityAndAuthGate();
 	}
 
-	async finishAppInit() {
+	async finishAppInit({ isSessionValid = null } = {}) {
+		const session = captureRenderSession(this, isSessionValid);
+		if (!session()) return;
+		const owner = {}, privateKey = this.privateKey;
+		this.initializationOwner = owner;
+		const valid = () => session() && this.initializationOwner === owner;
 		// 3. Setup Sync Manager
+		const gasUrl = await readInRenderSession(valid, () => this.db.getSetting('gas_url', ''));
+		if (!valid()) return;
 		this.syncManager?.detachEventListeners();
-		const gasUrl = await this.db.getSetting('gas_url', '');
-		this.syncManager = new SyncManager({
+		const manager = new SyncManager({
 			db: this.db,
-			privateKey: this.privateKey,
-			gasUrl: gasUrl
+			privateKey,
+			gasUrl,
+			captureSession: () => captureRenderSession(this, () => this.syncManager === manager)
 		});
+		this.syncManager = manager;
 		this.syncManager.attachEventListeners();
 		this.syncStatusController.bindSyncManager();
 
 		// 4. Register Service Worker if in browser
-		if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+		if ('serviceWorker' in navigator) {
 			navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(reg => {
-				this.swRegistration = reg;
+				if (valid()) this.swRegistration = reg;
 			}).catch(err => {
-				console.warn('SW registration failed:', err);
+				if (valid()) console.warn('SW registration failed:', err);
 			});
 		}
 
@@ -132,14 +140,17 @@ export class AppCoordinator {
 		}
 
 		// 6. Setup Theme & Collapsible Panes state
-		await this.initTheme();
-		await this.applyCollapsedPanesState();
+		await this.initTheme({ isSessionValid: valid });
+		if (!valid()) return;
+		await this.applyCollapsedPanesState({ isSessionValid: valid });
+		if (!valid()) return;
 
 		// 7. Initial Render
-		await this.refreshAllViews();
+		await this.refreshAllViews({ isSessionValid: valid });
+		if (!valid()) return;
 
 		// 8. Check for PWA updates if online
-		this.checkStartupUpdate();
+		this.checkStartupUpdate({ isSessionValid: valid });
 	}
 
 	setupNavigation() {
@@ -156,15 +167,14 @@ export class AppCoordinator {
 
 				btn.classList.add('active');
 
-				if (analyticsTarget || targetId === 'tab-summary' || targetId === 'tab-cashflow' || targetId === 'tab-budget' || targetId === 'tab-assets') {
-					const resolvedTarget = analyticsTarget || (targetId === 'tab-budget' ? 'budget' : targetId === 'tab-assets' ? 'assets' : this.analyticsTarget || 'cashflow');
-					this.analyticsTarget = resolvedTarget;
+				if (analyticsTarget) {
+					this.analyticsTarget = analyticsTarget;
 					const summaryPanel = document.getElementById('tab-summary');
-					if (summaryPanel) summaryPanel.classList.add('active');
+					summaryPanel.classList.add('active');
 					this.summaryController.renderSummary();
 				} else {
 					const targetPanel = document.getElementById(targetId);
-					if (targetPanel) targetPanel.classList.add('active');
+					targetPanel.classList.add('active');
 					if (targetId === 'tab-tax') void this.furusatoController.render();
 					if (targetId === 'tab-settings') {
 						this.settingsController.renderSettings();
@@ -248,10 +258,10 @@ export class AppCoordinator {
 			if (!top && locked) {
 				if (locked.style === null) document.body.removeAttribute('style'); else document.body.setAttribute('style', locked.style);
 				window.scrollTo(locked.x, locked.y);
-				const target = authVisible ? document.getElementById('auth-pin-input') : locked.focus;
+				const target = locked.focus;
 				if (target instanceof HTMLElement && target.isConnected) target.focus({ preventScroll: true });
 				locked = null; inertStates.clear(); focusBefore.clear();
-			} else if (top) {
+			} else {
 				const restore = previous && !previous.classList.contains('active') ? focusBefore.get(previous) : null;
 				if (restore instanceof HTMLElement && top.contains(restore)) restore.focus({ preventScroll: true });
 				else /** @type {HTMLElement} */ (top.querySelector('button, input, select, textarea'))?.focus({ preventScroll: true });
@@ -315,8 +325,10 @@ export class AppCoordinator {
 		});
 	}
 
-	async approveClosedChanges(changes, originals = []) {
-		const snapshot = await this.db.getSnapshot();
+	async approveClosedChanges(changes, originals = [], { isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this, isSessionValid);
+		const snapshot = await readInRenderSession(valid, () => this.db.getSnapshot());
+		if (!valid()) return null;
 		const closed = snapshot?.last_closed_month;
 		if (!closed) return [];
 		const months = [...new Set([...changes, ...originals].flatMap(tx => [tx.target_month, tx.previous_target_month]).filter(month => month && month <= closed))].sort();
@@ -329,7 +341,6 @@ export class AppCoordinator {
 	}
 
 	setupCollapsiblePanes() {
-		if (typeof document === 'undefined') return;
 		const interactive = 'button, a, input, select, textarea, label, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [tabindex]';
 		const cards = document.querySelectorAll('#tab-summary .card[id], #tab-settings .card[id]');
 		cards.forEach(card => {
@@ -371,16 +382,18 @@ export class AppCoordinator {
 		});
 	}
 
-	async applyCollapsedPanesState() {
-		if (typeof document === 'undefined') return;
+	async applyCollapsedPanesState({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this, isSessionValid);
+		if (!valid()) return;
 		let collapsedMap = {};
 		try {
-			const config = await this.db.getMasterConfig();
+			const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
 			if (config?.collapsed_panes && typeof config.collapsed_panes === 'object') {
 				collapsedMap = { ...config.collapsed_panes };
 			}
 		} catch (e) {}
 
+		if (!valid()) return;
 		for (const [paneId, isCollapsed] of Object.entries(collapsedMap)) {
 			const card = document.getElementById(paneId);
 			if (card) {
@@ -393,9 +406,10 @@ export class AppCoordinator {
 		}
 	}
 
-	async setPaneCollapsed(paneId, isCollapsed) {
-		if (!paneId) return;
-		if (typeof document !== 'undefined') {
+	async setPaneCollapsed(paneId, isCollapsed, { isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this, isSessionValid);
+		if (!paneId || !valid()) return;
+		{
 			const card = document.getElementById(paneId);
 			if (card) {
 				card.classList.toggle('collapsed', Boolean(isCollapsed));
@@ -406,14 +420,12 @@ export class AppCoordinator {
 			}
 		}
 		try {
-			await this.persistDisplaySetting(config => ({ ...config, collapsed_panes: { ...(config.collapsed_panes || {}), [paneId]: Boolean(isCollapsed) } }));
-		} catch (error) { this.showToast(`表示設定の保存に失敗しました: ${error.message}`); }
+			await this.persistDisplaySetting(config => ({ ...config, collapsed_panes: { ...(config.collapsed_panes || {}), [paneId]: Boolean(isCollapsed) } }), { isSessionValid: valid });
+		} catch (error) { if (valid()) this.showToast(`表示設定の保存に失敗しました: ${error.message}`); }
 	}
 
 	showToast(message = '✅ 登録が完了しました', durationMs = 2200) {
-		if (typeof document === 'undefined') return;
 		const toast = document.getElementById('toast-notification');
-		if (!toast) return;
 		toast.textContent = message;
 		toast.style.display = 'block';
 		toast.classList.add('active');
@@ -426,11 +438,12 @@ export class AppCoordinator {
 		}, durationMs);
 	}
 
-	async checkStartupUpdate() {
-		if (typeof navigator === 'undefined' || !navigator.onLine) return;
+	async checkStartupUpdate({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this, isSessionValid);
+		if (!valid() || !navigator.onLine) return;
+		const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+		const timeoutId = controller ? setTimeout(() => controller.abort(), 3000) : null;
 		try {
-			const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-			const timeoutId = controller ? setTimeout(() => controller.abort(), 3000) : null;
 			const res = await checkAppVersion({
 				currentVersion: CURRENT_APP_VERSION,
 				isOnline: true,
@@ -438,33 +451,26 @@ export class AppCoordinator {
 				suppressRepeatedPrompt: true,
 				fetchFn: (url, opts) => fetch(url, { ...opts, signal: controller?.signal })
 			});
-			if (timeoutId) clearTimeout(timeoutId);
-
+			if (!valid()) return;
 			if (res && res.updateAvailable) {
 				this.availableUpdateVersion = res.serverVersion;
 				this.showUpdateModal(res.serverVersion);
 			}
 		} catch (e) {
 			// Silently catch to avoid disrupting startup in degraded networks
-		}
+		} finally { if (timeoutId) clearTimeout(timeoutId); }
 	}
 
 	showUpdateModal(serverVersion) {
 		const modal = document.getElementById('modal-app-update');
 		const textEl = document.getElementById('modal-new-version-text');
-		if (textEl) {
-			textEl.textContent = `v${serverVersion}`;
-		}
-		if (modal) {
-			modal.classList.add('active');
-		}
+		textEl.textContent = `v${serverVersion}`;
+		modal.classList.add('active');
 	}
 
 	hideUpdateModal() {
 		const modal = document.getElementById('modal-app-update');
-		if (modal) {
-			modal.classList.remove('active');
-		}
+		modal.classList.remove('active');
 	}
 
 	async refreshAllViews({ generateSettlements = true, isSessionValid = null } = {}) {
@@ -472,9 +478,9 @@ export class AppCoordinator {
 		if (!valid()) return;
 		if (generateSettlements) {
 			try {
-				await this.db.processCreditCardAutoSettlements();
+				await this.db.processCreditCardAutoSettlements(undefined, { isSessionValid: valid });
 			} catch (e) {
-				console.warn('Auto credit card settlement check skipped:', e.message);
+				if (valid()) console.warn('Auto credit card settlement check skipped:', e.message);
 			}
 		}
 		if (!valid()) return;
@@ -493,26 +499,115 @@ export class AppCoordinator {
 		await this.maintenanceController.refresh(options);
 	}
 
-	async initTheme() {
+	async refreshAfterTransactionChange({ isSessionValid = null, scheduleMaintenance = true } = {}) {
+		const valid = captureRenderSession(this, isSessionValid);
+		if (!valid()) return;
+		const options = { isSessionValid: valid };
+		try {
+			const jobs = [this.txListController.renderRecentTransactions(options), this.syncStatusController.updateSyncBadge(options)];
+			for (const { id, render } of [
+				{ id: 'tab-summary', render: value => this.summaryController.renderSummary(value) },
+				{ id: 'tab-tax', render: value => this.furusatoController.render(null, value) },
+				{ id: 'tab-settings', render: value => this.settingsController.renderSettings(value) }
+			]) {
+				const panel = document.getElementById(id);
+				if (panel.classList.contains('active')) jobs.push(render({ isSessionValid: () => valid() && panel.classList.contains('active') }));
+			}
+			await Promise.all(jobs);
+		} finally {
+			if (scheduleMaintenance && valid()) void this.scheduleTransactionMaintenance();
+		}
+	}
+
+	cancelTransactionMaintenance() {
+		const task = this._transactionMaintenanceTask;
+		this._transactionMaintenanceTask = null;
+		if (task) { task.requested = false; task.cancelWait?.(); }
+	}
+
+	scheduleTransactionMaintenance() {
+		const valid = captureRenderSession(this);
+		if (!valid()) return Promise.resolve();
+		const current = this._transactionMaintenanceTask;
+		if (current && !current.finished && current.valid()) { current.requested = true; return current.promise; }
+		const task = { valid, manager: this.syncManager, requested: true, finished: false, cancelWait: null, promise: null };
+		this._transactionMaintenanceTask = task;
+		task.promise = Promise.resolve().then(() => this.runTransactionMaintenance(task)).catch(async error => {
+			if (!valid()) return;
+			console.warn('Background transaction maintenance deferred:', error.message);
+			try { await this.syncStatusController.updateSyncBadge({ isSessionValid: valid }); }
+			catch (badgeError) { if (valid()) console.warn('Sync status refresh deferred:', badgeError.message); }
+		}).finally(() => {
+			if (this._transactionMaintenanceTask !== task) return;
+			this._transactionMaintenanceTask = null;
+			if (task.requested && valid()) return this.scheduleTransactionMaintenance();
+		});
+		return task.promise;
+	}
+
+	async runTransactionMaintenance(task) {
+		const valid = task.valid;
+		try {
+			while (task.requested && valid()) {
+				task.requested = false;
+				const generated = await this.db.processCreditCardAutoSettlements(undefined, { isSessionValid: valid });
+				if (!valid()) return;
+				const candidateValid = () => valid() && !this.txInputController.submitBusy;
+				if (candidateValid()) {
+					await this.txInputController.updateTagAndMemoSuggestions({ isSessionValid: candidateValid });
+					if (candidateValid()) await this.txInputController.renderUnsettledAdvanceList({ isSessionValid: candidateValid });
+				}
+				if (!valid()) return;
+				if (generated?.length) await this.refreshAfterTransactionChange({ isSessionValid: valid, scheduleMaintenance: false });
+				if (!valid()) return;
+				const manager = task.manager;
+				if (!manager?.gasUrl || !manager.privateKey || manager !== this.syncManager) continue;
+				if (manager.isSyncing) await new Promise(resolve => {
+					let unsubscribe = () => {};
+					const finish = () => { if (!manager.isSyncing || !valid() || manager !== this.syncManager) { unsubscribe(); resolve(undefined); } };
+					unsubscribe = manager.onStateChange(finish);
+					task.cancelWait = () => { unsubscribe(); resolve(undefined); };
+					finish();
+				});
+				task.cancelWait = null;
+				if (!valid() || manager !== this.syncManager) return;
+				const previousResult = manager.lastResult;
+				let result;
+				try { result = await manager.syncPendingDiffs({ isSessionValid: valid }); }
+				finally {
+					const committed = result || (manager.lastResult !== previousResult ? manager.lastResult : null);
+					const hasChanges = committed && (committed.synced_count > 0 || committed.downloaded_count > 0 || committed.import_completed ||
+						Object.values(committed.changes || {}).some(direction => Object.values(direction).some(count => count > 0)));
+					if (hasChanges && valid() && manager === this.syncManager) await this.refreshAfterTransactionChange({ isSessionValid: valid, scheduleMaintenance: false });
+				}
+			}
+		} finally { task.finished = true; task.cancelWait?.(); }
+	}
+
+	async initTheme({ isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this, isSessionValid);
+		if (!valid()) return;
 		let theme = 'system';
 		try {
-			const config = await this.db.getMasterConfig();
+			const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
 			if (config?.theme) {
 				theme = config.theme;
 			} else if (typeof localStorage !== 'undefined') {
 				theme = localStorage.getItem('yose_theme_preference') || 'system';
 			}
 		} catch (e) {}
+		if (!valid()) return;
 		this.applyTheme(theme);
 
-		if (typeof window !== 'undefined' && window.matchMedia) {
+		if (!this.themeMediaListener && window.matchMedia) {
 			const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 			if (typeof mediaQuery.addEventListener === 'function') {
-				mediaQuery.addEventListener('change', () => {
+				this.themeMediaListener = () => {
 					if (this.currentThemePreference === 'system') {
 						this.applyTheme('system');
 					}
-				});
+				};
+				mediaQuery.addEventListener('change', this.themeMediaListener);
 			}
 		}
 	}
@@ -521,40 +616,38 @@ export class AppCoordinator {
 		this.currentThemePreference = theme;
 		let resolved = theme;
 		if (theme === 'system') {
-			if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+			if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
 				resolved = 'dark';
 			} else {
 				resolved = 'light';
 			}
 		}
-		if (typeof document !== 'undefined') {
-			document.documentElement.setAttribute('data-theme', resolved);
-		}
+		document.documentElement.setAttribute('data-theme', resolved);
 		if (typeof localStorage !== 'undefined') {
 			try { localStorage.setItem('yose_theme_preference', theme); } catch (e) {}
 		}
-		if (this.chartController) {
-			this.chartController.updateThemeMode(resolved === 'dark');
-		}
+		this.chartController.updateThemeMode(resolved === 'dark');
 	}
 
 
-	persistDisplaySetting(mutator) {
-		const encryptionKey = this.db.encryptionKey;
+	persistDisplaySetting(mutator, { isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this, isSessionValid);
 		const previous = this.pendingDisplaySettings || Promise.resolve();
 		const pending = previous.catch(() => {}).then(async () => {
-			if (this.db.encryptionKey !== encryptionKey) throw new Error('待機中に認証が変更されました。解除後に操作し直してください。');
-			await this.db.mutateMasterConfig(mutator);
+			if (!valid()) return;
+			await this.db.mutateMasterConfig(mutator, { isSessionValid: valid });
 		});
 		this.pendingDisplaySettings = pending;
 		return pending;
 	}
 
 	async setTheme(theme) {
+		const valid = captureRenderSession(this);
+		if (!valid()) return;
 		this.applyTheme(theme);
 		try {
-			await this.persistDisplaySetting(config => ({ ...config, theme }));
-		} catch (error) { this.showToast(`テーマの保存に失敗しました: ${error.message}`); }
+			await this.persistDisplaySetting(config => ({ ...config, theme }), { isSessionValid: valid });
+		} catch (error) { if (valid()) this.showToast(`テーマの保存に失敗しました: ${error.message}`); }
 	}
 
 	// Facade delegation methods for 100% backward compatibility

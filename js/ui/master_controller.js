@@ -3,7 +3,8 @@
  * Manages Master Data settings, CRUD modals (Accounts, Categories, Recurring Rules, Holidays, Assets), and GAS sync.
  */
 
-import { captureRenderSession } from './render_session.js';
+import { captureRenderSession, readInRenderSession } from './render_session.js';
+import { beginFormBusy } from './form_busy.js';
 import {
 	formatDate,
 	JAPANESE_HOLIDAYS_PRESET,
@@ -19,6 +20,7 @@ export class MasterController {
 		this.openGeneration = 0;
 		this.submittingVersion = null;
 		this.initialValues = null;
+		this.pendingOperations = new Map();
 	}
 
 	get db() {
@@ -41,7 +43,7 @@ export class MasterController {
 
 				btn.classList.add('active');
 				const panel = document.getElementById(`panel-master-${masterType}`);
-				if (panel) panel.classList.add('active');
+				panel.classList.add('active');
 			});
 		});
 
@@ -50,47 +52,54 @@ export class MasterController {
 		});
 
 		document.getElementById('btn-add-account')?.addEventListener('click', () => {
-			this.openMasterModal('account', null).catch(error => alert(`設定を開けませんでした: ${error.message}`));
+			const valid = captureRenderSession(this.coordinator);
+			this.openMasterModal('account', null).catch(error => { if (valid()) alert(`設定を開けませんでした: ${error.message}`); });
 		});
 
 		document.getElementById('btn-add-category')?.addEventListener('click', () => {
-			this.openMasterModal('category', null).catch(error => alert(`設定を開けませんでした: ${error.message}`));
+			const valid = captureRenderSession(this.coordinator);
+			this.openMasterModal('category', null).catch(error => { if (valid()) alert(`設定を開けませんでした: ${error.message}`); });
 		});
 
 		document.getElementById('btn-add-recurring')?.addEventListener('click', () => {
-			this.openMasterModal('recurring', null).catch(error => alert(`設定を開けませんでした: ${error.message}`));
+			const valid = captureRenderSession(this.coordinator);
+			this.openMasterModal('recurring', null).catch(error => { if (valid()) alert(`設定を開けませんでした: ${error.message}`); });
 		});
 
-		this.bindMasterAction('btn-add-holiday', async () => {
+		this.bindMasterAction('btn-add-holiday', async valid => {
 			const input = document.getElementById('input-new-holiday');
 			const val = input?.value;
 			if (!val) {
 				alert('祝日の日付を選択してください');
 				return;
 			}
-			const config = await this.db.getMasterConfig();
+			const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
+			if (!valid()) return;
 			const expectedConfig = structuredClone(config);
 			config.holidays = config.holidays || [];
 			if (!config.holidays.includes(val)) {
 				config.holidays.push(val);
 				config.holidays.sort();
-				await this.saveMasterConfigAndSync(config, expectedConfig);
-				if (input) input.value = '';
+				await this.saveMasterConfigAndSync(config, expectedConfig, valid);
+				if (!valid()) return;
+				input.value = '';
 			} else {
 				alert('指定された日付は既に祝日に登録されています');
 			}
 		});
 
 		// Preset Japanese Holidays Import
-		this.bindMasterAction('btn-import-holidays-preset', async () => {
-			const config = await this.db.getMasterConfig();
+		this.bindMasterAction('btn-import-holidays-preset', async valid => {
+			const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
+			if (!valid()) return;
 			const expectedConfig = structuredClone(config);
 			config.holidays = config.holidays || [];
 			const beforeCount = config.holidays.length;
 			const set = new Set([...config.holidays, ...JAPANESE_HOLIDAYS_PRESET]);
 			config.holidays = Array.from(set).sort();
 			const addedCount = config.holidays.length - beforeCount;
-			await this.saveMasterConfigAndSync(config, expectedConfig);
+			await this.saveMasterConfigAndSync(config, expectedConfig, valid);
+			if (!valid()) return;
 			alert(`公式祝日プリセットから ${addedCount} 件の祝日を登録しました（合計: ${config.holidays.length} 件）`);
 		});
 
@@ -104,27 +113,27 @@ export class MasterController {
 		});
 
 		// Fetch from Online Holiday API
-		document.getElementById('btn-fetch-holiday-api')?.addEventListener('click', async () => {
+		this.bindMasterAction('btn-fetch-holiday-api', async valid => {
 			const btn = document.getElementById('btn-fetch-holiday-api');
-			if (btn) btn.textContent = '取得中...';
+			btn.textContent = '取得中...';
 			try {
 				const res = await fetch('https://holidays-jp.github.io/api/v1/date.json');
+				if (!valid()) return;
 				if (!res.ok) throw new Error(`HTTP ${res.status}`);
 				const data = await res.json();
+				if (!valid()) return;
 				const txt = document.getElementById('txt-holiday-import-input');
-				if (txt) {
-					txt.value = JSON.stringify(data, null, 2);
-				}
+				txt.value = JSON.stringify(data, null, 2);
 				alert('祝日APIから最新データを取得しました。「インポート実行」を押して反映してください。');
 			} catch (err) {
-				alert(`祝日取得エラー: ${err.message} (オフライン時はプリセットインポートをご利用ください)`);
+				if (valid()) alert(`祝日取得エラー: ${err.message} (オフライン時はプリセットインポートをご利用ください)`);
 			} finally {
-				if (btn) btn.textContent = '🌐 オンラインAPIから最新祝日を取得';
+				if (valid()) btn.textContent = '🌐 オンラインAPIから最新祝日を取得';
 			}
 		});
 
 		// Confirm Holiday Import from Textarea
-		this.bindMasterAction('btn-confirm-import-holidays', async () => {
+		this.bindMasterAction('btn-confirm-import-holidays', async valid => {
 			const txt = document.getElementById('txt-holiday-import-input');
 			const raw = txt?.value || '';
 			const parsed = parseHolidayTextOrCsv(raw);
@@ -132,65 +141,82 @@ export class MasterController {
 				alert('有効な日付が見つかりませんでした (形式例: 2026-01-01 または 2026/01/01)');
 				return;
 			}
-			const config = await this.db.getMasterConfig();
+			const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
+			if (!valid()) return;
 			const expectedConfig = structuredClone(config);
 			config.holidays = config.holidays || [];
 			const beforeCount = config.holidays.length;
 			const set = new Set([...config.holidays, ...parsed]);
 			config.holidays = Array.from(set).sort();
 			const addedCount = config.holidays.length - beforeCount;
-			await this.saveMasterConfigAndSync(config, expectedConfig);
+			await this.saveMasterConfigAndSync(config, expectedConfig, valid);
+			if (!valid()) return;
 			document.getElementById('modal-holiday-import')?.classList.remove('active');
-			if (txt) txt.value = '';
+			txt.value = '';
 			alert(`${parsed.length} 件の日付から新規に ${addedCount} 件の祝日を登録しました（合計: ${config.holidays.length} 件）`);
 		});
 	}
 
-	async saveMasterConfigAndSync(config, expectedConfig = null) {
-		const saved = await this.db.saveMasterConfig(config, { expectedConfig });
-		await this.coordinator.refreshAllViews();
+	async saveMasterConfigAndSync(config, expectedConfig = null, isSessionValid) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
+		const saved = await this.db.saveMasterConfig(config, { expectedConfig, isSessionValid: valid });
+		if (!valid()) return;
+		await this.coordinator.refreshAllViews({ isSessionValid: valid });
+		if (!valid()) return;
 		void this.syncManager.queueMasterSync();
 		return saved;
 	}
 
-	async mutateMasterConfigAndSync(mutator) {
-		await this.db.mutateMasterConfig(mutator);
-		await this.coordinator.refreshAllViews();
+	async mutateMasterConfigAndSync(mutator, isSessionValid) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
+		await this.db.mutateMasterConfig(mutator, { isSessionValid: valid });
+		if (!valid()) return;
+		await this.coordinator.refreshAllViews({ isSessionValid: valid });
+		if (!valid()) return;
 		void this.syncManager.queueMasterSync();
+	}
+
+	async runMasterOperation(root, button, handler, version) {
+		const session = captureRenderSession(this.coordinator);
+		if (!session() || (version !== null && version !== this.openGeneration) || this.pendingOperations.has(root)) return;
+		const operation = { release: beginFormBusy(root, button, '処理中…') };
+		this.pendingOperations.set(root, operation);
+		const valid = () => session() && this.pendingOperations.get(root) === operation && (version === null || version === this.openGeneration);
+		if (version !== null) this.submittingVersion = version;
+		try { await handler(valid); }
+		catch (error) { if (valid()) alert(`設定の保存に失敗しました: ${error.message}`); }
+		finally {
+			if (this.pendingOperations.get(root) === operation) {
+				operation.release(); this.pendingOperations.delete(root);
+				if (version !== null && this.submittingVersion === version) this.submittingVersion = null;
+			}
+		}
 	}
 
 	bindMasterAction(buttonId, handler) {
 		const button = document.getElementById(buttonId);
-		let busy = false;
-		button?.addEventListener('click', async () => {
-			if (busy) return;
-			busy = true;
-			button.disabled = true;
-			try { await handler(); }
-			catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
-			finally { busy = false; button.disabled = false; }
-		});
+		button?.addEventListener('click', () => this.runMasterOperation(button, button, handler, null));
 	}
 
 	bindMasterSubmit(formId, handler) {
 		const form = document.getElementById(formId);
 		const version = this.openGeneration;
-		let busy = false;
-		form?.addEventListener('submit', async event => {
+		form?.addEventListener('submit', event => {
 			event.preventDefault();
-			if (busy) return;
-			busy = true;
-			this.submittingVersion = version;
 			const button = /** @type {HTMLButtonElement} */ (form.querySelector('button[type="submit"]'));
-			if (button) button.disabled = true;
-			try { await handler(event); }
-			catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
-			finally {
-				busy = false;
-				if (this.submittingVersion === version) this.submittingVersion = null;
-				if (button) button.disabled = false;
-			}
+			return this.runMasterOperation(form, button, handler, version);
 		});
+	}
+
+	cancelPendingOperations() {
+		for (const operation of this.pendingOperations.values()) operation.release();
+		this.pendingOperations.clear();
+		this.openGeneration++; this.submittingVersion = null; this.initialValues = null;
+		document.getElementById('modal-master-item').classList.remove('active');
+		document.getElementById('modal-holiday-import').classList.remove('active');
+		document.getElementById('master-modal-body').replaceChildren();
 	}
 
 	captureValues() {
@@ -215,237 +241,234 @@ export class MasterController {
 	async renderMasterManagement({ isSessionValid = null } = {}) {
 		const valid = captureRenderSession(this.coordinator, isSessionValid);
 		if (!valid()) return;
-		const config = await this.db.getMasterConfig();
+		const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
 		if (!valid() || !config) return;
 
 		// 1. Accounts
 		const accList = document.getElementById('master-accounts-list');
-		if (accList) {
-			const accounts = config.accounts || [];
-			accList.innerHTML = accounts.map(a => `
-				<div class="master-item-row ${a.is_archived ? 'archived' : ''}">
-					<div>
-						<div style="font-weight: 600;">
-							${escapeHtml(a.name)}
-							<span style="font-size: 0.8rem; color: var(--text-muted); margin-left: 6px;">(${escapeHtml(a.id)})</span>
-							${a.is_archived ? '<span class="badge badge-warning" style="margin-left: 6px;">アーカイブ</span>' : ''}
-						</div>
-						<div style="font-size: 0.8rem; color: var(--text-muted);">
-							種別: ${escapeHtml(a.type)} | 初期残高: ¥${Number(a.initial_balance || 0).toLocaleString()}
-						</div>
-						${(() => {
-							if (a.type !== 'credit_card') return '';
-							const debitId = a.debit_account_id || a.settlement_account_id;
-							const debitAcc = (config.accounts || []).find(acc => acc.id === debitId);
-							const debitInfo = debitAcc
-								? `締: ${escapeHtml(a.closing_day || '-')}日 / 引落: ${escapeHtml(a.debit_day || '-')}日 (${escapeHtml(debitAcc.name)})`
-								: '引落口座: 未設定';
-							return `<div style="font-size: 0.8rem; color: var(--primary); margin-top: 2px;">💳 ${debitInfo}</div>`;
-						})()}
+		const accounts = config.accounts || [];
+		accList.innerHTML = accounts.map(a => `
+			<div class="master-item-row ${a.is_archived ? 'archived' : ''}">
+				<div>
+					<div style="font-weight: 600;">
+						${escapeHtml(a.name)}
+						<span style="font-size: 0.8rem; color: var(--text-muted); margin-left: 6px;">(${escapeHtml(a.id)})</span>
+						${a.is_archived ? '<span class="badge badge-warning" style="margin-left: 6px;">アーカイブ</span>' : ''}
 					</div>
-					<div style="display: flex; gap: 6px;">
-						<button class="btn btn-secondary btn-sm btn-edit-account" data-id="${escapeHtml(a.id)}">編集</button>
-						<button class="btn btn-secondary btn-sm btn-archive-account" data-id="${escapeHtml(a.id)}">
-							${a.is_archived ? '復元' : 'アーカイブ'}
-						</button>
+					<div style="font-size: 0.8rem; color: var(--text-muted);">
+						種別: ${escapeHtml(a.type)} | 初期残高: ¥${Number(a.initial_balance || 0).toLocaleString()}
 					</div>
+					${(() => {
+						if (a.type !== 'credit_card') return '';
+						const debitId = a.debit_account_id || a.settlement_account_id;
+						const debitAcc = accounts.find(acc => acc.id === debitId);
+						const debitInfo = debitAcc
+							? `締: ${escapeHtml(a.closing_day || '-')}日 / 引落: ${escapeHtml(a.debit_day || '-')}日 (${escapeHtml(debitAcc.name)})`
+							: '引落口座: 未設定';
+						return `<div style="font-size: 0.8rem; color: var(--primary); margin-top: 2px;">💳 ${debitInfo}</div>`;
+					})()}
 				</div>
-			`).join('') || '<div style="color: var(--text-muted); padding: 8px;">口座が登録されていません</div>';
+				<div style="display: flex; gap: 6px;">
+					<button class="btn btn-secondary btn-sm btn-edit-account" data-id="${escapeHtml(a.id)}">編集</button>
+					<button class="btn btn-secondary btn-sm btn-archive-account" data-id="${escapeHtml(a.id)}">
+						${a.is_archived ? '復元' : 'アーカイブ'}
+					</button>
+				</div>
+			</div>
+		`).join('') || '<div style="color: var(--text-muted); padding: 8px;">口座が登録されていません</div>';
 
-			accList.querySelectorAll('.btn-edit-account').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const acc = accounts.find(a => a.id === btn.dataset.id);
-					if (acc) this.openMasterModal('account', acc).catch(error => alert(`設定を開けませんでした: ${error.message}`));
-				});
+		accList.querySelectorAll('.btn-edit-account').forEach(btn => {
+			btn.addEventListener('click', () => {
+				const valid = captureRenderSession(this.coordinator);
+				const acc = accounts.find(a => a.id === btn.dataset.id);
+				if (acc) this.openMasterModal('account', acc).catch(error => { if (valid()) alert(`設定を開けませんでした: ${error.message}`); });
 			});
+		});
 
-			accList.querySelectorAll('.btn-archive-account').forEach(btn => {
-				btn.addEventListener('click', async () => {
-					try { await this.mutateMasterConfigAndSync(current => {
-						const acc = current.accounts.find(a => a.id === btn.dataset.id);
-						if (!acc) throw new Error('口座が変更されました。一覧を更新してください。');
-						acc.is_archived = !acc.is_archived;
-						if (acc.type === 'insurance') syncInsuranceRecurringRule(current, acc);
-						return current;
-					}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
-				});
-			});
-		}
+		accList.querySelectorAll('.btn-archive-account').forEach(btn => {
+			btn.addEventListener('click', () => this.runMasterOperation(btn, btn, async valid => {
+				await this.mutateMasterConfigAndSync(current => {
+					const acc = current.accounts.find(a => a.id === btn.dataset.id);
+					if (!acc) throw new Error('口座が変更されました。一覧を更新してください。');
+					acc.is_archived = !acc.is_archived;
+					if (acc.type === 'insurance') syncInsuranceRecurringRule(current, acc);
+					return current;
+				}, valid);
+			}, null));
+		});
 
 		// 2. Categories & Subcategories
 		const catList = document.getElementById('master-categories-list');
-		if (catList) {
-			const categories = config.categories || [];
-			catList.innerHTML = categories.map(c => `
-				<div class="master-item-row ${c.is_archived ? 'archived' : ''}" style="flex-direction: column; align-items: stretch; gap: 8px;">
-					<div style="display: flex; justify-content: space-between; align-items: center;">
-						<div>
-							<span style="font-weight: 600;">${escapeHtml(c.name)}</span>
-							<span style="font-size: 0.8rem; color: var(--text-muted); margin-left: 6px;">(${c.type === 'expense' ? '支出' : '収入'})</span>
-							${c.is_archived ? '<span class="badge badge-warning" style="margin-left: 6px;">アーカイブ</span>' : ''}
-						</div>
-						<div style="display: flex; gap: 6px;">
-							<button class="btn btn-secondary btn-sm btn-add-subcat" data-id="${escapeHtml(c.id)}">+ 内訳追加</button>
-							<button class="btn btn-secondary btn-sm btn-edit-cat" data-id="${escapeHtml(c.id)}">編集</button>
-							<button class="btn btn-secondary btn-sm btn-archive-cat" data-id="${escapeHtml(c.id)}">
-								${c.is_archived ? '復元' : 'アーカイブ'}
-							</button>
-						</div>
+		const categories = config.categories || [];
+		catList.innerHTML = categories.map(c => `
+			<div class="master-item-row ${c.is_archived ? 'archived' : ''}" style="flex-direction: column; align-items: stretch; gap: 8px;">
+				<div style="display: flex; justify-content: space-between; align-items: center;">
+					<div>
+						<span style="font-weight: 600;">${escapeHtml(c.name)}</span>
+						<span style="font-size: 0.8rem; color: var(--text-muted); margin-left: 6px;">(${c.type === 'expense' ? '支出' : '収入'})</span>
+						${c.is_archived ? '<span class="badge badge-warning" style="margin-left: 6px;">アーカイブ</span>' : ''}
 					</div>
-					<div class="subcat-list">
-						${(c.subcategories || []).map(s => `
-							<span class="subcat-pill ${s.is_archived ? 'archived' : ''}">
-								${escapeHtml(s.name)}
-								<button type="button" class="btn-edit-subcat" data-cat-id="${escapeHtml(c.id)}" data-sub-id="${escapeHtml(s.id)}" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--primary);" title="編集">✏️</button>
-								<button type="button" class="btn-archive-subcat" data-cat-id="${escapeHtml(c.id)}" data-sub-id="${escapeHtml(s.id)}" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);" title="${s.is_archived ? '復元' : 'アーカイブ'}">${s.is_archived ? '↩️' : '📦'}</button>
-							</span>
-						`).join('')}
+					<div style="display: flex; gap: 6px;">
+						<button class="btn btn-secondary btn-sm btn-add-subcat" data-id="${escapeHtml(c.id)}">+ 内訳追加</button>
+						<button class="btn btn-secondary btn-sm btn-edit-cat" data-id="${escapeHtml(c.id)}">編集</button>
+						<button class="btn btn-secondary btn-sm btn-archive-cat" data-id="${escapeHtml(c.id)}">
+							${c.is_archived ? '復元' : 'アーカイブ'}
+						</button>
 					</div>
 				</div>
-			`).join('') || '<div style="color: var(--text-muted); padding: 8px;">費目が登録されていません</div>';
+				<div class="subcat-list">
+					${(c.subcategories || []).map(s => `
+						<span class="subcat-pill ${s.is_archived ? 'archived' : ''}">
+							${escapeHtml(s.name)}
+							<button type="button" class="btn-edit-subcat" data-cat-id="${escapeHtml(c.id)}" data-sub-id="${escapeHtml(s.id)}" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--primary);" title="編集">✏️</button>
+							<button type="button" class="btn-archive-subcat" data-cat-id="${escapeHtml(c.id)}" data-sub-id="${escapeHtml(s.id)}" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);" title="${s.is_archived ? '復元' : 'アーカイブ'}">${s.is_archived ? '↩️' : '📦'}</button>
+						</span>
+					`).join('')}
+				</div>
+			</div>
+		`).join('') || '<div style="color: var(--text-muted); padding: 8px;">費目が登録されていません</div>';
 
-			catList.querySelectorAll('.btn-edit-cat').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const cat = categories.find(c => c.id === btn.dataset.id);
-					if (cat) this.openMasterModal('category', cat).catch(error => alert(`設定を開けませんでした: ${error.message}`));
-				});
+		catList.querySelectorAll('.btn-edit-cat').forEach(btn => {
+			btn.addEventListener('click', () => {
+				const valid = captureRenderSession(this.coordinator);
+				const cat = categories.find(c => c.id === btn.dataset.id);
+				if (cat) this.openMasterModal('category', cat).catch(error => { if (valid()) alert(`設定を開けませんでした: ${error.message}`); });
 			});
+		});
 
-			catList.querySelectorAll('.btn-archive-cat').forEach(btn => {
-				btn.addEventListener('click', async () => {
-					try { await this.mutateMasterConfigAndSync(current => {
-						const cat = current.categories.find(c => c.id === btn.dataset.id);
-						if (!cat) throw new Error('費目が変更されました。一覧を更新してください。');
-						cat.is_archived = !cat.is_archived;
-						return current;
-					}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
-				});
-			});
+		catList.querySelectorAll('.btn-archive-cat').forEach(btn => {
+			btn.addEventListener('click', () => this.runMasterOperation(btn, btn, async valid => {
+				await this.mutateMasterConfigAndSync(current => {
+					const cat = current.categories.find(c => c.id === btn.dataset.id);
+					if (!cat) throw new Error('費目が変更されました。一覧を更新してください。');
+					cat.is_archived = !cat.is_archived;
+					return current;
+				}, valid);
+			}, null));
+		});
 
-			catList.querySelectorAll('.btn-add-subcat').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const cat = categories.find(c => c.id === btn.dataset.id);
-					if (cat) this.openMasterModal('subcategory', null, cat).catch(error => alert(`設定を開けませんでした: ${error.message}`));
-				});
+		catList.querySelectorAll('.btn-add-subcat').forEach(btn => {
+			btn.addEventListener('click', () => {
+				const valid = captureRenderSession(this.coordinator);
+				const cat = categories.find(c => c.id === btn.dataset.id);
+				if (cat) this.openMasterModal('subcategory', null, cat).catch(error => { if (valid()) alert(`設定を開けませんでした: ${error.message}`); });
 			});
+		});
 
-			catList.querySelectorAll('.btn-edit-subcat').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const cat = categories.find(c => c.id === btn.dataset.catId);
-					const sub = cat?.subcategories?.find(s => s.id === btn.dataset.subId);
-					if (cat && sub) this.openMasterModal('subcategory', sub, cat).catch(error => alert(`設定を開けませんでした: ${error.message}`));
-				});
+		catList.querySelectorAll('.btn-edit-subcat').forEach(btn => {
+			btn.addEventListener('click', () => {
+				const valid = captureRenderSession(this.coordinator);
+				const cat = categories.find(c => c.id === btn.dataset.catId);
+				const sub = cat?.subcategories?.find(s => s.id === btn.dataset.subId);
+				if (cat && sub) this.openMasterModal('subcategory', sub, cat).catch(error => { if (valid()) alert(`設定を開けませんでした: ${error.message}`); });
 			});
+		});
 
-			catList.querySelectorAll('.btn-archive-subcat').forEach(btn => {
-				btn.addEventListener('click', async () => {
-					try { await this.mutateMasterConfigAndSync(current => {
-						const sub = current.categories.find(c => c.id === btn.dataset.catId)?.subcategories?.find(s => s.id === btn.dataset.subId);
-						if (!sub) throw new Error('中項目が変更されました。一覧を更新してください。');
-						sub.is_archived = !sub.is_archived;
-						return current;
-					}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
-				});
-			});
-		}
+		catList.querySelectorAll('.btn-archive-subcat').forEach(btn => {
+			btn.addEventListener('click', () => this.runMasterOperation(btn, btn, async valid => {
+				await this.mutateMasterConfigAndSync(current => {
+					const sub = current.categories.find(c => c.id === btn.dataset.catId)?.subcategories?.find(s => s.id === btn.dataset.subId);
+					if (!sub) throw new Error('中項目が変更されました。一覧を更新してください。');
+					sub.is_archived = !sub.is_archived;
+					return current;
+				}, valid);
+			}, null));
+		});
 
 		// 3. Recurring Rules
 		const recList = document.getElementById('master-recurring-list');
-		if (recList) {
-			const rules = config.recurring_rules || [];
-			recList.innerHTML = rules.map(r => `
-				<div class="master-item-row ${!r.is_active ? 'archived' : ''}">
-					<div>
-						<div style="font-weight: 600;">
-							${escapeHtml(r.name)}
-							<span class="badge ${r.is_active ? 'badge-success' : 'badge-warning'}" style="margin-left: 6px;">
-								${r.is_active ? '有効' : '停止中'}
-							</span>
-						</div>
-						<div style="font-size: 0.8rem; color: var(--text-muted);">
-							毎月${escapeHtml(r.day_of_month)}日 | ¥${Number(r.amount || 0).toLocaleString()} | ${escapeHtml(r.type)} | 口座: ${escapeHtml(r.account_id)}
-						</div>
+		const rules = config.recurring_rules || [];
+		recList.innerHTML = rules.map(r => `
+			<div class="master-item-row ${!r.is_active ? 'archived' : ''}">
+				<div>
+					<div style="font-weight: 600;">
+						${escapeHtml(r.name)}
+						<span class="badge ${r.is_active ? 'badge-success' : 'badge-warning'}" style="margin-left: 6px;">
+							${r.is_active ? '有効' : '停止中'}
+						</span>
 					</div>
-					<div style="display: flex; gap: 6px;">
-						<button class="btn btn-secondary btn-sm btn-edit-recurring" data-id="${escapeHtml(r.id)}">編集</button>
-						<button class="btn btn-secondary btn-sm btn-toggle-recurring" data-id="${escapeHtml(r.id)}">
-							${r.is_active ? '無効化' : '有効化'}
-						</button>
-						<button class="btn btn-danger btn-sm btn-delete-recurring" data-id="${escapeHtml(r.id)}">削除</button>
+					<div style="font-size: 0.8rem; color: var(--text-muted);">
+						毎月${escapeHtml(r.day_of_month)}日 | ¥${Number(r.amount || 0).toLocaleString()} | ${escapeHtml(r.type)} | 口座: ${escapeHtml(r.account_id)}
 					</div>
 				</div>
-			`).join('') || '<div style="color: var(--text-muted); padding: 8px;">定期ルールが登録されていません</div>';
+				<div style="display: flex; gap: 6px;">
+					<button class="btn btn-secondary btn-sm btn-edit-recurring" data-id="${escapeHtml(r.id)}">編集</button>
+					<button class="btn btn-secondary btn-sm btn-toggle-recurring" data-id="${escapeHtml(r.id)}">
+						${r.is_active ? '無効化' : '有効化'}
+					</button>
+					<button class="btn btn-danger btn-sm btn-delete-recurring" data-id="${escapeHtml(r.id)}">削除</button>
+				</div>
+			</div>
+		`).join('') || '<div style="color: var(--text-muted); padding: 8px;">定期ルールが登録されていません</div>';
 
-			recList.querySelectorAll('.btn-edit-recurring').forEach(btn => {
-				btn.addEventListener('click', () => {
-					const rule = rules.find(r => r.id === btn.dataset.id);
-					if (rule) this.openMasterModal('recurring', rule).catch(error => alert(`設定を開けませんでした: ${error.message}`));
-				});
+		recList.querySelectorAll('.btn-edit-recurring').forEach(btn => {
+			btn.addEventListener('click', () => {
+				const valid = captureRenderSession(this.coordinator);
+				const rule = rules.find(r => r.id === btn.dataset.id);
+				if (rule) this.openMasterModal('recurring', rule).catch(error => { if (valid()) alert(`設定を開けませんでした: ${error.message}`); });
 			});
+		});
 
-			recList.querySelectorAll('.btn-toggle-recurring').forEach(btn => {
-				btn.addEventListener('click', async () => {
-					try { await this.mutateMasterConfigAndSync(current => {
-						const rule = current.recurring_rules.find(r => r.id === btn.dataset.id);
-						if (!rule) throw new Error('ルールが変更されました。一覧を更新してください。');
-						rule.is_active = !rule.is_active;
+		recList.querySelectorAll('.btn-toggle-recurring').forEach(btn => {
+			btn.addEventListener('click', () => this.runMasterOperation(btn, btn, async valid => {
+				await this.mutateMasterConfigAndSync(current => {
+					const rule = current.recurring_rules.find(r => r.id === btn.dataset.id);
+					if (!rule) throw new Error('ルールが変更されました。一覧を更新してください。');
+					rule.is_active = !rule.is_active;
+					return current;
+				}, valid);
+			}, null));
+		});
+
+		recList.querySelectorAll('.btn-delete-recurring').forEach(btn => {
+			btn.addEventListener('click', () => this.runMasterOperation(btn, btn, async valid => {
+				if (confirm('この定期予定ルールを削除しますか？')) {
+					await this.mutateMasterConfigAndSync(current => {
+						current.recurring_rules = current.recurring_rules.filter(r => r.id !== btn.dataset.id);
 						return current;
-					}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
-				});
-			});
-
-			recList.querySelectorAll('.btn-delete-recurring').forEach(btn => {
-				btn.addEventListener('click', async () => {
-					if (confirm('この定期予定ルールを削除しますか？')) {
-						try { await this.mutateMasterConfigAndSync(current => {
-							current.recurring_rules = current.recurring_rules.filter(r => r.id !== btn.dataset.id);
-							return current;
-						}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
-					}
-				});
-			});
-		}
+					}, valid);
+				}
+			}, null));
+		});
 
 		// 4. Holidays
 		const holList = document.getElementById('master-holidays-list');
-		if (holList) {
-			const holidays = config.holidays || [];
-			const grouped = groupHolidaysByYear(holidays);
-			const years = Object.keys(grouped).sort();
+		const holidays = config.holidays || [];
+		const grouped = groupHolidaysByYear(holidays);
+		const years = Object.keys(grouped).sort();
 
-			if (years.length === 0) {
-				holList.innerHTML = '<div style="color: var(--text-muted); padding: 8px;">祝日が登録されていません</div>';
-			} else {
-				holList.innerHTML = years.map(year => {
-					const list = grouped[year];
-					return `
-						<details class="holiday-year-group">
-							<summary>
-								<span>📅 <strong>${escapeHtml(year)}年</strong> (${list.length}日)</span>
-								<span style="font-size: 0.8rem; color: var(--text-muted);">開閉 ▼</span>
-							</summary>
-							<div class="holiday-year-content subcat-list">
-								${list.map(h => `
-									<span class="subcat-pill">
-										${escapeHtml(h)}
-										<span class="btn-icon-del btn-del-holiday" data-date="${escapeHtml(h)}" title="削除">&times;</span>
-									</span>
-								`).join('')}
-							</div>
-						</details>
-					`;
-				}).join('');
+		if (years.length === 0) {
+			holList.innerHTML = '<div style="color: var(--text-muted); padding: 8px;">祝日が登録されていません</div>';
+		} else {
+			holList.innerHTML = years.map(year => {
+				const list = grouped[year];
+				return `
+					<details class="holiday-year-group">
+						<summary>
+							<span>📅 <strong>${escapeHtml(year)}年</strong> (${list.length}日)</span>
+							<span style="font-size: 0.8rem; color: var(--text-muted);">開閉 ▼</span>
+						</summary>
+						<div class="holiday-year-content subcat-list">
+							${list.map(h => `
+								<span class="subcat-pill">
+									${escapeHtml(h)}
+									<span class="btn-icon-del btn-del-holiday" data-date="${escapeHtml(h)}" title="削除">&times;</span>
+								</span>
+							`).join('')}
+						</div>
+					</details>
+				`;
+			}).join('');
 
-				holList.querySelectorAll('.btn-del-holiday').forEach(btn => {
-					btn.addEventListener('click', async () => {
-						const dt = btn.dataset.date;
-						try { await this.mutateMasterConfigAndSync(current => {
-							current.holidays = current.holidays.filter(h => h !== dt);
-							return current;
-						}); } catch (error) { alert(`設定の保存に失敗しました: ${error.message}`); }
-					});
-				});
-			}
+			holList.querySelectorAll('.btn-del-holiday').forEach(btn => {
+				btn.addEventListener('click', () => this.runMasterOperation(btn, btn, async valid => {
+					const dt = btn.dataset.date;
+					await this.mutateMasterConfigAndSync(current => {
+						current.holidays = current.holidays.filter(h => h !== dt);
+						return current;
+					}, valid);
+				}, null));
+			});
 		}
 	}
 
@@ -453,18 +476,25 @@ export class MasterController {
 		const modal = document.getElementById('modal-master-item');
 		const title = document.getElementById('master-modal-title');
 		const body = document.getElementById('master-modal-body');
-		if (!modal || !title || !body) return;
+
 		if (modal.classList.contains('active') && this.submittingVersion === this.openGeneration) return;
 		const openVersion = ++this.openGeneration;
-		const key = this.coordinator.privateKey;
+		const valid = captureRenderSession(this.coordinator, () => openVersion === this.openGeneration);
+		if (!valid()) return;
 
-		const config = await this.db.getMasterConfig();
-		if (openVersion !== this.openGeneration || !key || this.coordinator.privateKey !== key) return;
+		const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
+		if (!valid() || !config) return;
 		const expectedConfig = structuredClone(config);
-		if (parentItem) parentItem = config.categories.find(category => category.id === parentItem.id) || parentItem;
+		if (parentItem) {
+			const latestParent = (config.categories || []).find(category => category.id === parentItem.id);
+			if (!latestParent) throw new Error('親費目が変更または削除されました。一覧を更新してください。');
+			parentItem = latestParent;
+		}
 		if (item) {
 			const collection = type === 'account' ? config.accounts : type === 'category' ? config.categories : type === 'recurring' ? config.recurring_rules : parentItem?.subcategories;
-			item = collection?.find(candidate => candidate.id === item.id) || item;
+			const latestItem = collection?.find(candidate => candidate.id === item.id);
+			if (!latestItem) throw new Error('編集対象が変更または削除されました。一覧を更新してください。');
+			item = latestItem;
 		}
 
 		if (type === 'account') {
@@ -477,7 +507,7 @@ export class MasterController {
 				<form id="form-master-account">
 					<div class="form-group">
 						<label class="form-label" for="m-acc-id">口座ID (英数記号)</label>
-						<input type="text" id="m-acc-id" class="form-control" value="${escapeHtml(item?.id || 'acc_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''} required>
+						<input type="text" id="m-acc-id" class="form-control" value="${escapeHtml(item?.id || 'acc_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''}>
 					</div>
 					<div class="form-group">
 						<label class="form-label" for="m-acc-name">口座名・表記</label>
@@ -489,6 +519,7 @@ export class MasterController {
 							<select id="m-acc-type" class="form-control">
 								<option value="bank" ${item?.type === 'bank' ? 'selected' : ''}>銀行預金 (bank)</option>
 								<option value="cash" ${item?.type === 'cash' ? 'selected' : ''}>現金 (cash)</option>
+								<option value="electronic_money" ${item?.type === 'electronic_money' ? 'selected' : ''}>電子マネー (electronic_money)</option>
 								<option value="investment" ${item?.type === 'investment' ? 'selected' : ''}>証券・投資信託・積立NISA (investment)</option>
 								<option value="insurance" ${item?.type === 'insurance' ? 'selected' : ''}>保険・積立保険 (insurance)</option>
 								<option value="credit_card" ${item?.type === 'credit_card' ? 'selected' : ''}>クレジットカード (credit_card)</option>
@@ -583,7 +614,6 @@ export class MasterController {
 				</form>
 			`;
 
-
 			const updatePremiumChildren = (preserve = null) => {
 				const category = config.categories?.find(candidate => candidate.id === document.getElementById('m-acc-premium-cat').value);
 				const children = (category?.subcategories || []).filter(child => !child.is_archived || child.id === preserve);
@@ -597,13 +627,12 @@ export class MasterController {
 			document.getElementById('m-acc-type')?.addEventListener('change', (e) => {
 				const ccFields = document.getElementById('m-acc-cc-fields');
 				const insFields = document.getElementById('m-acc-insurance-fields');
-				if (ccFields) ccFields.style.display = e.target.value === 'credit_card' ? 'block' : 'none';
-				if (insFields) insFields.style.display = e.target.value === 'insurance' ? 'block' : 'none';
+				ccFields.style.display = e.target.value === 'credit_card' ? 'block' : 'none';
+				insFields.style.display = e.target.value === 'insurance' ? 'block' : 'none';
 			});
 
-			this.bindMasterSubmit('form-master-account', async (e) => {
+			this.bindMasterSubmit('form-master-account', async valid => {
 				const config = structuredClone(expectedConfig);
-				e.preventDefault();
 				const id = document.getElementById('m-acc-id')?.value.trim() || item?.id || ('acc_' + Date.now().toString(36));
 				const name = document.getElementById('m-acc-name').value.trim();
 				const accType = document.getElementById('m-acc-type').value;
@@ -613,7 +642,7 @@ export class MasterController {
 				const debitDayVal = document.getElementById('m-acc-debit-day')?.value;
 				const closingDay = closingDayVal ? Number(closingDayVal) : null;
 				const debitDay = debitDayVal ? Number(debitDayVal) : null;
-				const debitOffset = Number(document.getElementById('m-acc-debit-offset')?.value ?? 1);
+				const debitOffset = Number(document.getElementById('m-acc-debit-offset').value);
 				const debitAccId = document.getElementById('m-acc-debit-account')?.value || null;
 
 				const maturityDate = document.getElementById('m-acc-maturity-date')?.value || null;
@@ -678,7 +707,8 @@ export class MasterController {
 
 				syncInsuranceRecurringRule(config, targetAccount);
 
-				await this.saveMasterConfigAndSync(config, expectedConfig);
+				await this.saveMasterConfigAndSync(config, expectedConfig, valid);
+				if (!valid()) return;
 				this.closeMasterModal(openVersion);
 			});
 
@@ -689,7 +719,7 @@ export class MasterController {
 				<form id="form-master-category">
 					<div class="form-group">
 						<label class="form-label" for="m-cat-id">費目ID (英数記号)</label>
-						<input type="text" id="m-cat-id" class="form-control" value="${escapeHtml(item?.id || 'cat_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''} required>
+						<input type="text" id="m-cat-id" class="form-control" value="${escapeHtml(item?.id || 'cat_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''}>
 					</div>
 					<div class="form-group">
 						<label class="form-label" for="m-cat-name">費目名</label>
@@ -708,9 +738,8 @@ export class MasterController {
 				</form>
 			`;
 
-			this.bindMasterSubmit('form-master-category', async (e) => {
+			this.bindMasterSubmit('form-master-category', async valid => {
 				const config = structuredClone(expectedConfig);
-				e.preventDefault();
 				const id = document.getElementById('m-cat-id')?.value.trim() || item?.id || ('cat_' + Date.now().toString(36));
 				const name = document.getElementById('m-cat-name').value.trim();
 				const catType = document.getElementById('m-cat-type').value;
@@ -732,7 +761,8 @@ export class MasterController {
 					existingCat.type = catType;
 				}
 
-				await this.saveMasterConfigAndSync(config, expectedConfig);
+				await this.saveMasterConfigAndSync(config, expectedConfig, valid);
+				if (!valid()) return;
 				this.closeMasterModal(openVersion);
 			});
 
@@ -743,7 +773,7 @@ export class MasterController {
 				<form id="form-master-subcategory">
 					<div class="form-group">
 						<label class="form-label" for="m-sub-id">内訳ID (英数記号)</label>
-						<input type="text" id="m-sub-id" class="form-control" value="${escapeHtml(item?.id || 'sub_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''} required>
+						<input type="text" id="m-sub-id" class="form-control" value="${escapeHtml(item?.id || 'sub_' + Date.now().toString(36))}" ${!isNew ? 'readonly' : ''}>
 					</div>
 					<div class="form-group">
 						<label class="form-label" for="m-sub-name">内訳名</label>
@@ -755,35 +785,28 @@ export class MasterController {
 				</form>
 			`;
 
-			this.bindMasterSubmit('form-master-subcategory', async (e) => {
+			this.bindMasterSubmit('form-master-subcategory', async valid => {
 				const config = structuredClone(expectedConfig);
-				e.preventDefault();
 				const id = document.getElementById('m-sub-id')?.value.trim() || item?.id || ('sub_' + Date.now().toString(36));
 				const name = document.getElementById('m-sub-name').value.trim();
 
-				if (parentItem) {
-					config.categories = config.categories || [];
-					const targetParent = config.categories.find(c => c.id === parentItem.id) || parentItem;
-					targetParent.subcategories = targetParent.subcategories || [];
-					if (targetParent !== parentItem) {
-						parentItem.subcategories = targetParent.subcategories;
-					}
-
-					if (isNew) {
-						targetParent.subcategories.push({
-							id,
-							name,
-							sort_order: targetParent.subcategories.length + 1,
-							is_archived: false
-						});
-					} else {
-						const sub = targetParent.subcategories.find(s => s.id === item.id) || item;
-						sub.id = sub.id || id;
-						sub.name = name;
-					}
+				const targetParent = config.categories.find(c => c.id === parentItem.id);
+				targetParent.subcategories = targetParent.subcategories || [];
+				if (isNew) {
+					targetParent.subcategories.push({
+						id,
+						name,
+						sort_order: targetParent.subcategories.length + 1,
+						is_archived: false
+					});
+				} else {
+					const sub = targetParent.subcategories.find(s => s.id === item.id);
+					sub.id = sub.id || id;
+					sub.name = name;
 				}
 
-				await this.saveMasterConfigAndSync(config, expectedConfig);
+				await this.saveMasterConfigAndSync(config, expectedConfig, valid);
+				if (!valid()) return;
 				this.closeMasterModal(openVersion);
 			});
 
@@ -821,7 +844,7 @@ export class MasterController {
 			get('m-rec-type').value = item?.type || 'expense';
 			get('m-rec-holiday').value = item?.holiday_adjustment || 'none';
 			const updateChildren = (prefix, current = null, preserve = false) => {
-				const category = config.categories.find(candidate => candidate.id === get(`${prefix}-cat`).value);
+				const category = (config.categories || []).find(candidate => candidate.id === get(`${prefix}-cat`).value);
 				get(`${prefix}-sub`).innerHTML = '<option value="">（指定なし / 費目のみ）</option>' + options(category?.subcategories || [], current, preserve);
 				get(`${prefix}-sub`).value = current || '';
 			};
@@ -858,7 +881,7 @@ export class MasterController {
 			get('m-rec-sync-actual').addEventListener('change', syncActualClassification);
 			get('m-rec-actual-cat').addEventListener('change', () => updateChildren('m-rec-actual'));
 			updateClassifications(true);
-			this.bindMasterSubmit('form-master-recurring', async () => {
+			this.bindMasterSubmit('form-master-recurring', async valid => {
 				const config = structuredClone(expectedConfig);
 				const recType = get('m-rec-type').value;
 				const same = get('m-rec-sync-actual').checked;
@@ -877,7 +900,8 @@ export class MasterController {
 				config.recurring_rules ||= [];
 				if (item) Object.assign(config.recurring_rules.find(rule => rule.id === item.id), next);
 				else config.recurring_rules.push({ is_active: true, start_date: formatDate(new Date()).slice(0, 7) + '-01', end_date: null, frequency: 'interval_months', interval_months: 1, amortize_months: 1, ...next });
-				await this.saveMasterConfigAndSync(config, expectedConfig);
+				await this.saveMasterConfigAndSync(config, expectedConfig, valid);
+				if (!valid()) return;
 				this.closeMasterModal(openVersion);
 			});
 		}

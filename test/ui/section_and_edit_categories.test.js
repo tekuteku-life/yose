@@ -15,6 +15,7 @@ async function prepare(d, overrides = {}) {
 		const db = window.__yose_app.db;
 		const config = await db.getMasterConfig();
 		config.recurring_rules = [];
+		config.point_payment_defaults = null;
 		config.categories = [
 			{ id: 'cat_food', name: '食費', type: 'expense', subcategories: [{ id: 'sub_a', name: '通常' }, { id: 'sub_b', name: '別分類' }] },
 			{ id: 'cat_other', name: 'その他', type: 'expense', subcategories: [{ id: 'sub_c', name: '通常' }] },

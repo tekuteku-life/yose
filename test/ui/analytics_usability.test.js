@@ -43,7 +43,7 @@ async function chartState(d, slot) {
 }
 async function sampleTrend(d) {
 	await cashflow(d);
-	await d.evaluate(`window.__yose_app.chartController.renderCategoryTrend({type:'expense',labels:['1月','2月','3月'],series:[{id:'a',name:'食費',values:[1000,1000,1000]},{id:'b',name:'家賃',values:[8000,8000,8000]}]})`);
+	await d.evaluate(`window.__yose_app.chartController.renderCategoryTrend({type:'expense',labels:['1月','2月','3月'],series:[{id:'a',kind:'category',name:'食費',values:[1000,1000,1000]},{id:'b',kind:'category',name:'家賃',values:[8000,8000,8000]}]})`);
 	await trackedMove(d, 'categoryTrendChart', 'c.getDatasetMeta(0).data[1]');
 	assert.deepEqual(await observedValue(d, 'categoryTrendChart'), [{ date: '2月', label: '食費', value: 1000 }]);
 }
@@ -112,7 +112,7 @@ describe('annual closing and focused chart tooltips', () => {
 	});
 	it('shows one series and a yen amount on a point, a line midpoint and a native touch', async () => {
 		const d = fixture.driver; await cashflow(d);
-		await d.evaluate(`window.__yose_app.chartController.renderCategoryTrend({type:'expense',labels:['2026-01','2026-02'],series:[{id:'a',name:'食費',values:[1000,1000]},{id:'b',name:'家賃',values:[8000,8000]}]})`);
+		await d.evaluate(`window.__yose_app.chartController.renderCategoryTrend({type:'expense',labels:['2026-01','2026-02'],series:[{id:'a',kind:'category',name:'食費',values:[1000,1000]},{id:'b',kind:'category',name:'家賃',values:[8000,8000]}]})`);
 		for (const [position, touch] of [['c.getDatasetMeta(0).data[0]', false], ['{x:(c.chartArea.left+c.chartArea.right)/2,y:c.getDatasetMeta(0).data[0].y}', false], ['c.getDatasetMeta(1).data[1]', true]]) {
 			await move(d, 'categoryTrendChart', position, touch);
 			await d.waitFor(`(()=>{const t=window.__yose_app.chartController.categoryTrendChart.tooltip;return t.opacity>0&&t.dataPoints?.length===1&&t.dataPoints[0].dataset.label===${JSON.stringify(touch ? '家賃' : '食費')};})()`);
@@ -147,13 +147,13 @@ describe('annual closing and focused chart tooltips', () => {
 	});
 	it('does not hit missing spans or hidden lines and chooses only one overlapping series', async () => {
 		const d = fixture.driver; await cashflow(d);
-		await d.evaluate(`window.__yose_app.chartController.renderCategoryTrend({type:'expense',labels:['1月','2月','3月'],series:[{id:'a',name:'欠測あり',values:[1000,null,1000]},{id:'b',name:'別系列',values:[7000,7000,7000]}]})`);
+		await d.evaluate(`window.__yose_app.chartController.renderCategoryTrend({type:'expense',labels:['1月','2月','3月'],series:[{id:'a',kind:'category',name:'欠測あり',values:[1000,null,1000]},{id:'b',kind:'category',name:'別系列',values:[7000,7000,7000]}]})`);
 		await move(d, 'categoryTrendChart', 'c.getDatasetMeta(1).data[1]');
 		await d.waitFor('window.__yose_app.chartController.categoryTrendChart.tooltip.opacity>0');
 		await move(d, 'categoryTrendChart', '{x:c.getDatasetMeta(0).data[1].x,y:c.scales.y.getPixelForValue(1000)}');
 		await d.waitFor('window.__yose_app.chartController.categoryTrendChart.tooltip.opacity===0');
 		assert.equal((await tooltip(d, 'categoryTrendChart')).visible, false);
-		await d.evaluate(`window.__yose_app.chartController.renderCategoryTrend({type:'expense',labels:['1月','2月','3月'],series:[{id:'a',name:'重なる系列A',values:[1000,1000,1000]},{id:'b',name:'重なる系列B',values:[1000,1000,1000]}]})`);
+		await d.evaluate(`window.__yose_app.chartController.renderCategoryTrend({type:'expense',labels:['1月','2月','3月'],series:[{id:'a',kind:'category',name:'重なる系列A',values:[1000,1000,1000]},{id:'b',kind:'category',name:'重なる系列B',values:[1000,1000,1000]}]})`);
 		await move(d, 'categoryTrendChart', 'c.getDatasetMeta(0).data[1]');
 		await d.waitFor('window.__yose_app.chartController.categoryTrendChart.tooltip.opacity>0');
 		assert.equal((await tooltip(d, 'categoryTrendChart')).items.length, 1);
@@ -209,7 +209,7 @@ describe('annual closing and focused chart tooltips', () => {
 	});
 	it('selects actual negative and zero observations on a curved line and after money-axis zoom', async () => {
 		const d = fixture.driver; await cashflow(d);
-		await d.evaluate(`window.__yose_app.chartController.renderCategoryTrend({type:'expense',labels:['1月','2月','3月'],series:[{id:'a',name:'増減',values:[-1000,0,-1000]},{id:'b',name:'基準',values:[5000,5000,5000]}]})`);
+		await d.evaluate(`window.__yose_app.chartController.renderCategoryTrend({type:'expense',labels:['1月','2月','3月'],series:[{id:'a',kind:'category',name:'増減',values:[-1000,0,-1000]},{id:'b',kind:'category',name:'基準',values:[5000,5000,5000]}]})`);
 		for (const [index, value] of [[0, -1000], [1, 0]]) {
 			await trackedMove(d, 'categoryTrendChart', `c.getDatasetMeta(0).data[${index}]`);
 			assert.deepEqual(await observedValue(d, 'categoryTrendChart'), [{ date: `${index + 1}月`, label: '増減', value }]);

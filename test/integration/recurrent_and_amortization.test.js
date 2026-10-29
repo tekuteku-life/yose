@@ -162,6 +162,7 @@ describe('Integration - Recurring, Prepaid Amortization & Advances Workflows', (
 
 		// Case B: Point offset on the payment account (Purchase full 5,000 + Point income 1,000)
 		const offsetTxs = createPointPaymentTransactions({
+			offsetCategoryId: 'cat_point_income', offsetSubcategoryId: 'sub_point_offset',
 			date: '2026-10-19',
 			totalAmount: 5000,
 			pointUsed: 1000,

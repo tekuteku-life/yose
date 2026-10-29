@@ -47,10 +47,7 @@ export function prepareReplacementData(input) {
 		if (collapsed) data.master_config.collapsed_panes = collapsed;
 	}
 	if (data.transactions) {
-		const ids = new Set();
 		for (const tx of data.transactions) {
-			if (!BackupMerger.isSafeKey(tx.id) || ids.has(tx.id)) throw new Error('Invalid import data: 明細IDが不正または重複しています');
-			ids.add(tx.id);
 			booleans(tx, ['is_deleted', 'amount_pending', 'is_payment_record', 'is_point_split']);
 			if (tx.is_deleted === true) continue;
 			if (!/^\d{4}-\d{2}-\d{2}$/.test(tx.date || '') || !Number.isFinite(Date.parse(tx.date)) || new Date(tx.date).toISOString().slice(0, 10) !== tx.date || !/^\d{4}-(0[1-9]|1[0-2])$/.test(tx.target_month || '')) throw new Error('Invalid import data: 明細の日付・計上月が不正です');

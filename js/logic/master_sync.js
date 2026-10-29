@@ -1,7 +1,7 @@
 /** Shared master projection and deterministic three-way reconciliation. */
 import { canonicalJsonStringify } from '../crypto.js';
 
-export const SHARED_MASTER_FIELDS = ['schema_version', 'accounts', 'categories', 'recurring_rules', 'holidays', 'annual_budgets'];
+export const SHARED_MASTER_FIELDS = ['schema_version', 'accounts', 'categories', 'recurring_rules', 'holidays', 'annual_budgets', 'point_payment_defaults'];
 const same = (a, b) => canonicalJsonStringify(a) === canonicalJsonStringify(b);
 
 function assertSafe(value) {
@@ -15,12 +15,12 @@ function assertSafe(value) {
 export function sharedMasterConfig(config) {
 	assertSafe(config);
 	const shared = {};
-	for (const key of SHARED_MASTER_FIELDS) if (config?.[key] !== undefined) shared[key] = structuredClone(config[key]);
+	for (const key of SHARED_MASTER_FIELDS) if (config?.[key] !== undefined && !(key === 'point_payment_defaults' && config[key] === null)) shared[key] = structuredClone(config[key]);
 	return shared;
 }
 
 const FIELD_LABELS = {
-	schema_version: 'データ形式', accounts: '口座', categories: '費目', subcategories: '中項目', recurring_rules: '定期設定', holidays: '祝日', annual_budgets: '年度予算', category_budgets: '費目別予算',
+	schema_version: 'データ形式', accounts: '口座', categories: '費目', subcategories: '中項目', recurring_rules: '定期設定', holidays: '祝日', annual_budgets: '年度予算', category_budgets: '費目別予算', point_payment_defaults: 'ポイント相殺の既定分類',
 	investment_history: '投資評価記録', invested_amount: '旧差引拠出額', acquisition_cost: '保有商品の取得原価', furusato_calculation: '税・控除の計算設定', input_modes: '採用方法', manual: '手入力年額', base_year: '金額参照年', ledger_confirmation: '年額確認', tax_status: '所得割課税区分', life_enabled: '生命保険の利用', young_dependent: '23歳未満扶養親族', housing: '住宅ローン控除', furusato_sources: '税・控除の集計元', salary: '給与・賞与', income_tax: '所得税', social_insurance: '社会保険料', market_value: '評価額', furusato_estimate: 'ふるさと納税概算', resident_tax: '住民税所得割額', income_tax_rate: '特例控除用税率',
 	name: '名称', type: '種別', initial_balance: '初期残高', is_asset: '資産への算入', sort_order: '表示順', is_archived: 'アーカイブ状態',
 	debit_account_id: '引落口座', settlement_account_id: '精算口座', closing_day: '締日', debit_day: '引落日', debit_month_offset: '引落月',
@@ -90,6 +90,12 @@ export function mergeMasterConfigs(base, local, remote) {
 		return here;
 	};
 	const merge = (before, here, there, path, segments, skipGoals = false) => {
+		if (path === 'point_payment_defaults') {
+			before ??= undefined; here ??= undefined; there ??= undefined;
+			if (same(here, there) || same(before, there)) return here;
+			if (same(before, here)) return there;
+			return conflict(here, there, path, segments);
+		}
 		if (same(here, there) || same(before, there)) return here;
 		if (same(before, here)) return there;
 		if ([before, here, there].every(value => Array.isArray(value))) {

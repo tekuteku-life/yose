@@ -221,10 +221,14 @@ describe('Daily usability improvements', { timeout: 120000 }, () => {
 		await d.waitFor('document.querySelector("#month-tx-list [data-id=delete_conflict]") !== null');
 		await d.click('#month-tx-list [data-id="delete_conflict"]');
 		await d.waitFor('document.querySelector("#modal-edit-tx").classList.contains("active") && document.querySelector("#edit-tx-id").value==="delete_conflict" && window.__yose_app.txEditController.originalTransaction?.id==="delete_conflict" && document.querySelector("#btn-edit-delete-tx").checkVisibility({checkVisibilityCSS:true})');
+		await d.evaluate('(()=>{const owner=window.__yose_app.txEditController,remove=owner.handleEditDelete;owner.handleEditDelete=function(...args){return window.__conflictDeletion=remove.apply(this,args);};})()');
 		await d.click('#btn-edit-delete-tx');
-		await d.waitFor('!window.__yose_app.syncManager.isSyncing && !document.getElementById("modal-edit-tx").classList.contains("active")');
+		await d.evaluate('window.__conflictDeletion');
+		await d.evaluate('window.__yose_app._transactionMaintenanceTask?.promise');
+		assert.equal(await d.evaluate('document.getElementById("modal-edit-tx").classList.contains("active")'), false);
 		const [latest] = await records(d);
 		assert.equal(latest.amount, 999); assert.equal(latest.is_deleted, false);
+		assert.match(await d.textContent('#month-tx-list [data-id="delete_conflict"]'), /999/);
 	});
 
 	it('moves adjacent tabs with real horizontal touch and ignores vertical touch', async () => {

@@ -44,6 +44,51 @@ async function open(t, root) {
 }
 
 describe('Real Node and Chromium coverage collection', () => {
+	it('collects source-sized coverage across unacknowledged pagehide, reload and a real BFCache return without exceeding the native quota or duplicating calls', async t => {
+		const root = workspace(t);
+		fs.writeFileSync(path.join(root, 'js/large.js'), Array.from({ length: 3200 }, (_, index) => `function padding${index}(flag) { if(flag) return ${index}; else return -${index}; }`).join('\n'));
+		fs.writeFileSync(path.join(root, 'probe.html'), fs.readFileSync(path.join(root, 'probe.html'), 'utf8').replace('<script src="/js/probe.js">', '<script src="/js/large.js"></script><script src="/js/probe.js">'));
+		const d = await open(t, root);
+		const size = await d.evaluate('JSON.stringify(window.__coverage__).length');
+		assert.ok(size > 2000000, `Actual instrumented coverage must have production scale: ${size}`);
+		await d.evaluate('window.__probeOnHide=true;probe(true);dispatchEvent(new PageTransitionEvent("pagehide",{persisted:true}));probe(false);dispatchEvent(new PageTransitionEvent("pagehide",{persisted:true}));');
+		assert.deepEqual(d.pageErrors, []);
+		const originalSend = d._send.bind(d), originalHandle = d._handleEvent.bind(d), received = new Map();
+		let lost = 0;
+		d._handleEvent = async msg => {
+			if (msg.method === 'Runtime.bindingCalled' && msg.params.name === '__yoseWriteCoverage') {
+				const chunk = JSON.parse(msg.params.payload), previous = received.get(chunk.id);
+				if (previous) assert.equal(msg.params.payload, previous.payload, 'Unacknowledged payload must remain identical');
+				received.set(chunk.id, { payload: msg.params.payload, count: (previous?.count || 0) + 1 });
+			}
+			return originalHandle(msg);
+		};
+		d._send = (method, params = {}, sessionId) => {
+			if (method === 'Runtime.evaluate' && params.expression.startsWith('window.__yoseCoverageFlush')) {
+				lost++; return originalSend(method, { ...params, expression: 'window.__yoseCoverageFlush?.([])' }, sessionId);
+			}
+			return originalSend(method, params, sessionId);
+		};
+		await d.flushCoverage(); await d.flushCoverage();
+		assert.ok(lost >= 2); assert.ok([...received.values()].some(chunk => chunk.count >= 2));
+		d._send = originalSend;
+		await d.flushCoverage();
+		const oldToken = await d.evaluate('window.__documentToken');
+		await d.send('Page.reload', {}, d.sessionId);
+		await d.waitFor(`window.__probeLoaded && window.__documentToken !== ${JSON.stringify(oldToken)}`);
+		const reloadToken = await d.evaluate('window.__documentToken');
+		await d.evaluate('probe(true);window.__probeOnHide=true');
+		await d.send('Page.navigate', { url: d.origin + '/away.html' }, d.sessionId);
+		await d.waitFor('location.pathname==="/away.html" && document.readyState==="complete"');
+		await d.evaluate('history.back()');
+		await d.waitFor(`window.__documentToken === ${JSON.stringify(reloadToken)} && window.__restoredFromCache === true`);
+		await d.evaluate('probe(false)'); await d.close();
+		assert.deepEqual(d.pageErrors, []);
+		assert.ok(validateRawCoverage(path.join(root, 'raw'), productionFiles(root)) > 0);
+		generateCoverageReport(root, path.join(root, 'raw'), path.join(root, 'reports'));
+		const report = JSON.parse(fs.readFileSync(path.join(root, 'reports/coverage-final.json'), 'utf8'))[path.join(root, 'js/probe.js')];
+		assert.equal(report.f[0], 9); assert.deepEqual(report.b[0], [2, 7]);
+	});
 	it('accumulates ordinary operations without writing a full snapshot for every read, then collects every call at close', async t => {
 		const root = workspace(t);
 		const d = await open(t, root);

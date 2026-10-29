@@ -3,9 +3,9 @@
  * Renders monthly transaction breakdown and recent transaction feeds with click-to-edit delegation.
  */
 
-import { captureRenderSession } from './render_session.js';
+import { captureRenderSession, readInRenderSession } from './render_session.js';
+import { beginFormBusy } from './form_busy.js';
 import {
-	formatDate,
 	escapeHtml,
 	resolveTransactionDisplayInfo,
 	filterTransactionsByCriteria
@@ -23,6 +23,7 @@ export class TransactionListController {
 		this._recentRenderGeneration = 0;
 		this._listPointers = new Map();
 		this._listWaiters = new Set();
+		this.confirmationOperations = new Map();
 	}
 
 	get db() {
@@ -78,6 +79,38 @@ export class TransactionListController {
 		this._listPointers.clear(); this.releaseListWaiters();
 	}
 
+	cancelPendingOperations() {
+		for (const operation of this.confirmationOperations.values()) operation.release();
+		this.confirmationOperations.clear();
+	}
+
+	async confirmTransaction(original) {
+		if (!original || this.confirmationOperations.has(original.id) || this.coordinator.bulkEditController.busy || this.coordinator.isKeyLocked) return;
+		const button = [...document.querySelectorAll('.btn-confirm-tx')].find(item => item.dataset.id === original.id);
+		if (!button) return;
+		const operation = { release: beginFormBusy(button, button, '確定中…') };
+		this.confirmationOperations.set(original.id, operation);
+		const valid = captureRenderSession(this.coordinator, () => this.confirmationOperations.get(original.id) === operation);
+		let committed = false;
+		try {
+			const approved = await this.coordinator.approveClosedChanges([{ ...original, status: 'confirmed' }], [original], { isSessionValid: valid });
+			if (approved === null || !valid()) return;
+			await this.db.confirmPlannedTransaction(original, approved, { isSessionValid: valid });
+			committed = true;
+			if (!valid()) return;
+			try { await this.coordinator.refreshAfterTransactionChange({ isSessionValid: valid }); }
+			catch (error) { if (valid()) alert(`確定は保存済みです。表示の更新に失敗しました: ${error.message}`); }
+			if (valid()) this.coordinator.showToast('予定を確定しました。');
+		} catch (error) { if (valid() && !committed) alert(`予定を確定できませんでした: ${error.message}`); }
+		finally {
+			if (this.confirmationOperations.get(original.id) === operation) {
+				operation.release(); this.confirmationOperations.delete(original.id);
+				const current = [.../** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll('.btn-confirm-tx'))].find(item => item.dataset.id === original.id);
+				if (current) { current.disabled = this.coordinator.bulkEditController.busy; current.textContent = '確定'; current.removeAttribute('aria-busy'); }
+			}
+		}
+	}
+
 	async goToPage(page) {
 		if (!Number.isInteger(page) || page < 1 || page > this.totalPages || page === this.currentPage || this.coordinator.isKeyLocked) return;
 		const operation = ++this._navigationGeneration;
@@ -115,58 +148,52 @@ export class TransactionListController {
 			referencedCategories.add(tx.actual_category_id);
 		}
 		const accSelect = document.getElementById('select-account-filter');
-		if (accSelect) {
-			const currentAcc = accSelect.value || 'all';
-			const accounts = (masterConfig?.accounts || []).filter(a => !a.is_archived || referencedAccounts.has(a.id));
-			accSelect.innerHTML = [
-				'<option value="all">すべての口座</option>',
-				...accounts.map(a => `<option value="${escapeHtml(a.id)}">🏦 ${escapeHtml(a.name)}</option>`)
-			].join('');
-			if (currentAcc === 'all' || accounts.some(a => a.id === currentAcc)) {
-				accSelect.value = currentAcc;
-			} else {
-				accSelect.value = 'all';
-			}
+		const currentAcc = accSelect.value || 'all';
+		const accounts = (masterConfig?.accounts || []).filter(a => !a.is_archived || referencedAccounts.has(a.id));
+		accSelect.innerHTML = [
+			'<option value="all">すべての口座</option>',
+			...accounts.map(a => `<option value="${escapeHtml(a.id)}">🏦 ${escapeHtml(a.name)}</option>`)
+		].join('');
+		if (currentAcc === 'all' || accounts.some(a => a.id === currentAcc)) {
+			accSelect.value = currentAcc;
+		} else {
+			accSelect.value = 'all';
 		}
 
 		const catSelect = document.getElementById('select-category-filter');
-		if (catSelect) {
-			const currentCat = catSelect.value || 'all';
-			const categories = (masterConfig?.categories || []).filter(c => !c.is_archived || referencedCategories.has(c.id));
-			catSelect.innerHTML = [
-				'<option value="all">すべての費目</option>',
-				'<option value="cat_unclassified">未分類</option>',
-				...categories.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.icon || '🏷️')} ${escapeHtml(c.name)}</option>`)
-			].join('');
-			if (currentCat === 'all' || currentCat === 'cat_unclassified' || categories.some(c => c.id === currentCat)) {
-				catSelect.value = currentCat;
-			} else {
-				catSelect.value = 'all';
-			}
+		const currentCat = catSelect.value || 'all';
+		const categories = (masterConfig?.categories || []).filter(c => !c.is_archived || referencedCategories.has(c.id));
+		catSelect.innerHTML = [
+			'<option value="all">すべての費目</option>',
+			'<option value="cat_unclassified">未分類</option>',
+			...categories.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.icon || '🏷️')} ${escapeHtml(c.name)}</option>`)
+		].join('');
+		if (currentCat === 'all' || currentCat === 'cat_unclassified' || categories.some(c => c.id === currentCat)) {
+			catSelect.value = currentCat;
+		} else {
+			catSelect.value = 'all';
 		}
 
 		const tagSelect = document.getElementById('select-tag-filter');
-		if (tagSelect) {
-			const currentTag = tagSelect.value || 'all';
-			const tagSet = new Set();
-			for (const t of txs || []) {
-				if (t && !t.is_deleted && Array.isArray(t.tags)) {
-					for (const tag of t.tags) {
-						const clean = String(tag || '').trim();
-						if (clean) tagSet.add(clean);
-					}
+		const currentTag = tagSelect.value || 'all';
+		const tagSet = new Set();
+		for (const t of txs) {
+			if (t && !t.is_deleted && Array.isArray(t.tags)) {
+				for (const tag of t.tags) {
+					const clean = String(tag || '').trim();
+					if (clean) tagSet.add(clean);
 				}
 			}
-			const sortedTags = Array.from(tagSet).sort((a, b) => a.localeCompare(b));
-			tagSelect.innerHTML = [
-				'<option value="all">すべてのタグ</option>',
-				...sortedTags.map(tag => `<option value="${escapeHtml(tag)}">🏷️ ${escapeHtml(tag)}</option>`)
-			].join('');
-			if (currentTag === 'all' || tagSet.has(currentTag)) {
-				tagSelect.value = currentTag;
-			} else {
-				tagSelect.value = 'all';
-			}
+		}
+		const sortedTags = Array.from(tagSet).sort((a, b) => a.localeCompare(b));
+		tagSelect.innerHTML = [
+			'<option value="all">すべてのタグ</option>',
+			...sortedTags.map(tag => `<option value="${escapeHtml(tag)}">🏷️ ${escapeHtml(tag)}</option>`)
+		].join('');
+		if (currentTag === 'all' || tagSet.has(currentTag)) {
+			tagSelect.value = currentTag;
+		} else {
+			tagSelect.value = 'all';
 		}
 	}
 
@@ -197,13 +224,17 @@ export class TransactionListController {
 			: '';
 
 		const amountPrefix = t.type === 'expense' ? '-' : t.type === 'income' ? '+' : '';
+		const bulkBusy = this.coordinator.bulkEditController?.busy;
 		const deleteBtnHtml = includeDeleteBtn
-			? `<button class="btn btn-secondary btn-sm btn-delete-tx" data-id="${escapeHtml(t.id)}" style="margin-top: 4px;">削除</button>`
+			? `<button type="button" class="btn btn-secondary btn-sm btn-delete-tx" data-id="${escapeHtml(t.id)}" ${bulkBusy ? 'disabled' : ''} style="margin-top: 4px;">削除</button>`
 			: '';
+		const confirming = this.confirmationOperations.has(t.id);
+		const confirmBtnHtml = includeDeleteBtn && isPlanned && !t.amount_pending && Number.isSafeInteger(t.amount) && t.amount >= 0
+			? `<button type="button" class="btn btn-primary btn-sm btn-confirm-tx" data-id="${escapeHtml(t.id)}" ${bulkBusy || confirming ? 'disabled' : ''}${confirming ? ' aria-busy="true"' : ''}>${confirming ? '<span class="spinner" aria-hidden="true"></span>確定中…' : '確定'}</button>` : '';
 
 		return `
 			<div class="tx-item ${isPlanned ? 'planned' : ''} clickable" data-id="${escapeHtml(t.id)}">
-				${includeDeleteBtn ? `<label class="bulk-check-label" title="この明細を選択"><input type="checkbox" data-bulk-id="${escapeHtml(t.id)}" aria-label="${escapeHtml(t.date + ' ' + (t.memo || '') + 'を選択')}" ${this.coordinator.bulkEditController?.selectedIds.has(t.id) ? 'checked' : ''}></label>` : ''}
+				${includeDeleteBtn ? `<label class="bulk-check-label" title="この明細を選択"><input type="checkbox" data-bulk-id="${escapeHtml(t.id)}" aria-label="${escapeHtml(t.date + ' ' + (t.memo || '') + 'を選択')}" ${this.coordinator.bulkEditController?.selectedIds.has(t.id) ? 'checked' : ''} ${bulkBusy ? 'disabled' : ''}></label>` : ''}
 				<div class="tx-info">
 					<span class="tx-title">${escapeHtml(display.primaryTitle)} <span class="tx-edit-hint" title="タッチして編集">✏️</span></span>
 					${subInfoHtml}
@@ -217,65 +248,67 @@ export class TransactionListController {
 					<div class="tx-amount ${escapeHtml(t.type)}">
 						${t.amount_pending ? '金額未入力' : `${amountPrefix}¥${Number(t.amount || 0).toLocaleString()}`}
 					</div>
-					${deleteBtnHtml}
+					${confirmBtnHtml} ${deleteBtnHtml}
 				</div>
 			</div>
 		`;
 	}
 
 	async renderMonthTransactions({ isSessionValid = null } = {}) {
-		const valid = captureRenderSession(this.coordinator, isSessionValid);
-		if (!valid()) return;
+		const sessionValid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!sessionValid()) return;
 		const generation = ++this._renderGeneration;
-		const key = this.db.encryptionKey;
+		const valid = () => sessionValid() && generation === this._renderGeneration;
 		const list = document.getElementById('month-tx-list');
-		if (!list) return;
 
-		const granularity = this.coordinator.analyticsGranularity || 'monthly';
+		const granularity = this.coordinator.analyticsGranularity;
 		let txs = [];
 		const titleEl = document.getElementById('month-tx-list-title');
 		let title;
 
 		if (this.calendarMonthFilter && document.getElementById('select-type-filter')?.value === 'income') {
-			const all = await this.db.getTransactions({ includeDeleted: false });
+			const all = await readInRenderSession(valid, () => this.db.getTransactions({ includeDeleted: false }));
+			if (!valid() || !all) return;
 			txs = all.filter(tx => tx.date?.slice(0, 7) === this.calendarMonthFilter);
 			title = `📋 ${this.calendarMonthFilter} (取引日別の当月) の明細一覧`;
 		} else if (granularity === 'yearly') {
-			const targetYear = this.coordinator.selectedYear || new Date().getFullYear();
+			const targetYear = this.coordinator.selectedYear;
 			title = `📋 ${targetYear}年 (年間) の明細一覧`;
-			const all = await this.db.getTransactions({ includeDeleted: false });
+			const all = await readInRenderSession(valid, () => this.db.getTransactions({ includeDeleted: false }));
+			if (!valid() || !all) return;
 			txs = all.filter(t => t.target_month && t.target_month.startsWith(`${targetYear}-`));
 		} else if (granularity === 'daily') {
-			const targetDate = this.coordinator.selectedDate || (formatDate ? formatDate(new Date()) : new Date().toISOString().slice(0, 10));
+			const targetDate = this.coordinator.selectedDate;
 			title = `📋 ${targetDate} (日別) の明細一覧`;
-			const all = await this.db.getTransactions({ includeDeleted: false });
+			const all = await readInRenderSession(valid, () => this.db.getTransactions({ includeDeleted: false }));
+			if (!valid() || !all) return;
 			txs = all.filter(t => t.date === targetDate);
 		} else {
-			const targetMonth = this.coordinator.currentMonth || (new Date().toISOString().slice(0, 7));
+			const targetMonth = this.coordinator.currentMonth;
 			title = `📋 ${targetMonth} (月別) の明細一覧`;
-			txs = await this.db.getTransactions({ target_month: targetMonth });
+			txs = await readInRenderSession(valid, () => this.db.getTransactions({ target_month: targetMonth }));
 		}
 
+		if (!valid() || !txs) return;
 		txs.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.created_at || '').localeCompare(a.created_at || ''));
 
-		if (!valid() || generation !== this._renderGeneration) return;
-		const masterConfig = await this.db.getMasterConfig();
-		if (!valid()) return;
+		const masterConfig = await readInRenderSession(valid, () => this.db.getMasterConfig());
+		if (!valid() || !masterConfig) return;
 		await this.waitForListIdle(list);
-		if (!valid() || generation !== this._renderGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
-		if (titleEl) titleEl.textContent = title;
+		if (!valid()) return;
+		titleEl.textContent = title;
 
 		this.populateFilterDropdowns(txs, masterConfig);
 
-		const filterStatus = document.getElementById('select-status-filter')?.value || 'all';
-		const filterAccount = document.getElementById('select-account-filter')?.value || 'all';
-		const filterCategory = document.getElementById('select-category-filter')?.value || 'all';
-		const filterTag = document.getElementById('select-tag-filter')?.value || 'all';
+		const filterStatus = document.getElementById('select-status-filter').value;
+		const filterAccount = document.getElementById('select-account-filter').value;
+		const filterCategory = document.getElementById('select-category-filter').value;
+		const filterTag = document.getElementById('select-tag-filter').value;
 		const filterKeyword = document.getElementById('input-tx-search')?.value || '';
 
 		const filtered = filterTransactionsByCriteria(txs, {
 			status: filterStatus,
-			type: document.getElementById('select-type-filter')?.value || 'all',
+			type: document.getElementById('select-type-filter').value,
 			categoryAxis: document.getElementById('select-type-filter')?.value === 'income' ? (this.coordinator.useActualCategoryAxis ? 'actual' : 'accounting') : 'both',
 			includePlanned: this.coordinator.showPlanned,
 			accountId: filterAccount,
@@ -300,9 +333,16 @@ export class TransactionListController {
 		// Attach click listeners to .tx-item.clickable (ignoring clicks on delete button)
 		list.querySelectorAll('.tx-item.clickable').forEach(item => {
 			item.addEventListener('click', (e) => {
-				if (e.target.closest('.btn-delete-tx, .bulk-check-label')) return;
+				if (e.target.closest('.btn-delete-tx, .btn-confirm-tx, .bulk-check-label') || this.coordinator.bulkEditController.busy) return;
 				const id = item.dataset.id;
 				if (id) this.coordinator.txEditController.openEditTransactionModal(id);
+			});
+		});
+		list.querySelectorAll('.btn-confirm-tx').forEach(button => {
+			button.addEventListener('click', event => {
+				event.stopPropagation();
+				const original = pageItems.find(tx => tx.id === button.dataset.id);
+				void this.confirmTransaction(structuredClone(original));
 			});
 		});
 
@@ -321,16 +361,18 @@ export class TransactionListController {
 	}
 
 	async renderRecentTransactions({ isSessionValid = null } = {}) {
-		const valid = captureRenderSession(this.coordinator, isSessionValid);
-		if (!valid()) return;
+		const sessionValid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!sessionValid()) return;
 		const generation = ++this._recentRenderGeneration, key = this.db.encryptionKey;
+		const valid = () => sessionValid() && generation === this._recentRenderGeneration;
 		const list = document.getElementById('recent-tx-list');
-		if (!list) return;
-		const [all, masterConfig] = await Promise.all([
+
+		const values = await readInRenderSession(valid, () => Promise.all([
 			this.db.getTransactions(),
 			this.db.getMasterConfig()
-		]);
-		if (!valid()) return;
+		]));
+		if (!valid() || !values) return;
+		const [all, masterConfig] = values;
 		await this.waitForListIdle(list);
 		if (!valid() || generation !== this._recentRenderGeneration || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
 		const sorted = all.sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 5);
@@ -350,5 +392,4 @@ export class TransactionListController {
 		});
 	}
 }
-
 

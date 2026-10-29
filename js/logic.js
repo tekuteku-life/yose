@@ -23,6 +23,7 @@ export {
 export {
 	calculateTax,
 	generateRecurringTransactions,
+	planRecurringTransactions,
 	createPrepaidAmortizationTransactions,
 	createAdvancePaymentTransactions,
 	createAdvanceRepaymentTransaction,
