@@ -277,6 +277,7 @@ it('validates even unadopted standalone payroll references against candidate cat
 });
 it('rechecks payroll source references when category type changes during import encryption', async () => {
 	const db = new YoseDB(); await db.init(); db.setEncryptionKey(await generateDatabaseMasterKey());
+	await db.mutateMasterConfig(config => { config.point_payment_defaults = null; });
 	await db.importFullData({ annual_budgets: { 2026: { furusato_sources: { salary: [{ category_id: 'cat_income_main', subcategory_id: null }] } } } });
 	const encrypt = db.encryptRecord.bind(db); let once = true, afterCategoryChange;
 	db.encryptRecord = async (...args) => {
@@ -284,5 +285,6 @@ it('rechecks payroll source references when category type changes during import 
 		return encrypt(...args);
 	};
 	await assert.rejects(db.importFullData({ annual_budgets: { 2026: { furusato_sources: { salary: [{ category_id: 'cat_point_income', subcategory_id: null }] } }, 2027: { expense_budget: 100 } } }));
+	assert.ok(afterCategoryChange, 'the concurrent category type change must commit before validating the imported sources');
 	assert.deepEqual(await db.captureImportState(), afterCategoryChange);
 });

@@ -34,12 +34,11 @@ export class InsightsController {
 	async renderMetadata({ isSessionValid = null } = {}) {
 		const valid = captureRenderSession(this.coordinator, isSessionValid);
 		if (!valid()) return;
-		const generation = ++this.metadataGeneration, session = this.generation, key = this.db.encryptionKey;
+		const generation = ++this.metadataGeneration, session = this.generation;
 		const target = document.getElementById('data-metadata');
-		if (this.coordinator.isKeyLocked) return;
 		try {
 			const data = await this.db.getDataMetadata();
-			if (!valid() || generation !== this.metadataGeneration || session !== this.generation || key !== this.db.encryptionKey || this.coordinator.isKeyLocked) return;
+			if (!valid() || generation !== this.metadataGeneration || session !== this.generation) return;
 			const items = [
 				`明細 ${data.count.toLocaleString()}件（確定 ${data.confirmed.toLocaleString()}件 / 予定 ${data.planned.toLocaleString()}件）・削除済み ${data.deleted.toLocaleString()}件`,
 				`全体サイズ ${data.bytes.toLocaleString()}バイト`,
@@ -48,7 +47,7 @@ export class InsightsController {
 				`年平均 ${data.yearlyAverage.toFixed(2)}件（${data.years}年）`
 			];
 			target.innerHTML = `<ul class="metadata-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
-		} catch (error) { if (valid() && generation === this.metadataGeneration && session === this.generation && !this.coordinator.isKeyLocked) target.textContent = `データ情報を取得できませんでした: ${error.message}`; }
+		} catch (error) { if (valid() && generation === this.metadataGeneration && session === this.generation) target.textContent = `データ情報を取得できませんでした: ${error.message}`; }
 	}
 	renderInvestment(config) {
 		this.investmentConfig = structuredClone(config);
@@ -91,8 +90,8 @@ export class InsightsController {
 	}
 	async commitInvestment(accountId, date, value, original) {
 		if (this.investmentBusy || this.coordinator.isKeyLocked) return;
-		const session = this.generation, key = this.db.encryptionKey;
-		const valid = () => session === this.generation && key === this.db.encryptionKey && !this.coordinator.isKeyLocked;
+		const session = this.generation;
+		const valid = captureRenderSession(this.coordinator, () => session === this.generation);
 		this.setFormBusy(true);
 		let committed = false;
 		try {
@@ -102,11 +101,11 @@ export class InsightsController {
 			document.getElementById('investment-error').textContent = '';
 			await this.afterSave(value === null ? '投資評価記録を削除しました。' : '投資評価記録を保存しました。', valid);
 		} catch (error) { if (valid()) document.getElementById('investment-error').textContent = `${committed ? '保存済みです。表示を更新してください。' : ''}${error.message}`; }
-		finally { if (valid()) { this.setFormBusy(false); } }
+		finally { if (session === this.generation) this.setFormBusy(false); }
 	}
 	async afterSave(message, valid) {
 		this.coordinator.showToast(message);
 		void this.coordinator.syncManager?.queueMasterSync();
-		if (valid()) await this.coordinator.refreshAllViews();
+		if (valid()) await this.coordinator.refreshAllViews({ isSessionValid: valid });
 	}
 }

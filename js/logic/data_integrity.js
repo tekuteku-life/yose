@@ -62,6 +62,15 @@ export function createDataIntegrityValidator() {
 				if (cat && categories.has(cat) && expectedType && categories.get(cat).type !== expectedType) issue('category_type', `${path}.${prefix}category_id`, '明細種別と費目の収支種別が一致しません', [cat, categories.get(cat).type, expectedType]);
 			}
 		};
+		const point = master.point_payment_defaults;
+		if (point != null) {
+			if (!object(point) || Object.keys(point).length !== 2 || !Object.hasOwn(point, 'category_id') || !Object.hasOwn(point, 'subcategory_id') || !safeId(point.category_id) || !(point.subcategory_id === null || safeId(point.subcategory_id))) issue('shape', 'point_payment_defaults', 'ポイント相殺の費目と任意の内訳が不正です', point);
+			else {
+				ref(point.category_id, categories, 'point_payment_defaults.category_id', true);
+				ref(point.subcategory_id, children.get(point.category_id) || new Map(), 'point_payment_defaults.subcategory_id');
+				if (categories.has(point.category_id) && categories.get(point.category_id).type !== 'income') issue('category_type', 'point_payment_defaults.category_id', 'ポイント相殺には収入費目が必要です', point.category_id);
+			}
+		}
 		for (const [id, item] of accounts) {
 			const path = `accounts.${id}`;
 			if (!accountTypes.includes(item.type)) issue('enum', `${path}.type`, '口座種別が不正です', item.type);
@@ -112,6 +121,9 @@ export function createDataIntegrityValidator() {
 				if ((!deleted || item.status !== undefined) && !['confirmed', 'planned'].includes(item.status)) issue('enum', `${path}.status`, '明細状態が不正です', item.status);
 				if (item.amount_pending === true && (item.status !== 'planned' || item.amount !== 0)) issue('pending', `${path}.amount_pending`, '金額未入力の明細は金額0の予定である必要があります', [item.status, item.amount]);
 				if (item.previous_target_month != null && !month(item.previous_target_month)) issue('month', `${path}.previous_target_month`, '移動元月が不正です', item.previous_target_month);
+				if (item.reclose_approved_months !== undefined) {
+					for (const approved of list(item.reclose_approved_months, `${path}.reclose_approved_months`)) if (!month(approved)) issue('month', `${path}.reclose_approved_months`, '再月締めの承認月が不正です', approved);
+				}
 			}
 			number(item.amount, `${path}.amount`, { required: !deleted || item.amount !== undefined, integer: true, min: 0 });
 			bools(item, path, ['is_deleted', 'amount_pending', 'is_active', 'is_payment_record', 'is_point_split']);
@@ -342,6 +354,12 @@ export function createDataIntegrityValidator() {
 			const master = after?.master_config || {}, previous = new Map(rows(before?.transactions).map(tx => [tx.id, tx]));
 			const accounts = new Map(rows(master.accounts).map(item => [item.id, item]));
 			const categories = new Map(rows(master.categories).map(item => [item.id, item]));
+			const defaults = master.point_payment_defaults;
+			const oldDefaults = before?.master_config?.point_payment_defaults;
+			if (defaults && (defaults.category_id !== oldDefaults?.category_id || (defaults.subcategory_id ?? null) !== (oldDefaults?.subcategory_id ?? null))) {
+				const parent = categories.get(defaults.category_id);
+				if (parent?.is_archived || rows(parent?.subcategories).find(sub => sub.id === defaults.subcategory_id)?.is_archived) violations.push({ message: 'point_payment_defaults: アーカイブされた既定分類は選択できません' });
+			}
 			for (const tx of rows(after?.transactions)) {
 				if (!object(tx) || tx.is_deleted) continue;
 				const old = previous.get(tx.id);

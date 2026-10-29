@@ -11,6 +11,7 @@ export class MaintenanceController {
 		this.busy = false;
 		this.loading = false;
 		this.refreshGeneration = 0;
+		this.migrationOperation = 0;
 		this.sources = [];
 	}
 
@@ -31,12 +32,22 @@ export class MaintenanceController {
 			<button type="button" id="btn-migrate-maintenance" class="btn btn-primary">対象明細を一括移行</button>
 			<div id="maintenance-records" class="table-container"></div>`;
 		document.getElementById('tab-settings')?.append(panel);
-		panel.addEventListener('toggle', () => { if (panel.open) this.refresh().catch(error => this.report(error, '一覧更新')); });
+		panel.addEventListener('toggle', () => this.refresh().catch(error => this.report(error, '一覧更新')));
 		document.getElementById('btn-refresh-maintenance').addEventListener('click', () => this.refresh().catch(error => this.report(error, '一覧更新')));
 		document.getElementById('maintenance-source').addEventListener('change', () => this.populateTargets());
 		document.getElementById('maintenance-target').addEventListener('change', () => this.populateChildren());
 		document.getElementById('maintenance-subcategory').addEventListener('change', () => this.updateCount());
 		document.getElementById('btn-migrate-maintenance').addEventListener('click', () => this.migrate());
+	}
+
+	cancel() {
+		this.migrationOperation++; this.refreshGeneration++;
+		this.busy = false; this.loading = false;
+		this.records = []; this.config = null; this.sources = [];
+		if (!document.getElementById('maintenance-panel')) return;
+		for (const id of ['maintenance-source', 'maintenance-target', 'maintenance-subcategory']) document.getElementById(id).replaceChildren();
+		document.getElementById('maintenance-refresh-status').textContent = '';
+		this.updateControls();
 	}
 
 	report(error, action = '移行処理') { alert(`${action}を完了できませんでした: ${error.message}`); }
@@ -146,7 +157,9 @@ export class MaintenanceController {
 	}
 
 	async migrate() {
-		if (this.busy || this.loading) return;
+		if (this.busy || this.loading || this.coordinator.isKeyLocked) return;
+		const sessionValid = captureRenderSession(this.coordinator), operation = ++this.migrationOperation;
+		const valid = () => sessionValid() && operation === this.migrationOperation;
 		this.busy = true;
 		this.updateControls();
 		try {
@@ -155,22 +168,25 @@ export class MaintenanceController {
 			const config = this.config;
 			const records = this.records;
 			const planned = buildMasterMigration(records, config, source, target);
-			if (!planned.length) return;
 			const destination = (/** @type {HTMLSelectElement} */ (document.getElementById('maintenance-target'))).selectedOptions[0].textContent;
 			const child = (/** @type {HTMLSelectElement} */ (document.getElementById('maintenance-subcategory'))).selectedOptions[0]?.textContent;
 			if (!confirm(`${source.label}を参照する${planned.length}件を「${destination}${target.subcategoryId ? ` > ${child}` : ''}」へ移行しますか？\n明細の金額・メモと関連グループは保持します。`)) return;
 			const originals = records.filter(record => planned.some(item => item.id === record.id));
-			const approved = await this.coordinator.approveClosedChanges(planned, originals);
-			if (approved === null) return;
-			const changed = await this.coordinator.db.migrateArchivedMaster(source, target, records, config, approved);
+			const approved = await this.coordinator.approveClosedChanges(planned, originals, { isSessionValid: valid });
+			if (!valid() || approved === null) return;
+			const changed = await this.coordinator.db.migrateArchivedMaster(source, target, records, config, approved, { isSessionValid: valid });
+			if (!valid()) return;
 			alert(`${changed.length}件の明細を移行しました。通信未完了の変更は端末内に保持され、差分同期で反映されます。`);
-			await this.coordinator.refreshAllViews();
-			this.coordinator.syncManager?.syncPendingDiffs().catch(() => this.coordinator.showToast('同期できませんでした。移行内容は端末内に保持しています。'));
-		} catch (error) { this.report(error); }
+			await this.coordinator.refreshAllViews({ isSessionValid: valid });
+			if (!valid()) return;
+			this.coordinator.syncManager?.syncPendingDiffs().catch(() => { if (valid()) this.coordinator.showToast('同期できませんでした。移行内容は端末内に保持しています。'); });
+		} catch (error) { if (valid()) this.report(error); }
 		finally {
-			this.busy = false;
-			this.updateControls();
-			await this.refresh().catch(error => this.report(error, '一覧更新'));
+			if (valid()) {
+				this.busy = false;
+				this.updateControls();
+				await this.refresh({ isSessionValid: valid }).catch(error => { if (valid()) this.report(error, '一覧更新'); });
+			}
 		}
 	}
 }

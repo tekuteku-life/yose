@@ -9,9 +9,11 @@
 | [税・控除計算設計](furusato_calculation.md) | 費目割当、給与/生命/住宅の導出、専用タブと年額確認の正本である。 |
 | [内部設計書](internal_design.md) | 実装構成、計算、永続化、暗号、同期、排他/復旧方式である。 |
 | [設計テスト監査](design_test_audit.md) | 外部/内部設計と既存assertの対応、不足、仕様乖離、実行結果である。 |
+| [全対象カバレッジ受入の是正](coverage_acceptance.md) | 36ファイルの不足観点、必須DOM/正規出力契約、不要処理除去と受入条件である。 |
 | [UIテスト監査](ui_test_audit.md) | UI回帰の追加経緯と領域別確認である。 |
 | [グラフ・年間目標設計](chart_budget_improvements.md) | 推移操作、収入内訳、目標連動の正本である。 |
 | [過去明細の一括編集可否](bulk_edit_eligibility.md) | R/E/I-3.64の共通能力・金融構造保護・制限理由・キャンセルと戻る操作である。 |
+| [明細操作・同期・大量データの改善](transaction_workflow_improvements.md) | R/E/I-3.65〜3.71の同期結果・一括削除・確定・busy・性能・予定重複・ポイント既定の正本である。 |
 | [資産表示・個別参照・年間月締め](asset_trends_annual_closing.md) | R/E/I-3.63の表示階層・ヒット判定・年次締め・工程再入の詳細である。 |
 | [GAS認証是正](gas_auth_hardening.md) | 管理登録・時刻/点検証・永続再送拒否の正本である。 |
 | [開発プロセス](development_process.md) | 変更手順と独立レビュー、受入基準である。 |

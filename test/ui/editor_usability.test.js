@@ -323,7 +323,7 @@ describe('Editor and mobile usability', { timeout: 120000 }, () => {
 		const d = fixture.driver;
 		await d.evaluate(`(async () => {
 			const app=window.__yose_app, db=app.db, config=await db.getMasterConfig();
-			config.recurring_rules=[]; config.categories=[{id:'race_a',name:'A',type:'expense',subcategories:[{id:'sub_a',name:'A内訳'}]},{id:'race_b',name:'B',type:'expense',subcategories:[{id:'sub_b',name:'B内訳'}]}];
+			config.recurring_rules=[]; config.point_payment_defaults=null; config.categories=[{id:'race_a',name:'A',type:'expense',subcategories:[{id:'sub_a',name:'A内訳'}]},{id:'race_b',name:'B',type:'expense',subcategories:[{id:'sub_b',name:'B内訳'}]}];
 			await db.saveMasterConfig(config); await app.txInputController.populateMasterDropdowns();
 			const read=db.getMasterConfig.bind(db), update=app.txInputController.updateSubcategories.bind(app.txInputController);
 			window.__holdRead=true;

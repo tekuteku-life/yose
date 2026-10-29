@@ -23,7 +23,16 @@ export function createMockIndexedDB() {
 		get(key) {
 			const req = { onsuccess: null, onerror: null, result: undefined };
 			queueMicrotask(() => {
-				req.result = this.data.get(key) || null;
+				req.result = this.data.has(key) ? structuredClone(this.data.get(key)) : undefined;
+				if (req.onsuccess) req.onsuccess({ target: req });
+			});
+			return req;
+		}
+
+		getKey(key) {
+			const req = { onsuccess: null, onerror: null, result: undefined };
+			queueMicrotask(() => {
+				req.result = this.data.has(key) ? key : undefined;
 				if (req.onsuccess) req.onsuccess({ target: req });
 			});
 			return req;

@@ -64,12 +64,41 @@ export function generateRecurringTransactions(
 	existingTransactions = [],
 	todayStr = formatDate(new Date())
 ) {
+	return planRecurringTransactions(recurringRules, targetMonth, holidays, existingTransactions, todayStr).generated;
+}
+
+const recurringMatchKey = tx => JSON.stringify([
+	tx.target_month, tx.type || 'expense', tx.account_id, tx.to_account_id || null,
+	tx.category_id || null, tx.subcategory_id || null, tx.amount
+]);
+
+export function planRecurringTransactions(
+	recurringRules,
+	targetMonth,
+	holidays = [],
+	existingTransactions = [],
+	todayStr = formatDate(new Date())
+) {
 	if (!Array.isArray(recurringRules) || !targetMonth) {
-		return [];
+		return { generated: [], skipped_count: 0 };
 	}
 
 	const [tYear, tMonth] = targetMonth.split('-').map(Number);
 	const generated = [];
+	let skipped_count = 0;
+	const live = existingTransactions.filter(tx => !tx.is_deleted);
+	const linked = new Set(live.filter(tx => tx.recurring_rule_id).map(tx => JSON.stringify([tx.recurring_rule_id, tx.target_month])));
+	const referenced = new Set(live.flatMap(tx => [tx.related_tx_id, tx.advance_source_id, ...(Array.isArray(tx.advance_source_ids) ? tx.advance_source_ids : [])]).filter(Boolean));
+	const financialRole = tx => referenced.has(tx.id) || tx.is_point_split || tx.is_advance_split || tx.amortization_meta != null || tx.auto_settlement_meta != null || tx.related_tx_id || tx.advance_source_id || tx.advance_source_ids?.length
+		|| ['acc_receivable', 'acc_prepaid'].includes(tx.account_id) || ['acc_receivable', 'acc_prepaid'].includes(tx.to_account_id)
+		|| (Array.isArray(tx.tags) && tx.tags.some(tag => tag === 'ポイント併用' || tag === 'point_offset'));
+	const financialGroups = new Set(live.filter(financialRole).map(tx => tx.group_id).filter(Boolean));
+	const manual = new Map();
+	for (const tx of [...live].sort((a, b) => String(a.id).localeCompare(String(b.id)))) {
+		if (tx.recurring_rule_id || tx.amount_pending || !Number.isSafeInteger(tx.amount) || tx.amount < 0 || financialRole(tx) || financialGroups.has(tx.group_id)) continue;
+		const key = recurringMatchKey(tx);
+		manual.set(key, (manual.get(key) || 0) + 1);
+	}
 
 	for (const rule of recurringRules) {
 		if (!rule.is_active) continue;
@@ -94,12 +123,7 @@ export function generateRecurringTransactions(
 		}
 
 		// Check if already generated for this rule and target month
-		const alreadyExists = existingTransactions.some(
-			tx => tx.recurring_rule_id === rule.id &&
-				tx.target_month === targetMonth &&
-				!tx.is_deleted
-		);
-		if (alreadyExists) continue;
+		if (linked.has(JSON.stringify([rule.id, targetMonth]))) { skipped_count++; continue; }
 
 		// Compute scheduled day
 		const lastDay = getLastDayOfMonth(tYear, tMonth);
@@ -118,6 +142,7 @@ export function generateRecurringTransactions(
 			date: adjustedDateStr,
 			target_month: targetMonth,
 			status: 'planned',
+			...(rule.amount_pending ? { amount_pending: true } : {}),
 			type: rule.type || 'expense',
 			amount: rule.amount || 0,
 			tax_meta: null,
@@ -137,10 +162,14 @@ export function generateRecurringTransactions(
 			sync_status: 'unsynced'
 		};
 
+		const key = recurringMatchKey(tx), available = manual.get(key) || 0;
+		if (!tx.amount_pending && Number.isSafeInteger(tx.amount) && available > 0) {
+			manual.set(key, available - 1); skipped_count++; continue;
+		}
 		generated.push(tx);
 	}
 
-	return generated;
+	return { generated, skipped_count };
 }
 
 /**
@@ -384,10 +413,12 @@ export function createPointPaymentTransactions({
 	paymentAccountId,
 	payingAccountId,
 	pointAccountId = null,
-	categoryId = 'cat_daily',
+	categoryId = null,
 	subcategoryId = null,
 	actualCategoryId = null,
 	actualSubcategoryId = undefined,
+	offsetCategoryId = null,
+	offsetSubcategoryId = null,
 	taxMeta = null,
 	memo = '',
 	tags = []
@@ -460,6 +491,7 @@ export function createPointPaymentTransactions({
 	}
 
 	// Case B: Point offset on the payment account (Purchase expense + Point discount/income offset)
+	if (typeof offsetCategoryId !== 'string' || !offsetCategoryId) throw new Error('ポイント相殺の収入費目を設定してください。');
 	const txPurchase = {
 		id: buyId,
 		date,
@@ -494,10 +526,10 @@ export function createPointPaymentTransactions({
 		amount: point,
 		account_id: payAcc,
 		to_account_id: null,
-		category_id: 'cat_point_income',
-		subcategory_id: 'sub_point_offset',
-		actual_category_id: 'cat_point_income',
-		actual_subcategory_id: 'sub_point_offset',
+		category_id: offsetCategoryId,
+		subcategory_id: offsetSubcategoryId,
+		actual_category_id: offsetCategoryId,
+		actual_subcategory_id: offsetSubcategoryId,
 		recurring_rule_id: null,
 		amortization_meta: null,
 		memo: memo ? `${memo} (ポイント相殺)` : 'ポイント相殺分',

@@ -27,6 +27,8 @@ export class BackupMerger {
 		// 採用されない既存日・既存年の不正値も、非破壊マージ前に拒否する。
 		const incomingMasters = [data.master_config, data.annual_budgets ? { annual_budgets: data.annual_budgets } : null].filter(Boolean);
 		for (const incomingMaster of incomingMasters) {
+			const pointIssues = dataIntegrity.issues({ master_config: candidateCategories === undefined ? incomingMaster : { ...incomingMaster, categories: candidateCategories } }).filter(item => item.path.startsWith('point_payment_defaults') && (!['reference', 'category_type'].includes(item.code) || candidateCategories !== undefined));
+			requireType(!pointIssues.length, pointIssues.map(item => item.message).join(' / '));
 			const invalid = dataIntegrity.issues({ master_config: candidateCategories === undefined ? incomingMaster : { ...incomingMaster, categories: candidateCategories } }).filter(item => (item.path.startsWith('annual_budgets.') && !['reference', 'category_type'].includes(item.code)) || item.path.includes('.investment_history') || item.path.includes('.furusato_estimate') || item.path.includes('.furusato_calculation') || (item.path.includes('.furusato_sources') && (!['reference', 'category_type'].includes(item.code) || candidateCategories !== undefined)));
 			requireType(!invalid.length, invalid.map(item => item.message).join(' / '));
 		}
@@ -182,6 +184,7 @@ export class BackupMerger {
 	}
 
 	static mergeMasterConfig(localConfig, importedConfig, stats) {
+		if (localConfig.point_payment_defaults == null && importedConfig.point_payment_defaults != null) localConfig.point_payment_defaults = structuredClone(importedConfig.point_payment_defaults);
 		// 1. Accounts: union by id
 		if (Array.isArray(importedConfig.accounts)) {
 			if (!Array.isArray(localConfig.accounts)) localConfig.accounts = [];

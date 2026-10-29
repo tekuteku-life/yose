@@ -9,6 +9,31 @@ function setGasResponse(d, response) {
 	d.responses.set('/recovery-gas', request => JSON.parse(request.postData || '{}').action === 'fetch_master' ? { json: { success: true } } : response);
 }
 
+async function observeLocalEdits(d) {
+	await d.evaluate('(()=>{const edit=window.__yose_app.txEditController,save=edit.handleEditFormSubmit;window.__localEditJobs=[];edit.handleEditFormSubmit=function(...args){const promise=save.apply(this,args);window.__localEditJobs.push(promise);return promise;};})()');
+}
+
+async function finishLocalEdit(d) {
+	await d.evaluate('(async()=>{const promise=window.__localEditJobs.at(-1);if(!promise)throw new Error("local edit was not observed");await promise;})()');
+}
+
+async function finishMaintenance(d) {
+	await d.evaluate('window.__yose_app._transactionMaintenanceTask?.promise');
+}
+
+function gateTrailingPush(d, firstWait = null) {
+	let release;
+	const waiting = new Promise(resolve => { release = resolve; });
+	let pushes = 0;
+	d.responses.set('/recovery-gas', request => {
+		const body = JSON.parse(request.postData || '{}');
+		if (body.action === 'push_diff') pushes++;
+		const wait = body.action === 'push_diff' ? (pushes === 1 ? firstWait : pushes === 2 ? waiting : null) : null;
+		return { json: { success: true }, ...(wait ? { wait } : {}) };
+	});
+	return { release, count: () => pushes };
+}
+
 describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, () => {
 	const fixture = useBrowser();
 
@@ -96,9 +121,13 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 		await d.waitFor('document.querySelector("#month-tx-list [data-id=retry]") !== null');
 		await d.click('#month-tx-list .tx-item[data-id="retry"]');
 		await d.fill('#edit-tx-amount', '222');
+		await observeLocalEdits(d); const dialogs = await d.evaluate('window.__dialogs.length');
 		await submit(d, '#edit-tx-form');
-		await waitForDialog(d, '遡及更新エラー');
+		await finishLocalEdit(d); await finishMaintenance(d);
 		assert.equal((await records(d))[0].sync_status, 'unsynced');
+		assert.equal((await records(d))[0].amount, 222);
+		assert.match(await d.textContent('#sync-badge'), /失敗|未同期/);
+		assert.deepEqual(await d.evaluate(`window.__dialogs.slice(${dialogs}).filter(dialog=>dialog.type==='alert')`), []);
 		setGasResponse(d, { json: { success: true, snapshot: { schema_version: 2, last_closed_month: '2026-09', account_balances: {}, monthly_summaries: { '2026-09': { income_total: 0, expense_total: 222, net_income: -222 } } } } });
 		const start = d.requests.length;
 		await d.click('#btn-header-sync');
@@ -179,6 +208,7 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 		const d = fixture.driver;
 		await seed(d, [transaction('ack_window', { previous_target_month: '2026-09' })]);
 		await configureGas(d, { success: true });
+		const trailing = gateTrailingPush(d); await observeLocalEdits(d);
 		await d.evaluate(`
 			const db = window.__yose_app.db;
 			window.__originalEncrypt = db.encryptRecord;
@@ -197,33 +227,42 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 			await d.click('#month-tx-list .tx-item[data-id="ack_window"]');
 			await d.fill('#edit-tx-amount', '111');
 			await submit(d, '#edit-tx-form');
+			await finishLocalEdit(d);
 			await d.waitFor('window.__ackStarted');
 			await d.click('#month-tx-list .tx-item[data-id="ack_window"]');
+			await d.waitFor('document.querySelector("#modal-edit-tx").classList.contains("active")&&document.querySelector("#edit-tx-id").value==="ack_window"&&document.querySelector("#edit-tx-amount").value==="111"&&!document.querySelector("#edit-tx-amount").disabled');
 			await d.fill('#edit-tx-amount', '222');
 			await d.fill('#edit-tx-date', '2026-11-20');
 			await submit(d, '#edit-tx-form');
-			await d.waitFor('!document.getElementById("modal-edit-tx").classList.contains("active")');
+			await finishLocalEdit(d);
 			await d.evaluate('window.__releaseAck()');
-			await d.waitFor('!window.__yose_app.syncManager.isSyncing');
+			await d.waitFor(() => trailing.count() === 2);
 			const [latest] = await records(d);
 			assert.equal(latest.amount, 222);
 			assert.equal(latest.target_month, '2026-11');
 			assert.equal(latest.sync_status, 'unsynced');
 			assert.equal(latest.previous_target_month, '2026-09');
+			const pushes = d.requests.filter(r => r.url === gasUrl).map(r => JSON.parse(r.body)).filter(r => r.action === 'push_diff');
+			assert.equal(pushes[1].payload.transactions[0].amount, 222);
+			assert.equal(pushes[1].payload.transactions[0].target_month, '2026-11');
+			trailing.release(); await finishMaintenance(d);
+			const [final] = await records(d);
+			assert.equal(final.amount, 222); assert.equal(final.target_month, '2026-11'); assert.equal(final.sync_status, 'synced'); assert.equal(final.previous_target_month, undefined);
 		} finally {
-			await d.evaluate('window.__releaseAck(); window.__yose_app.db.encryptRecord = window.__originalEncrypt');
+			trailing.release(); await d.evaluate('window.__releaseAck?.()'); await finishMaintenance(d);
+			await d.evaluate('window.__yose_app.db.encryptRecord = window.__originalEncrypt');
 		}
 	});
 
 	for (const route of ['open', 'closed']) {
-		it(`keeps an edit made through the UI while ${route} is waiting unsynced`, async () => {
+		it(`keeps an edit made through the UI while ${route} is waiting, then sends the newest version`, async () => {
 			const d = fixture.driver;
 			const source = route === 'closed' ? '2026-09' : '2026-10';
 			await seed(d, [transaction('inflight', { date: source + '-20', target_month: source, sync_status: 'synced' })]);
 			let release;
 			const barrier = new Promise(resolve => { release = resolve; });
 			await configureGas(d, { success: true });
-			setGasResponse(d, { json: { success: true }, wait: barrier });
+			const trailing = gateTrailingPush(d, barrier); await observeLocalEdits(d);
 			try {
 				await cashflow(d);
 				await d.fill('#input-period-picker', source);
@@ -232,20 +271,29 @@ describe('Atomic saves and archived transaction recovery', { timeout: 120000 }, 
 				await d.fill('#edit-tx-date', '2026-10-20');
 				await d.fill('#edit-tx-amount', '111');
 				await submit(d, '#edit-tx-form');
-				await d.waitFor(async () => d.requests.some(r => r.url === gasUrl));
+				await finishLocalEdit(d);
+				await d.waitFor(() => trailing.count() === 1);
+				if (route === 'closed') await d.fill('#input-period-picker', '2026-10');
+				await d.waitFor('document.querySelector("#month-tx-list .tx-item[data-id=inflight]")?.checkVisibility()');
 				await d.click('#month-tx-list .tx-item[data-id="inflight"]');
+				await d.waitFor('document.querySelector("#modal-edit-tx").classList.contains("active")&&document.querySelector("#edit-tx-id").value==="inflight"&&document.querySelector("#edit-tx-amount").value==="111"&&!document.querySelector("#edit-tx-amount").disabled');
 				await d.fill('#edit-tx-amount', '222');
 				if (route === 'closed') await d.fill('#edit-tx-date', '2026-11-20');
 				await submit(d, '#edit-tx-form');
-				await d.waitFor('!document.getElementById("modal-edit-tx").classList.contains("active")');
+				await finishLocalEdit(d);
 				release();
-				await d.waitFor('!window.__yose_app.syncManager.isSyncing');
+				await d.waitFor(() => trailing.count() === 2);
 				const [latest] = await records(d);
 				assert.equal(latest.amount, 222);
 				assert.equal(latest.sync_status, 'unsynced');
 				if (route === 'closed') assert.equal(latest.previous_target_month, '2026-09');
+				const pushes = d.requests.filter(r => r.url === gasUrl).map(r => JSON.parse(r.body)).filter(r => r.action === 'push_diff');
+				assert.equal(pushes[1].payload.transactions[0].amount, 222);
+				assert.equal(pushes[1].payload.transactions[0].target_month, route === 'closed' ? '2026-11' : '2026-10');
+				trailing.release(); await finishMaintenance(d);
+				const [final] = await records(d); assert.equal(final.amount, 222); assert.equal(final.sync_status, 'synced');
 			} finally {
-				release();
+				release(); trailing.release(); await finishMaintenance(d);
 			}
 		});
 	}

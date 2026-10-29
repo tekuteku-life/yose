@@ -16,7 +16,8 @@ import {
 
 import { TagMemoInput } from './tag_memo_input.js';
 import { linkedRepayment } from '../logic/advance_links.js';
-import { captureRenderSession } from './render_session.js';
+import { captureRenderSession, readInRenderSession } from './render_session.js';
+import { beginFormBusy, captureFormValues } from './form_busy.js';
 
 export class TransactionInputController {
 	constructor(coordinator) {
@@ -29,7 +30,12 @@ export class TransactionInputController {
 		this.calcEvaluatedResult = 0;
 		this.calcTaxMeta = null;
 		this.submitBusy = false;
+		this.submitOperation = 0;
+		this.modeGeneration = 0;
+		this.releaseSubmitBusy = null;
+		this.pointPaymentConfig = null;
 		this.settleBusy = false;
+		this.settleOperation = null;
 	}
 
 	get db() {
@@ -41,10 +47,9 @@ export class TransactionInputController {
 	}
 
 	setupInputForm() {
+		document.getElementById('select-point-account').addEventListener('change', () => this.renderPointOffsetNotice());
 		const inputDate = document.getElementById('input-date');
-		if (inputDate) {
-			inputDate.value = formatDate(new Date());
-		}
+		inputDate.value = formatDate(new Date());
 
 		// Mode buttons
 		const modeBtns = document.querySelectorAll('.mode-tab-btn');
@@ -56,18 +61,19 @@ export class TransactionInputController {
 
 		// Type change
 		const typeSelect = document.getElementById('input-type');
-		if (typeSelect) {
-			typeSelect.addEventListener('change', async () => {
-				const val = typeSelect.value;
-				this.coordinator.currentTaxMeta = null;
-				if (['advance', 'repay', 'prepaid', 'point'].includes(val)) {
-					await this.switchInputMode(val);
-				} else {
-					await this.switchInputMode('normal');
-					this.updateFormFieldsForType(val);
-				}
-			});
-		}
+		typeSelect.addEventListener('change', async () => {
+			if (this.submitBusy) return;
+			const val = typeSelect.value;
+			const operation = this.submitOperation;
+			const valid = captureRenderSession(this.coordinator, () => !this.submitBusy && operation === this.submitOperation && typeSelect.value === val);
+			this.coordinator.currentTaxMeta = null;
+			if (['advance', 'repay', 'prepaid', 'point'].includes(val)) {
+				await this.switchInputMode(val, { isSessionValid: valid });
+			} else {
+				const applied = await this.switchInputMode('normal', { isSessionValid: valid });
+				if (applied && valid()) this.updateFormFieldsForType(val);
+			}
+		});
 
 		// Clear taxMeta on manual amount input
 		const clearTaxMeta = () => { this.coordinator.currentTaxMeta = null; };
@@ -84,7 +90,7 @@ export class TransactionInputController {
 			const used = Number(inputPointUsed?.value) || 0;
 			const self = Math.max(0, total - used);
 			const disp = document.getElementById('display-point-self-amount');
-			if (disp) disp.textContent = `¥${self.toLocaleString()}`;
+			disp.textContent = `¥${self.toLocaleString()}`;
 		};
 		inputPointTotal?.addEventListener('input', updatePointDisplay);
 		inputPointUsed?.addEventListener('input', updatePointDisplay);
@@ -92,26 +98,20 @@ export class TransactionInputController {
 		// Mirror category checkbox
 		const chkSync = document.getElementById('chk-sync-actual-category');
 		const actContainer = document.getElementById('actual-category-container');
-		if (chkSync && actContainer) {
-			chkSync.addEventListener('change', () => {
-				actContainer.style.display = chkSync.checked ? 'none' : 'block';
-			});
-		}
+		chkSync.addEventListener('change', () => {
+			actContainer.style.display = chkSync.checked ? 'none' : 'block';
+		});
 
 		// Category change updates subcategories
 		const catSelect = document.getElementById('select-category');
-		if (catSelect) {
-			catSelect.addEventListener('change', () => {
-				this.updateSubcategories(catSelect.value, 'select-subcategory');
-			});
-		}
+		catSelect.addEventListener('change', () => {
+			this.updateSubcategories(catSelect.value, 'select-subcategory');
+		});
 
 		const actCatSelect = document.getElementById('select-actual-category');
-		if (actCatSelect) {
-			actCatSelect.addEventListener('change', () => {
-				this.updateSubcategories(actCatSelect.value, 'select-actual-subcategory');
-			});
-		}
+		actCatSelect.addEventListener('change', () => {
+			this.updateSubcategories(actCatSelect.value, 'select-actual-subcategory');
+		});
 
 		// Memo autocomplete & auto-categorization (Requirement 3.19 & 3.40.1)
 		const handleMemoChange = async (val, valid) => {
@@ -124,34 +124,27 @@ export class TransactionInputController {
 				const category = config.categories?.find(candidate => candidate.id === match.category_id && !candidate.is_archived && (candidate.type || 'expense') === type);
 				if (!category || (match.subcategory_id && !category.subcategories?.some(child => child.id === match.subcategory_id && !child.is_archived))) return;
 				const catSelect = document.getElementById('select-category');
-				if (catSelect) {
-					catSelect.value = match.category_id;
-					await this.updateSubcategories(match.category_id, 'select-subcategory', null, false, { isSessionValid: valid });
-					if (!valid() || catSelect.value !== match.category_id) return;
-					const subSelect = document.getElementById('select-subcategory');
-					if (subSelect) {
-						subSelect.value = match.subcategory_id || '';
-					}
-				}
+				catSelect.value = match.category_id;
+				await this.updateSubcategories(match.category_id, 'select-subcategory', null, false, { isSessionValid: valid });
+				if (!valid() || catSelect.value !== match.category_id) return;
+				const subSelect = document.getElementById('select-subcategory');
+				subSelect.value = match.subcategory_id || '';
 				const chkSync = document.getElementById('chk-sync-actual-category');
-				if (chkSync && chkSync.checked) {
+				if (chkSync.checked) {
 					const actCatSelect = document.getElementById('select-actual-category');
-					if (actCatSelect) {
-						actCatSelect.value = match.category_id;
-						await this.updateSubcategories(match.category_id, 'select-actual-subcategory', null, false, { isSessionValid: valid });
-						if (!valid() || actCatSelect.value !== match.category_id) return;
-						const actSubSelect = document.getElementById('select-actual-subcategory');
-						if (actSubSelect) {
-							actSubSelect.value = match.subcategory_id || '';
-						}
-					}
+					actCatSelect.value = match.category_id;
+					await this.updateSubcategories(match.category_id, 'select-actual-subcategory', null, false, { isSessionValid: valid });
+					if (!valid() || actCatSelect.value !== match.category_id) return;
+					const actSubSelect = document.getElementById('select-actual-subcategory');
+					actSubSelect.value = match.subcategory_id || '';
 				}
 			}
 		};
 		const safelyHandleMemoChange = async event => {
 			const sessionValid = captureRenderSession(this.coordinator);
+			const operation = this.submitOperation;
 			const val = (event?.target?.value ?? (typeof event === 'string' ? event : '')).trim();
-			const valid = () => sessionValid() && document.getElementById('input-memo')?.value.trim() === val;
+			const valid = () => sessionValid() && !this.submitBusy && operation === this.submitOperation && document.getElementById('input-memo')?.value.trim() === val;
 			try { await handleMemoChange(val, valid); }
 			catch (error) { if (valid()) alert(`分類候補を反映できませんでした: ${error.message}`); }
 		};
@@ -174,12 +167,10 @@ export class TransactionInputController {
 
 		// Form submit
 		const form = document.getElementById('tx-form');
-		if (form) {
-			form.addEventListener('submit', async (e) => {
-				e.preventDefault();
-				await this.handleFormSubmit();
-			});
-		}
+		form.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			await this.handleFormSubmit();
+		});
 	}
 
 	updatePointSelfAmount() {
@@ -187,14 +178,18 @@ export class TransactionInputController {
 		const used = Number(document.getElementById('input-point-used')?.value) || 0;
 		const self = Math.max(0, total - used);
 		const disp = document.getElementById('display-point-self-amount');
-		if (disp) disp.textContent = `¥${self.toLocaleString()}`;
+		disp.textContent = `¥${self.toLocaleString()}`;
 	}
 
-	async switchInputMode(mode) {
+	async switchInputMode(mode, { isSessionValid = null } = {}) {
+		const sessionValid = captureRenderSession(this.coordinator, isSessionValid);
+		if (this.submitBusy || !sessionValid()) return false;
+		const generation = ++this.modeGeneration, operation = this.submitOperation;
+		const valid = () => sessionValid() && !this.submitBusy && generation === this.modeGeneration && operation === this.submitOperation;
 		if (this.coordinator.currentMode === 'normal' && mode === 'prepaid') {
 			const total = document.getElementById('input-prepaid-total');
 			const amount = document.getElementById('input-amount');
-			if (total && amount && total.value === '') total.value = amount.value;
+			if (total.value === '') total.value = amount.value;
 		}
 		this.coordinator.currentMode = mode;
 		this.coordinator.currentTaxMeta = null;
@@ -206,14 +201,12 @@ export class TransactionInputController {
 
 		// Harmonize input-type selector
 		const typeSelect = document.getElementById('input-type');
-		if (typeSelect) {
-			if (mode === 'normal') {
-				if (['advance', 'repay', 'prepaid', 'point'].includes(typeSelect.value)) {
-					typeSelect.value = 'expense';
-				}
-			} else {
-				typeSelect.value = mode;
+		if (mode === 'normal') {
+			if (['advance', 'repay', 'prepaid', 'point'].includes(typeSelect.value)) {
+				typeSelect.value = 'expense';
 			}
+		} else {
+			typeSelect.value = mode;
 		}
 
 		const groupNormalAmount = document.getElementById('group-normal-amount');
@@ -226,37 +219,39 @@ export class TransactionInputController {
 		const labelAccount = document.getElementById('label-account');
 
 		// Reset visibility
-		if (groupNormalAmount) groupNormalAmount.style.display = (mode === 'normal') ? 'block' : 'none';
-		if (advanceFields) advanceFields.style.display = (mode === 'advance') ? 'block' : 'none';
-		if (prepaidFields) prepaidFields.style.display = (mode === 'prepaid') ? 'block' : 'none';
-		if (repayFields) repayFields.style.display = (mode === 'repay') ? 'block' : 'none';
-		if (pointFields) pointFields.style.display = (mode === 'point') ? 'block' : 'none';
+		groupNormalAmount.style.display = (mode === 'normal') ? 'block' : 'none';
+		advanceFields.style.display = (mode === 'advance') ? 'block' : 'none';
+		prepaidFields.style.display = (mode === 'prepaid') ? 'block' : 'none';
+		repayFields.style.display = (mode === 'repay') ? 'block' : 'none';
+		pointFields.style.display = (mode === 'point') ? 'block' : 'none';
 
 		if (mode === 'repay') {
-			if (catContainer) catContainer.style.display = 'none';
-			if (groupToAccount) groupToAccount.style.display = 'none';
-			if (labelAccount) labelAccount.textContent = '受取先口座（入金口座）';
+			catContainer.style.display = 'none';
+			groupToAccount.style.display = 'none';
+			labelAccount.textContent = '受取先口座（入金口座）';
 			this.renderUnsettledAdvanceList();
 		} else if (mode === 'advance') {
-			if (catContainer) catContainer.style.display = 'block';
-			if (groupToAccount) groupToAccount.style.display = 'none';
-			if (labelAccount) labelAccount.textContent = '立替支払元口座';
+			catContainer.style.display = 'block';
+			groupToAccount.style.display = 'none';
+			labelAccount.textContent = '立替支払元口座';
 		} else if (mode === 'prepaid') {
-			if (catContainer) catContainer.style.display = 'block';
-			if (groupToAccount) groupToAccount.style.display = 'none';
-			if (labelAccount) labelAccount.textContent = '決済口座（カード・銀行等）';
+			catContainer.style.display = 'block';
+			groupToAccount.style.display = 'none';
+			labelAccount.textContent = '決済口座（カード・銀行等）';
 		} else if (mode === 'point') {
-			if (catContainer) catContainer.style.display = 'block';
-			if (groupToAccount) groupToAccount.style.display = 'none';
-			if (labelAccount) labelAccount.textContent = '実質決済口座 (自己負担支払元)';
+			catContainer.style.display = 'block';
+			groupToAccount.style.display = 'none';
+			labelAccount.textContent = '実質決済口座 (自己負担支払元)';
 			this.updatePointSelfAmount();
+			this.renderPointOffsetNotice();
 		} else {
-			if (catContainer) catContainer.style.display = 'block';
-			if (labelAccount) labelAccount.textContent = '決済口座';
+			catContainer.style.display = 'block';
+			labelAccount.textContent = '決済口座';
 			const type = document.getElementById('input-type')?.value;
 			this.updateFormFieldsForType(type);
 		}
-		await this.populateCategoryDropdowns(typeSelect?.value || 'expense');
+		await this.populateCategoryDropdowns(typeSelect.value, { isSessionValid: valid, keepUnavailable: false });
+		return valid();
 	}
 
 	updateFormFieldsForType(type) {
@@ -265,28 +260,39 @@ export class TransactionInputController {
 		const catContainer = document.getElementById('category-selection-container');
 		const labelAccount = document.getElementById('label-account');
 		if (type === 'transfer') {
-			if (groupToAccount) groupToAccount.style.display = 'block';
-			if (catContainer) catContainer.style.display = 'none';
-			if (labelAccount) labelAccount.textContent = '振替元口座';
+			groupToAccount.style.display = 'block';
+			catContainer.style.display = 'none';
+			labelAccount.textContent = '振替元口座';
 		} else {
-			if (groupToAccount) groupToAccount.style.display = 'none';
-			if (catContainer) catContainer.style.display = 'block';
-			if (labelAccount) labelAccount.textContent = '決済口座';
+			groupToAccount.style.display = 'none';
+			catContainer.style.display = 'block';
+			labelAccount.textContent = '決済口座';
 		}
 	}
 
-	replaceOptionsKeepingSelection(select, html) {
+	replaceOptionsKeepingSelection(select, html, keepUnavailable = true) {
 		if (!select) return;
-		const previous = select.value;
+		const previous = select.value, previousOption = select.selectedOptions[0];
 		select.innerHTML = html;
 		if (Array.from(select.options).some(option => option.value === previous)) select.value = previous;
+		else if (keepUnavailable && previous && previousOption) {
+			const unavailable = /** @type {HTMLOptionElement} */ (previousOption.cloneNode(true));
+			if (!unavailable.hasAttribute('data-unavailable')) {
+				unavailable.textContent += '（利用不可）'; unavailable.dataset.unavailable = 'true';
+			}
+			unavailable.disabled = true;
+			select.append(unavailable); select.value = previous;
+		}
 	}
 
 	async populateMasterDropdowns({ isSessionValid = null } = {}) {
-		const valid = captureRenderSession(this.coordinator, isSessionValid), options = { isSessionValid: valid };
+		const operation = this.submitOperation, modeGeneration = this.modeGeneration;
+		const valid = captureRenderSession(this.coordinator, () => !this.submitBusy && operation === this.submitOperation && modeGeneration === this.modeGeneration && (!isSessionValid || isSessionValid())), options = { isSessionValid: valid };
 		if (!valid()) return;
-		const config = await this.db.getMasterConfig();
+		const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
 		if (!valid() || !config) return;
+		this.pointPaymentConfig = config;
+		this.renderPointOffsetNotice();
 
 		// Accounts
 		const accSelect = document.getElementById('select-account');
@@ -301,15 +307,13 @@ export class TransactionInputController {
 		this.replaceOptionsKeepingSelection(accSelect, buildAccountOptions());
 		this.replaceOptionsKeepingSelection(toAccSelect, buildAccountOptions());
 
-		if (pointAccSelect) {
-			this.replaceOptionsKeepingSelection(pointAccSelect, [
-				'<option value="">ポイント相殺として計上（口座指定なし）</option>',
-				...activeAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.type)})</option>`)
-			].join(''));
-		}
+		this.replaceOptionsKeepingSelection(pointAccSelect, [
+			'<option value="">ポイント相殺として計上（口座指定なし）</option>',
+			...activeAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.type)})</option>`)
+		].join(''));
 
 		// Categories filtered by current input-type
-		const currentType = document.getElementById('input-type')?.value || 'expense';
+		const currentType = document.getElementById('input-type').value;
 		await this.populateCategoryDropdowns(currentType, options);
 		if (!valid()) return;
 
@@ -321,11 +325,14 @@ export class TransactionInputController {
 		this.renderTagChips();
 	}
 
-	async populateCategoryDropdowns(type = 'expense', { isSessionValid = null } = {}) {
-		const valid = captureRenderSession(this.coordinator, isSessionValid), options = { isSessionValid: valid };
+	async populateCategoryDropdowns(type = 'expense', { isSessionValid = null, keepUnavailable = true } = {}) {
+		const operation = this.submitOperation, modeGeneration = this.modeGeneration;
+		const valid = captureRenderSession(this.coordinator, () => !this.submitBusy && operation === this.submitOperation && modeGeneration === this.modeGeneration && (!isSessionValid || isSessionValid())), options = { isSessionValid: valid, keepUnavailable };
 		if (!valid()) return;
-		const config = await this.db.getMasterConfig();
+		const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
 		if (!valid() || !config) return;
+		this.pointPaymentConfig = config;
+		this.renderPointOffsetNotice();
 
 		const catSelect = document.getElementById('select-category');
 		const actCatSelect = document.getElementById('select-actual-category');
@@ -341,70 +348,63 @@ export class TransactionInputController {
 
 		const previousCategory = catSelect?.value;
 		const previousActual = actCatSelect?.value;
-		this.replaceOptionsKeepingSelection(catSelect, buildCategoryOptions());
-		this.replaceOptionsKeepingSelection(actCatSelect, buildCategoryOptions());
+		this.replaceOptionsKeepingSelection(catSelect, buildCategoryOptions(), keepUnavailable);
+		this.replaceOptionsKeepingSelection(actCatSelect, buildCategoryOptions(), keepUnavailable);
 
-		if (activeCategories.length > 0) {
-			await this.updateSubcategories(catSelect?.value || activeCategories[0].id, 'select-subcategory', null, catSelect?.value === previousCategory, options);
-			if (!valid()) return;
-			await this.updateSubcategories(actCatSelect?.value || activeCategories[0].id, 'select-actual-subcategory', null, actCatSelect?.value === previousActual, options);
-		} else {
-			const subSelect = document.getElementById('select-subcategory');
-			const actSubSelect = document.getElementById('select-actual-subcategory');
-			if (subSelect) subSelect.innerHTML = '<option value="">（指定なし / 費目のみ）</option>';
-			if (actSubSelect) actSubSelect.innerHTML = '<option value="">（指定なし / 費目のみ）</option>';
-		}
+		await this.updateSubcategories(catSelect.value, 'select-subcategory', null, catSelect?.value === previousCategory, options);
+		if (!valid()) return;
+		await this.updateSubcategories(actCatSelect.value, 'select-actual-subcategory', null, actCatSelect?.value === previousActual, options);
 	}
 
-	async updateSubcategories(categoryId, targetSelectId, preserveId = null, keepSelection = false, { isSessionValid = null } = {}) {
-		const valid = captureRenderSession(this.coordinator, isSessionValid);
+	async updateSubcategories(categoryId, targetSelectId, preserveId = null, keepSelection = false, { isSessionValid = null, keepUnavailable = true } = {}) {
+		const editing = targetSelectId.startsWith('edit-'), owner = editing ? this.coordinator.txEditController : this;
+		const operation = editing ? owner.operation : this.submitOperation, generation = editing ? owner.generation : null;
+		const valid = captureRenderSession(this.coordinator, () => !(editing ? owner.busy : this.submitBusy) && operation === (editing ? owner.operation : this.submitOperation) && (!editing || generation === owner.generation) && (!isSessionValid || isSessionValid()));
 		if (!valid()) return;
 		const select = /** @type {HTMLSelectElement} */ (document.getElementById(targetSelectId));
 		if (!select) return;
-		const config = await this.db.getMasterConfig();
-		if (!valid()) return;
+		const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
+		if (!valid() || !config) return;
 		const parentIds = { 'select-subcategory': 'select-category', 'select-actual-subcategory': 'select-actual-category', 'edit-tx-subcategory': 'edit-tx-category', 'edit-tx-actual-subcategory': 'edit-tx-actual-category' };
 		const parent = document.getElementById(parentIds[targetSelectId]);
 		if (parent && parent.value !== categoryId) return;
-		const previous = keepSelection && select.options.length ? select.value : null;
 		const cat = (config?.categories || []).find(c => c.id === categoryId);
 		const emptyOption = '<option value="">（指定なし / 費目のみ）</option>';
 		const activeSubs = (cat?.subcategories || []).filter(s => !s.is_archived || s.id === preserveId);
 		if (preserveId && !activeSubs.some(s => s.id === preserveId)) activeSubs.push({ id: preserveId, name: `不明な項目 (${preserveId})`, is_archived: true });
-		select.innerHTML = [
+		const html = [
 			emptyOption,
 			...activeSubs.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}${s.is_archived ? '（アーカイブ済み）' : ''}</option>`)
 		].join('');
-		if (previous !== null && Array.from(select.options).some(option => option.value === previous)) select.value = previous;
-		else if (activeSubs.length > 0) select.value = activeSubs[0].id;
+		if (keepSelection && select.options.length) this.replaceOptionsKeepingSelection(select, html, keepUnavailable);
+		else {
+			select.innerHTML = html;
+			if (activeSubs.length > 0) select.value = activeSubs[0].id;
+		}
 	}
 
 	renderTagChips() { this.tagMemoInput.renderTagChips(); }
 
-	addTag(tagStr) { this.tagMemoInput.addTag(tagStr); }
-
 	async updateTagAndMemoSuggestions({ isSessionValid = null } = {}) {
-		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		const operation = this.submitOperation;
+		const valid = captureRenderSession(this.coordinator, () => !this.submitBusy && operation === this.submitOperation && (!isSessionValid || isSessionValid()));
 		if (!valid()) return;
-		const [tags, memos] = await Promise.all([this.db.getUniqueTags(), this.db.getMemoHistory()]);
-		if (!valid()) return;
+		const values = await readInRenderSession(valid, () => Promise.all([this.db.getUniqueTags(), this.db.getMemoHistory()]));
+		if (!valid() || !values) return;
+		const [tags, memos] = values;
 		this.availableTags = tags; this.memoHistoryMap = memos;
 	}
 
-	renderMemoSuggestions(query = '') { this.tagMemoInput.renderMemoSuggestions(query); }
-
-	renderTagSuggestions(query = '') { this.tagMemoInput.renderTagSuggestions(query); }
-
 	async renderUnsettledAdvanceList({ isSessionValid = null } = {}) {
-		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		const operation = this.submitOperation;
+		const valid = captureRenderSession(this.coordinator, () => !this.submitBusy && operation === this.submitOperation && (!isSessionValid || isSessionValid()));
 		if (!valid()) return;
 		const list = document.getElementById('unsettled-advance-list');
 		const countBadge = document.getElementById('unsettled-advance-count');
-		if (!list) return;
 
-		const unsettled = await this.db.getUnsettledAdvancePayments();
-		if (!valid()) return;
-		if (countBadge) countBadge.textContent = `${unsettled.length}件`;
+		const unsettled = await readInRenderSession(valid, () => this.db.getUnsettledAdvancePayments());
+		if (!valid() || !unsettled) return;
+		countBadge.textContent = `${unsettled.length}件`;
 
 		if (unsettled.length === 0) {
 			list.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 10px; text-align: center;">未回収の立替金はありません</div>';
@@ -426,21 +426,31 @@ export class TransactionInputController {
 	}
 
 	async handleSettleAdvanceDirectly(advanceId) {
-		if (this.settleBusy) return;
+		if (this.settleBusy || this.coordinator.isKeyLocked) return;
+		const operation = {};
+		this.settleOperation = operation;
+		const valid = captureRenderSession(this.coordinator, () => this.settleOperation === operation);
 		this.settleBusy = true;
-		try { await this.settleAdvance(advanceId); }
-		catch (error) { alert(`精算の保存に失敗しました: ${error.message}`); }
-		finally { this.settleBusy = false; }
+		try { await this.settleAdvance(advanceId, { isSessionValid: valid }); }
+		catch (error) { if (valid()) alert(`精算の保存に失敗しました: ${error.message}`); }
+		finally { if (this.settleOperation === operation) { this.settleOperation = null; this.settleBusy = false; } }
 	}
 
-	async settleAdvance(advanceId) {
-		const advTx = await this.db.getTransaction(advanceId);
+	async settleAdvance(advanceId, { isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
+		const selectedAccountId = document.getElementById('select-account').value;
+		const advTx = await readInRenderSession(valid, () => this.db.getTransaction(advanceId));
+		if (!valid()) return;
 		if (!advTx || advTx.is_deleted || advTx.settlement_status === 'settled' || !((advTx.type === 'transfer' && advTx.to_account_id === 'acc_receivable') || advTx.type === 'advance_payment')) { alert('対象の立替明細は精算済み、削除済み、または変更されています。'); return; }
-		if (linkedRepayment(advanceId, await this.db.getTransactions())) { alert('対象の立替明細は精算済みです。'); return; }
+		const transactions = await readInRenderSession(valid, () => this.db.getTransactions());
+		if (!valid()) return;
+		if (linkedRepayment(advanceId, transactions)) { alert('対象の立替明細は精算済みです。'); return; }
 		if (advTx.amount_pending) { alert('金額未入力の立替は精算できません。先に金額を入力してください。'); return; }
 
-		const config = await this.db.getMasterConfig();
-		const receivingAccountId = document.getElementById('select-account')?.value || (config?.accounts?.[0]?.id || 'acc_default');
+		const config = await readInRenderSession(valid, () => this.db.getMasterConfig());
+		if (!valid()) return;
+		const receivingAccountId = selectedAccountId || (config?.accounts?.[0]?.id || 'acc_default');
 		const today = formatDate(new Date());
 		const repayTx = createAdvanceRepaymentTransaction({
 			date: today,
@@ -449,13 +459,14 @@ export class TransactionInputController {
 			memo: '立替回収'
 		});
 
-		const approvedMonths = await this.coordinator.approveClosedChanges([repayTx], [advTx]);
-		if (approvedMonths === null) return;
-		await this.db.linkAdvanceRepayment(advTx, repayTx, { create: true, approvedMonths });
+		const approvedMonths = await this.coordinator.approveClosedChanges([repayTx], [advTx], { isSessionValid: valid });
+		if (approvedMonths === null || !valid()) return;
+		await this.db.linkAdvanceRepayment(advTx, repayTx, { create: true, approvedMonths, isSessionValid: valid });
+		if (!valid()) return;
 		this.coordinator.showToast(`✅ 立替金(¥${advTx.amount.toLocaleString()})の回収を登録しました`);
 		alert(`立替金「${advTx.memo || '未回収'}」(¥${advTx.amount.toLocaleString()}) の回収・精算を完了しました`);
-		await this.coordinator.refreshAllViews();
-		this.syncManager?.syncPendingDiffs().catch(e => console.log('Sync deferred:', e.message));
+		try { await this.coordinator.refreshAfterTransactionChange({ isSessionValid: valid }); }
+		catch (error) { if (valid()) alert(`回収は保存済みです。表示の更新に失敗しました。一覧を開き直してください: ${error.message}`); }
 	}
 
 	openCalculatorFor(targetInputId = 'input-amount') {
@@ -467,7 +478,7 @@ export class TransactionInputController {
 		this.updateCalculatorDisplay();
 
 		const modal = document.getElementById('modal-tax');
-		if (modal) modal.classList.add('active');
+		modal.classList.add('active');
 	}
 
 	updateCalculatorDisplay() {
@@ -477,23 +488,21 @@ export class TransactionInputController {
 		const baseEl = document.getElementById('calc-tax-base');
 		const amtEl = document.getElementById('calc-tax-amount');
 
-		if (exprEl) exprEl.textContent = this.calcCurrentExpr || '0';
+		exprEl.textContent = this.calcCurrentExpr;
 
-		const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr || '0');
+		const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr);
 		this.calcEvaluatedResult = evalRes.result;
 
-		if (resEl) resEl.textContent = `¥${evalRes.result.toLocaleString()}`;
+		resEl.textContent = `¥${evalRes.result.toLocaleString()}`;
 
 		if (this.calcTaxMeta) {
-			if (taxSummary) taxSummary.style.display = 'block';
+			taxSummary.style.display = 'block';
 			const base = Number(this.calcTaxMeta.base_amount) || 0;
-			const taxAmt = this.calcTaxMeta.tax_amount !== undefined
-				? Number(this.calcTaxMeta.tax_amount)
-				: (this.calcTaxMeta.base_amount ? Math.round(base * (this.calcTaxMeta.tax_rate || 0)) : 0);
-			if (baseEl) baseEl.textContent = `¥${base.toLocaleString()}`;
-			if (amtEl) amtEl.textContent = `¥${taxAmt.toLocaleString()} (${Math.round((this.calcTaxMeta.tax_rate || 0) * 100)}%)`;
+			const taxAmt = Number(this.calcTaxMeta.tax_amount);
+			baseEl.textContent = `¥${base.toLocaleString()}`;
+			amtEl.textContent = `¥${taxAmt.toLocaleString()} (${Math.round((this.calcTaxMeta.tax_rate || 0) * 100)}%)`;
 		} else {
-			if (taxSummary) taxSummary.style.display = 'none';
+			taxSummary.style.display = 'none';
 		}
 	}
 
@@ -502,8 +511,6 @@ export class TransactionInputController {
 		const btnOpen = document.getElementById('btn-open-tax-calc');
 		const btnClose = document.getElementById('btn-close-tax-modal');
 		const btnApply = document.getElementById('btn-apply-tax');
-
-		if (!modal) return;
 
 		btnOpen?.addEventListener('click', () => {
 			this.openCalculatorFor('input-amount');
@@ -540,11 +547,11 @@ export class TransactionInputController {
 				this.calcTaxMeta = null;
 				this.updateCalculatorDisplay();
 			} else if (btn.dataset.calcAction === 'equals') {
-				const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr || '0');
+				const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr);
 				this.calcCurrentExpr = String(evalRes.result);
 				this.updateCalculatorDisplay();
-			} else if (btn.dataset.calcTax) {
-				const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr || '0', btn.dataset.calcTax);
+			} else {
+				const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr, btn.dataset.calcTax);
 				this.calcCurrentExpr = String(evalRes.result);
 				this.calcTaxMeta = evalRes.tax_meta;
 				this.updateCalculatorDisplay();
@@ -552,7 +559,7 @@ export class TransactionInputController {
 		});
 
 		btnApply?.addEventListener('click', () => {
-			const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr || '0');
+			const evalRes = evaluateCalculatorExpression(this.calcCurrentExpr);
 			const targetInput = document.getElementById(this.calcTargetInputId);
 			if (targetInput) {
 				targetInput.value = evalRes.result;
@@ -567,42 +574,64 @@ export class TransactionInputController {
 	}
 
 	async handleFormSubmit() {
-		if (this.submitBusy) return;
+		if (this.submitBusy || this.coordinator.isKeyLocked) return;
+		this.tagMemoInput.commitPending();
+		const draft = { ...captureFormValues(document.getElementById('tx-form')), mode: this.coordinator.currentMode, taxMeta: structuredClone(this.coordinator.currentTaxMeta) };
+		const operation = ++this.submitOperation, sessionValid = captureRenderSession(this.coordinator);
+		const valid = () => operation === this.submitOperation && sessionValid();
 		this.submitBusy = true;
-		const button = document.getElementById('btn-save-tx');
-		if (button) button.disabled = true;
-		try { await this.saveInput(); }
-		catch (error) { alert(`明細の保存に失敗しました: ${error.message}`); }
-		finally { this.submitBusy = false; if (button) button.disabled = false; }
+		this.releaseSubmitBusy = beginFormBusy(document.getElementById('tx-form'), document.getElementById('btn-save-tx'), '登録中…', [...document.querySelectorAll('.mode-tab-btn')]);
+		try { await this.saveInput(draft, valid); }
+		catch (error) { if (valid()) alert(`明細の保存に失敗しました: ${error.message}`); }
+		finally { if (operation === this.submitOperation) { this.releaseSubmitBusy(); this.releaseSubmitBusy = null; this.submitBusy = false; } }
 	}
 
-	async saveInput() {
-		this.tagMemoInput.commitPending();
+	cancelPendingOperations() {
+		this.submitOperation++;
+		this.settleOperation = null; this.settleBusy = false;
+		this.releaseSubmitBusy?.(); this.releaseSubmitBusy = null; this.submitBusy = false;
+		if (this.tagMemoInput) { this.resetDraftInputs(); this.tagMemoInput.hide('tags'); this.tagMemoInput.hide('memos'); }
+	}
+
+	renderPointOffsetNotice(config = this.pointPaymentConfig) {
+		const notice = document.getElementById('point-offset-notice');
+
+		if (document.getElementById('select-point-account').value) { notice.textContent = '選択したポイント口座から充当します。相殺収入の既定分類は使用しません。'; return; }
+		const defaults = config?.point_payment_defaults;
+		const category = config?.categories?.find(item => item.id === defaults?.category_id);
+		const child = category?.subcategories?.find(item => item.id === defaults?.subcategory_id);
+		const name = category ? `${category.name}${child ? ` ＞ ${child.name}` : ''}` : defaults?.category_id || '';
+		const valid = category && category.type === 'income' && !category.is_archived && (!defaults.subcategory_id || (child && !child.is_archived));
+		notice.textContent = valid ? `相殺収入の分類: ${name}。設定画面で変更できます。` : defaults ? `相殺収入の分類: ${name}（アーカイブ済みまたは無効）。設定画面で再設定してください。` : '相殺収入の分類は未設定です。口座指定なしで登録する前に設定画面で指定してください。';
+	}
+
+	async saveInput(draft, valid) {
+		const values = draft.values;
 		const fields = { normal: ['input-amount'], advance: ['input-self-amount', 'input-adv-amount'], repay: ['input-repay-amount'], prepaid: ['input-prepaid-total'], point: ['input-point-total'] };
-		const amountPending = fields[this.coordinator.currentMode].every(id => !document.getElementById(id).value.trim());
-		if (amountPending && this.coordinator.currentMode === 'point' && Number(document.getElementById('input-point-used').value) > 0) {
+		const amountPending = fields[draft.mode].every(id => !values[id].trim());
+		if (amountPending && draft.mode === 'point' && Number(values['input-point-used']) > 0) {
 			alert('ポイント利用額がある場合は購入総額を入力してください。'); return;
 		}
 		if (amountPending && !confirm('金額未入力です。金額が未確定の予定（0円）として登録しますか？')) return;
-		const date = document.getElementById('input-date')?.value;
-		const memo = document.getElementById('input-memo')?.value || '';
-		const tagsRaw = document.getElementById('input-tags')?.value || '';
+		const date = values['input-date'];
+		const memo = values['input-memo'] || '';
+		const tagsRaw = values['input-tags'] || '';
 		const tags = tagsRaw.split(',').map(s => s.trim()).filter(Boolean);
 
-		const accountId = document.getElementById('select-account')?.value;
-		const toAccountId = document.getElementById('select-to-account')?.value;
-		const categoryId = document.getElementById('select-category')?.value;
-		const subcategoryId = document.getElementById('select-subcategory')?.value || null;
+		const accountId = values['select-account'];
+		const toAccountId = values['select-to-account'];
+		const categoryId = values['select-category'];
+		const subcategoryId = values['select-subcategory'] || null;
 
-		const chkSync = document.getElementById('chk-sync-actual-category')?.checked;
-		const actualCategoryId = chkSync ? categoryId : document.getElementById('select-actual-category')?.value;
-		const actualSubcategoryId = chkSync ? subcategoryId : document.getElementById('select-actual-subcategory')?.value || null;
+		const chkSync = draft.checked['chk-sync-actual-category'];
+		const actualCategoryId = chkSync ? categoryId : values['select-actual-category'];
+		const actualSubcategoryId = chkSync ? subcategoryId : values['select-actual-subcategory'] || null;
 
 		let txRecordsToSave = [];
 
-		if (this.coordinator.currentMode === 'normal') {
-			const type = document.getElementById('input-type')?.value;
-			const amount = Number(document.getElementById('input-amount')?.value) || 0;
+		if (draft.mode === 'normal') {
+			const type = values['input-type'];
+			const amount = Number(values['input-amount']) || 0;
 
 			if (amount <= 0 && !amountPending) {
 				alert('金額を入力してください');
@@ -617,7 +646,7 @@ export class TransactionInputController {
 				status: 'confirmed',
 				type: type,
 				amount: amount,
-				tax_meta: this.coordinator.currentTaxMeta,
+				tax_meta: draft.taxMeta,
 				account_id: accountId,
 				to_account_id: type === 'transfer' ? toAccountId : null,
 				category_id: type === 'transfer' ? null : categoryId,
@@ -634,9 +663,9 @@ export class TransactionInputController {
 				sync_status: 'unsynced'
 			};
 			txRecordsToSave.push(tx);
-		} else if (this.coordinator.currentMode === 'advance') {
-			const selfAmount = Number(document.getElementById('input-self-amount')?.value) || 0;
-			const advAmount = Number(document.getElementById('input-adv-amount')?.value) || 0;
+		} else if (draft.mode === 'advance') {
+			const selfAmount = Number(values['input-self-amount']) || 0;
+			const advAmount = Number(values['input-adv-amount']) || 0;
 
 			if (selfAmount <= 0 && advAmount <= 0 && !amountPending) {
 				alert('自己負担額または立替額を入力してください');
@@ -653,13 +682,13 @@ export class TransactionInputController {
 				subcategoryId,
 				actualCategoryId,
 				actualSubcategoryId,
-				taxMeta: this.coordinator.currentTaxMeta,
+				taxMeta: draft.taxMeta,
 				memo,
 				tags
 			});
 			txRecordsToSave.push(...advanceTxs);
-		} else if (this.coordinator.currentMode === 'repay') {
-			const repayAmount = Number(document.getElementById('input-repay-amount')?.value) || 0;
+		} else if (draft.mode === 'repay') {
+			const repayAmount = Number(values['input-repay-amount']) || 0;
 			if (repayAmount <= 0 && !amountPending) {
 				alert('回収額を入力してください');
 				return;
@@ -674,9 +703,9 @@ export class TransactionInputController {
 			});
 			txRecordsToSave.push(repayTx);
 
-		} else if (this.coordinator.currentMode === 'prepaid') {
-			const totalAmount = Number(document.getElementById('input-prepaid-total')?.value) || 0;
-			const amortizeMonths = Number(document.getElementById('input-prepaid-months')?.value) || 12;
+		} else if (draft.mode === 'prepaid') {
+			const totalAmount = Number(values['input-prepaid-total']) || 0;
+			const amortizeMonths = Number(values['input-prepaid-months']) || 12;
 
 			if (totalAmount <= 0 && !amountPending) {
 				alert('一括支払総額を入力してください');
@@ -696,14 +725,21 @@ export class TransactionInputController {
 				tags
 			});
 			txRecordsToSave.push(...prepaidTxs);
-		} else if (this.coordinator.currentMode === 'point') {
-			const totalAmount = Number(document.getElementById('input-point-total')?.value) || 0;
-			const pointUsed = Number(document.getElementById('input-point-used')?.value) || 0;
-			const pointAccountId = document.getElementById('select-point-account')?.value || null;
+		} else if (draft.mode === 'point') {
+			const totalAmount = Number(values['input-point-total']) || 0;
+			const pointUsed = Number(values['input-point-used']) || 0;
+			const pointAccountId = values['select-point-account'] || null;
 
 			if (totalAmount <= 0 && !amountPending) {
 				alert('購入総額を入力してください');
 				return;
+			}
+			const config = pointAccountId ? null : await this.db.getMasterConfig();
+			if (!valid()) return;
+			const defaults = config?.point_payment_defaults;
+			if (!pointAccountId) {
+				const parent = config.categories?.find(item => item.id === defaults?.category_id && item.type === 'income' && !item.is_archived);
+				if (!parent || (defaults.subcategory_id && !parent.subcategories?.some(item => item.id === defaults.subcategory_id && !item.is_archived))) throw new Error('相殺収入の分類が未設定またはアーカイブ済みです。設定画面で再設定してください。');
 			}
 
 			const pointTxs = createPointPaymentTransactions({
@@ -712,11 +748,13 @@ export class TransactionInputController {
 				pointUsed,
 				payingAccountId: accountId,
 				pointAccountId,
+				offsetCategoryId: defaults?.category_id,
+				offsetSubcategoryId: defaults?.subcategory_id ?? null,
 				categoryId,
 				subcategoryId,
 				actualCategoryId,
 				actualSubcategoryId,
-				taxMeta: this.coordinator.currentTaxMeta,
+				taxMeta: draft.taxMeta,
 				memo,
 				tags
 			});
@@ -725,42 +763,44 @@ export class TransactionInputController {
 
 		// Save to Database
 		if (amountPending) for (const tx of txRecordsToSave) { tx.status = 'planned'; tx.amount_pending = true; tx.tax_meta = null; }
-		const approved = await this.coordinator.approveClosedChanges(txRecordsToSave);
-		if (approved === null) return;
+		const approved = await this.coordinator.approveClosedChanges(txRecordsToSave, [], { isSessionValid: valid });
+		if (approved === null || !valid()) return;
 		for (const tx of txRecordsToSave) tx.reclose_approved_months = approved;
-		await this.db.putTransactions(txRecordsToSave, { createOnly: true });
+		await this.db.putTransactions(txRecordsToSave, { createOnly: true, isSessionValid: valid });
+		if (!valid()) return;
 		this.coordinator.showToast('✅ 登録が完了しました');
+		this.resetDraftInputs();
+		try { await this.coordinator.refreshAfterTransactionChange({ isSessionValid: valid }); }
+		catch (error) { if (valid()) alert(`変更は保存済みです。表示の更新に失敗しました: ${error.message}`); }
+	}
 
-		// Reset inputs
+	resetDraftInputs() {
 		const elAmt = document.getElementById('input-amount');
-		if (elAmt) elAmt.value = '';
+		elAmt.value = '';
 		const elSelf = document.getElementById('input-self-amount');
-		if (elSelf) elSelf.value = '';
+		elSelf.value = '';
 		const elAdv = document.getElementById('input-adv-amount');
-		if (elAdv) elAdv.value = '';
+		elAdv.value = '';
 		const elRepay = document.getElementById('input-repay-amount');
-		if (elRepay) elRepay.value = '';
+		elRepay.value = '';
 		const elPreTotal = document.getElementById('input-prepaid-total');
-		if (elPreTotal) elPreTotal.value = '';
+		elPreTotal.value = '';
 		const elPtTotal = document.getElementById('input-point-total');
-		if (elPtTotal) elPtTotal.value = '';
+		elPtTotal.value = '';
 		const elPtUsed = document.getElementById('input-point-used');
-		if (elPtUsed) elPtUsed.value = '';
+		elPtUsed.value = '';
 		const dispPoint = document.getElementById('display-point-self-amount');
-		if (dispPoint) dispPoint.textContent = '¥0';
+		dispPoint.textContent = '¥0';
 		const elMemo = document.getElementById('input-memo');
-		if (elMemo) elMemo.value = '';
+		elMemo.value = '';
 		const elTags = document.getElementById('input-tags');
-		if (elTags) elTags.value = '';
+		elTags.value = '';
 		const elTagText = document.getElementById('input-tag-text');
-		if (elTagText) elTagText.value = '';
+		elTagText.value = '';
 		this.confirmedTags = [];
 		this.renderTagChips();
 		this.coordinator.currentTaxMeta = null;
 
-		// Refresh views & try auto sync in background
-		await this.coordinator.refreshAllViews();
-		this.syncManager.syncPendingDiffs().catch(err => console.log('Auto sync deferred:', err.message));
 	}
 }
 

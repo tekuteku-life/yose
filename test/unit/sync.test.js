@@ -4,6 +4,13 @@ import { SyncManager } from '../../js/sync.js';
 import { YoseDB } from '../../js/db.js';
 import { transaction } from '../helpers/ui_fixture.js';
 import { generateEd25519KeyPair } from '../../js/crypto.js';
+import { sharedMasterConfig } from '../../js/logic/master_sync.js';
+
+async function masterResponse(db, request) {
+	if (request.action === 'fetch_master') return { ok: true, text: async () => JSON.stringify({ success: true, master_config: sharedMasterConfig(await db.getMasterConfig()) }) };
+	if (request.action === 'update_master') return { ok: true, text: async () => JSON.stringify({ success: true, master_config: request.payload.master_config }) };
+	return null;
+}
 
 describe('js/sync.js - Unit Tests', () => {
 	let db;
@@ -165,6 +172,7 @@ describe('js/sync.js - Unit Tests', () => {
 			let sentPayload = null;
 			const mockFetch = async (url, options) => {
 				const body = JSON.parse(options.body);
+				const master = await masterResponse(db, body); if (master) return master;
 				sentPayload = body.payload;
 				return {
 					ok: true,
@@ -204,6 +212,7 @@ describe('js/sync.js - Unit Tests', () => {
 			const mockFetch = async (url, options) => {
 				const body = JSON.parse(options.body);
 				actions.push(body.action);
+				const master = await masterResponse(db, body); if (master) return master;
 				return {
 					ok: true,
 					text: async () => JSON.stringify({
@@ -229,13 +238,10 @@ describe('js/sync.js - Unit Tests', () => {
 		});
 
 		it('sendRetroactiveUpdate saves transaction and updates cascaded snapshot', async () => {
-			const mockFetch = async () => ({
-				ok: true,
-				text: async () => JSON.stringify({
-					success: true,
-					snapshot: { last_closed_month: '2026-10', account_balances: { acc_wallet: 8000 } }
-				})
-			});
+			const mockFetch = async (_url, options) => {
+				const master = await masterResponse(db, JSON.parse(options.body)); if (master) return master;
+				return { ok: true, text: async () => JSON.stringify({ success: true, snapshot: { last_closed_month: '2026-10', account_balances: { acc_wallet: 8000 } } }) };
+			};
 
 			const sync = new SyncManager({
 				db,
@@ -263,6 +269,7 @@ describe('js/sync.js - Unit Tests', () => {
 		});
 
 		it('fetchRemoteState updates master config, snapshot and pending diffs', async () => {
+			await db.mutateMasterConfig(config => { config.point_payment_defaults = null; });
 			const mockFetch = async () => ({
 				ok: true,
 				text: async () => JSON.stringify({

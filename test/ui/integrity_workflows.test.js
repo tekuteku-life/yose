@@ -311,15 +311,19 @@ describe('Mutation integrity in real UI workflows', { timeout: 180000 }, () => {
 	for (const status of ['master_conflict', 'already_syncing']) it(`reports a locally saved closed edit as pending when synchronization returns ${status}`, async () => {
 		const d = fixture.driver;
 		await seed(d, [transaction('pending_notice', { date: '2026-09-20', target_month: '2026-09', sync_status: 'synced' })]);
-		await d.evaluate(`window.__yose_app.syncManager.setGasUrl('https://yose.local/pending-notice'); window.__yose_app.syncManager.syncPendingDiffs=async()=>({status:${JSON.stringify(status)}});`);
+		await d.evaluate(`(()=>{const app=window.__yose_app,edit=app.txEditController,save=edit.handleEditFormSubmit;edit.handleEditFormSubmit=function(...args){return window.__pendingLocalSave=save.apply(this,args);};app.syncManager.setGasUrl('https://yose.local/pending-notice');window.__pendingSyncCalls=0;app.syncManager.syncPendingDiffs=async()=>{window.__pendingSyncCalls++;return {status:${JSON.stringify(status)}};};})()`);
 		await d.evaluate('window.__yose_app.txEditController.openEditTransactionModal("pending_notice")');
 		await d.fill('#edit-tx-amount', '333');
 		const count = await d.evaluate('window.__dialogs.length');
 		await submit(d, '#edit-tx-form');
-		await waitForDialog(d, '同期は未完了');
+		await d.evaluate('window.__pendingLocalSave');
+		await d.evaluate('window.__yose_app._transactionMaintenanceTask?.promise');
 		const [saved] = await records(d);
 		assert.equal(saved.amount, 333);
 		assert.equal(saved.sync_status, 'unsynced');
-		assert.equal(await d.evaluate(`window.__dialogs.slice(${count}).some(dialog=>dialog.message.includes('再計算しました'))`), false);
+		assert.equal(await d.evaluate('window.__pendingSyncCalls'), 1);
+		assert.match(await d.textContent('#sync-badge'), /未同期|待ち/);
+		assert.equal(await d.evaluate('document.getElementById("modal-edit-tx").classList.contains("active")'), false);
+		assert.deepEqual(await d.evaluate(`window.__dialogs.slice(${count}).filter(dialog=>dialog.type==='alert')`), []);
 	});
 });

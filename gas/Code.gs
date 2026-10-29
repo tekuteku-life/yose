@@ -215,8 +215,8 @@ function initialSetup() {
 		}
 		throw new Error(errMsg);
 	}
-	const name = (typeof ss.getName === 'function') ? ss.getName() : FOLDER_NAME;
-	const id = (typeof ss.getId === 'function') ? ss.getId() : '';
+	const name = ss.getName();
+	const id = ss.getId();
 	// Pre-initialize default sheets
 	loadJsonFile('master_config.json', { schema_version: 2 });
 	loadJsonFile('summary_snapshot.json', { schema_version: 2 });
@@ -236,10 +236,8 @@ function getStorageSpreadsheet() {
 	if (typeof SpreadsheetApp !== 'undefined') {
 		// Container-bound Google Sheet (100% block-free via @OnlyCurrentDoc)
 		try {
-			if (typeof SpreadsheetApp.getActiveSpreadsheet === 'function') {
-				const active = SpreadsheetApp.getActiveSpreadsheet();
-				if (active) return active;
-			}
+			const active = SpreadsheetApp.getActiveSpreadsheet();
+			if (active) return active;
 		} catch (e) {}
 	}
 	return null;
@@ -247,7 +245,7 @@ function getStorageSpreadsheet() {
 
 function loadJsonFromSheet(sheet, defaultContent = {}) {
 	try {
-		const lastRow = (typeof sheet.getLastRow === 'function') ? sheet.getLastRow() : 0;
+		const lastRow = sheet.getLastRow();
 		if (lastRow === 0) return defaultContent;
 		const values = sheet.getRange(1, 1, lastRow, 1).getValues();
 		const str = values.map(r => r[0]).join('');
@@ -281,7 +279,7 @@ function getOrCreateFile(fileName, defaultContent = '{}') {
 	const ss = getStorageSpreadsheet();
 	const sheetName = safeSheetName(fileName);
 	let sheet = ss ? ss.getSheetByName(sheetName) : null;
-	if (!sheet && ss && typeof ss.insertSheet === 'function') {
+	if (!sheet && ss) {
 		sheet = ss.insertSheet(sheetName);
 		saveJsonToSheet(sheet, defaultContent);
 	}
@@ -304,7 +302,7 @@ function loadJsonFile(fileName, defaultContent = {}) {
 	const ss = getStorageSpreadsheet();
 	if (ss) {
 		const sheetName = safeSheetName(fileName);
-		let sheet = (typeof ss.getSheetByName === 'function') ? ss.getSheetByName(sheetName) : null;
+		const sheet = ss.getSheetByName(sheetName);
 		if (!sheet) {
 			return defaultContent;
 		}
@@ -327,13 +325,11 @@ function saveJsonFile(fileName, data) {
 	const ss = getStorageSpreadsheet();
 	if (ss) {
 		const sheetName = safeSheetName(fileName);
-		let sheet = (typeof ss.getSheetByName === 'function') ? ss.getSheetByName(sheetName) : null;
-		if (!sheet && typeof ss.insertSheet === 'function') {
+		let sheet = ss.getSheetByName(sheetName);
+		if (!sheet) {
 			sheet = ss.insertSheet(sheetName);
 		}
-		if (sheet) {
-			saveJsonToSheet(sheet, data);
-		}
+		saveJsonToSheet(sheet, data);
 	}
 }
 
@@ -690,7 +686,7 @@ function sharedMasterConfig(config) {
 	}
 	assertSafe(config);
 	const shared = {};
-	for (const key of ['schema_version', 'accounts', 'categories', 'recurring_rules', 'holidays', 'annual_budgets']) if (config[key] !== undefined) shared[key] = config[key];
+	for (const key of ['schema_version', 'accounts', 'categories', 'recurring_rules', 'holidays', 'annual_budgets', 'point_payment_defaults']) if (config[key] !== undefined && !(key === 'point_payment_defaults' && config[key] === null)) shared[key] = config[key];
 	return shared;
 }
 
@@ -728,6 +724,9 @@ function applyTransactionBatch(transactions) {
 		if (!tx || typeof tx !== 'object' || !tx.id || submittedIds.has(tx.id)) return { success: false, error: 'Invalid or duplicate transaction ID' };
 		submittedIds.add(tx.id);
 	}
+	const metadataPaths = new Set(transactions.flatMap(tx => [`transactions.${tx.id}.previous_target_month`, `transactions.${tx.id}.reclose_approved_months`]));
+	const metadataIssues = dataIntegrity.issues({ transactions }).filter(issue => metadataPaths.has(issue.path));
+	if (metadataIssues.length) return { success: false, error: `データ整合性の検証に失敗しました: ${metadataIssues.map(issue => issue.message).join(' / ')}` };
 	const pending = loadJsonFile('pending_diffs.json', { transactions: [] });
 	const snapshot = loadJsonFile('summary_snapshot.json', { monthly_summaries: {}, account_balances: {} });
 	const archives = new Map(readArchives().map(archive => [archive.month, archive]));
@@ -814,7 +813,7 @@ function handleRetroactiveUpdate(payload) {
 function applyRetroactiveUpdate(payload) {
 	const tx = payload?.transaction;
 	if (!tx?.id || (!(tx.is_deleted === true && tx.target_month === undefined) && !/^\d{4}-\d{2}$/.test(tx.target_month || ''))) return { success: false, error: 'Missing transaction or target_month' };
-	const result = applyTransactionBatch([{ ...tx, ...(payload.previous_target_month ? { previous_target_month: payload.previous_target_month } : {}) }]);
+	const result = applyTransactionBatch([{ ...tx, ...(Object.hasOwn(payload, 'previous_target_month') ? { previous_target_month: payload.previous_target_month } : {}) }]);
 	if (!result.success) return result;
 	return { success: true, snapshot: result.snapshot, ...(result.conflicts.length ? { conflict: true, transaction: result.conflicts[0] } : {}) };
 }
@@ -993,6 +992,15 @@ function createDataIntegrityValidator() {
 				if (cat && categories.has(cat) && expectedType && categories.get(cat).type !== expectedType) issue('category_type', `${path}.${prefix}category_id`, '明細種別と費目の収支種別が一致しません', [cat, categories.get(cat).type, expectedType]);
 			}
 		};
+		const point = master.point_payment_defaults;
+		if (point != null) {
+			if (!object(point) || Object.keys(point).length !== 2 || !Object.hasOwn(point, 'category_id') || !Object.hasOwn(point, 'subcategory_id') || !safeId(point.category_id) || !(point.subcategory_id === null || safeId(point.subcategory_id))) issue('shape', 'point_payment_defaults', 'ポイント相殺の費目と任意の内訳が不正です', point);
+			else {
+				ref(point.category_id, categories, 'point_payment_defaults.category_id', true);
+				ref(point.subcategory_id, children.get(point.category_id) || new Map(), 'point_payment_defaults.subcategory_id');
+				if (categories.has(point.category_id) && categories.get(point.category_id).type !== 'income') issue('category_type', 'point_payment_defaults.category_id', 'ポイント相殺には収入費目が必要です', point.category_id);
+			}
+		}
 		for (const [id, item] of accounts) {
 			const path = `accounts.${id}`;
 			if (!accountTypes.includes(item.type)) issue('enum', `${path}.type`, '口座種別が不正です', item.type);
@@ -1043,6 +1051,9 @@ function createDataIntegrityValidator() {
 				if ((!deleted || item.status !== undefined) && !['confirmed', 'planned'].includes(item.status)) issue('enum', `${path}.status`, '明細状態が不正です', item.status);
 				if (item.amount_pending === true && (item.status !== 'planned' || item.amount !== 0)) issue('pending', `${path}.amount_pending`, '金額未入力の明細は金額0の予定である必要があります', [item.status, item.amount]);
 				if (item.previous_target_month != null && !month(item.previous_target_month)) issue('month', `${path}.previous_target_month`, '移動元月が不正です', item.previous_target_month);
+				if (item.reclose_approved_months !== undefined) {
+					for (const approved of list(item.reclose_approved_months, `${path}.reclose_approved_months`)) if (!month(approved)) issue('month', `${path}.reclose_approved_months`, '再月締めの承認月が不正です', approved);
+				}
 			}
 			number(item.amount, `${path}.amount`, { required: !deleted || item.amount !== undefined, integer: true, min: 0 });
 			bools(item, path, ['is_deleted', 'amount_pending', 'is_active', 'is_payment_record', 'is_point_split']);
@@ -1273,6 +1284,12 @@ function createDataIntegrityValidator() {
 			const master = after?.master_config || {}, previous = new Map(rows(before?.transactions).map(tx => [tx.id, tx]));
 			const accounts = new Map(rows(master.accounts).map(item => [item.id, item]));
 			const categories = new Map(rows(master.categories).map(item => [item.id, item]));
+			const defaults = master.point_payment_defaults;
+			const oldDefaults = before?.master_config?.point_payment_defaults;
+			if (defaults && (defaults.category_id !== oldDefaults?.category_id || (defaults.subcategory_id ?? null) !== (oldDefaults?.subcategory_id ?? null))) {
+				const parent = categories.get(defaults.category_id);
+				if (parent?.is_archived || rows(parent?.subcategories).find(sub => sub.id === defaults.subcategory_id)?.is_archived) violations.push({ message: 'point_payment_defaults: アーカイブされた既定分類は選択できません' });
+			}
 			for (const tx of rows(after?.transactions)) {
 				if (!object(tx) || tx.is_deleted) continue;
 				const old = previous.get(tx.id);

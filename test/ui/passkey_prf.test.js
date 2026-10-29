@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { useBrowser, seed, transaction, records, settings, waitForDialog } from '../helpers/ui_fixture.js';
+import { observeNativeEvent67 } from '../helpers/ui_workflows67.js';
 
 const fixture = useBrowser();
 async function authenticator(d, prf = true) {
@@ -104,21 +105,35 @@ describe('PRF passkey unlock in Chromium', () => {
 	});
 	it('recovers the committed signing keys with PIN after locking immediately after their transaction commits', async () => {
 		const d=fixture.driver; await authenticator(d); await register(d);
-		await d.evaluate(`const db=window.__yose_app.db,commit=db.putSecurityKeys.bind(db);db.putSecurityKeys=async(...args)=>{await commit(...args);window.__yose_app.authController.invalidateSession();};window.__nextPromptText='1234';`);
-		await d.click('#btn-generate-key'); await waitForDialog(d,'認証状態が変更');
-		assert.equal(await d.evaluate('window.__yose_app.db.isEncrypted()'),false);
-		await d.evaluate('window.__yose_app.authController.showLockScreen()');
-		await pin(d);
-		assert.equal(await d.evaluate('(async()=>window.__yose_app.publicKeyBase64===await window.__yose_app.db.getSecurityKey("public_key_base64"))()'),true);
+		const raw=await d.evaluate('window.__yose_app.db.captureImportState()'),previous=await d.evaluate('window.__yose_app.db.getSecurityKey("public_key_base64")'),count=await d.evaluate('window.__dialogs.length');
+		await d.evaluate(`(()=>{window.__restores67=[];const db=window.__yose_app.db,commit=db.putSecurityKeys;db.putSecurityKeys=async function(...args){const result=await commit.apply(this,args);window.__yose_app.authController.invalidateSession();return result;};window.__restores67.push(()=>db.putSecurityKeys=commit);window.__nextPromptText='1234';})()`);
+		await observeNativeEvent67(d,'#btn-generate-key');
+		try {
+			await d.click('#btn-generate-key'); assert.equal(await d.evaluate('window.__masterNativeJobs67.length'),1); await d.evaluate('window.__masterNativeJobs67[0]');
+			assert.equal(await d.evaluate('window.__yose_app.db.isEncrypted()'),false); assert.equal(await d.evaluate('window.__yose_app.privateKey'),null);
+			assert.notEqual(await d.evaluate('window.__yose_app.db.getSecurityKey("public_key_base64")'),previous);
+			assert.equal(await d.evaluate('(async()=>Boolean((await window.__yose_app.db.getSecurityKey("webauthn_credential")).prfWrap))()'),false);
+			assert.deepEqual(await d.evaluate('window.__yose_app.db.captureImportState()'),raw);
+			assert.deepEqual(await d.evaluate(`window.__dialogs.slice(${count}).filter(dialog=>dialog.type==='alert')`),[],'old regeneration completion must suppress notifications and retain the committed pair');
+			await d.evaluate('window.__yose_app.authController.showLockScreen()'); await observeAppInit(d); await pin(d); await awaitAppInit(d);
+			assert.equal(await d.evaluate('(async()=>window.__yose_app.publicKeyBase64===await window.__yose_app.db.getSecurityKey("public_key_base64"))()'),true);
+			assert.deepEqual(await d.evaluate('window.__yose_app.db.captureImportState()'),raw);
+		} finally { await d.evaluate('Promise.allSettled(window.__masterNativeJobs67)'); await d.evaluate('window.__restores67.reverse().forEach(restore=>restore())'); }
 	});
 	it('keeps a committed PIN change locked when the session is invalidated immediately after saving', async () => {
 		const d=fixture.driver; await settings(d); await d.click('#btn-toggle-key-details');
-		await d.evaluate(`const app=window.__yose_app,db=app.db,save=db.saveSecurityKey.bind(db);db.saveSecurityKey=async(...args)=>{const result=await save(...args);if(args[0]==='master_keys_package')app.authController.invalidateSession();return result;};`);
-		await d.fill('#input-pin','5678'); await d.click('#btn-save-pin'); await waitForDialog(d,'PINコードを正常に更新');
-		assert.equal(await d.evaluate('window.__yose_app.authController.isKeyLocked'),true);
-		assert.equal(await d.evaluate('window.__yose_app.db.isEncrypted()'),false);
-		assert.equal(await d.evaluate('window.__yose_app.privateKey'),null);
-		await d.evaluate('window.__yose_app.authController.showLockScreen()'); await pin(d,'5678');
+		const raw=await d.evaluate('window.__yose_app.db.captureImportState()'),previous=await d.evaluate('window.__yose_app.db.getSecurityKey("master_keys_package")'),publicKey=await d.evaluate('window.__yose_app.db.getSecurityKey("public_key_base64")'),count=await d.evaluate('window.__dialogs.length');
+		await d.evaluate(`(()=>{window.__restores67=[];const app=window.__yose_app,db=app.db,save=db.saveSecurityKey;db.saveSecurityKey=async function(...args){const result=await save.apply(this,args);if(args[0]==='master_keys_package')app.authController.invalidateSession();return result;};window.__restores67.push(()=>db.saveSecurityKey=save);})()`);
+		await observeNativeEvent67(d,'#btn-save-pin');
+		try {
+			await d.fill('#input-pin','5678'); await d.click('#btn-save-pin');
+			assert.equal(await d.evaluate('window.__masterNativeJobs67.length'),1); await d.evaluate('Promise.all(window.__masterNativeJobs67)');
+			assert.equal(await d.evaluate('window.__yose_app.authController.isKeyLocked'),true);
+			assert.equal(await d.evaluate('window.__yose_app.db.isEncrypted()'),false); assert.equal(await d.evaluate('window.__yose_app.privateKey'),null);
+			assert.deepEqual(await d.evaluate('window.__yose_app.db.captureImportState()'),raw); assert.notDeepEqual(await d.evaluate('window.__yose_app.db.getSecurityKey("master_keys_package")'),previous); assert.equal(await d.evaluate('window.__yose_app.db.getSecurityKey("public_key_base64")'),publicKey);
+			assert.deepEqual(await d.evaluate(`window.__dialogs.slice(${count})`),[],'obsolete PIN completion must preserve its committed package and suppress the old success notification');
+			await d.evaluate('window.__yose_app.authController.showLockScreen()'); await pin(d,'5678');
+		} finally { await d.evaluate('window.__restores67.reverse().forEach(restore=>restore())'); }
 	});
 	for (const failure of ['get-cancel', 'save-failure']) it(`keeps the prior registration usable after a replacement ${failure}`, async () => {
 		const d=fixture.driver; await authenticator(d); await register(d);
@@ -133,15 +148,23 @@ describe('PRF passkey unlock in Chromium', () => {
 	});
 	for (const action of ['relock','unregister']) it(`rejects a delayed assertion after ${action}`, async () => {
 		const d=fixture.driver; await authenticator(d); await register(d); await lock(d);
-		await d.evaluate(`navigator.credentials.get=async options=>{ const c=await CredentialsContainer.prototype.get.call(navigator.credentials,options); await new Promise(resolve=>window.__finishAssertion=resolve); return c; };`);
-		await d.click('#btn-auth-webauthn'); await d.waitFor('typeof window.__finishAssertion === "function"');
-		if (action==='relock') await d.evaluate('window.__yose_app.authController.lockPrivateKey()');
-		else await d.evaluate('window.__yose_app.db.deleteSecurityKey("webauthn_credential")');
-		await d.evaluate('window.__finishAssertion()'); await d.waitFor('document.getElementById("auth-error-msg").style.display === "block"');
-		assert.equal(await d.evaluate('window.__yose_app.db.isEncrypted()'),false);
-		assert.equal(await d.evaluate('window.__yose_app.syncManager.privateKey'),null);
-		assert.equal(await d.evaluate('(async()=> (await import("./js/crypto.js")).hasActiveSession())()'),false);
-		await pin(d);
+		await d.evaluate(`(()=>{window.__restores67=[];const get=navigator.credentials.get;navigator.credentials.get=async options=>{const c=await CredentialsContainer.prototype.get.call(navigator.credentials,options);await new Promise(resolve=>window.__finishAssertion=resolve);return c;};window.__restores67.push(()=>navigator.credentials.get=get);})()`);
+		await observeNativeEvent67(d,'#btn-auth-webauthn');
+		try {
+			await d.click('#btn-auth-webauthn'); await d.waitFor('typeof window.__finishAssertion === "function"');
+			if (action==='relock') await d.evaluate('window.__yose_app.authController.lockPrivateKey()');
+			else await d.evaluate('window.__yose_app.db.deleteSecurityKey("webauthn_credential")');
+			const raw=await d.evaluate('window.__yose_app.db.captureImportState()'),keys=await d.evaluate('window.__yose_app.db.getAllRaw("security_keys")'),count=await d.evaluate('window.__dialogs.length'),error=await d.evaluate('({display:document.querySelector("#auth-error-msg").style.display,text:document.querySelector("#auth-error-msg").textContent})');
+			await d.evaluate('window.__finishAssertion();window.__masterNativeJobs67[0]');
+			if(action==='relock') {
+				assert.deepEqual(await d.evaluate('({display:document.querySelector("#auth-error-msg").style.display,text:document.querySelector("#auth-error-msg").textContent})'),error);
+				assert.deepEqual(await d.evaluate(`window.__dialogs.slice(${count})`),[]);
+			}else assert.equal(await d.evaluate('document.querySelector("#auth-error-msg").style.display'),'block');
+			assert.deepEqual(await d.evaluate('window.__yose_app.db.captureImportState()'),raw); assert.deepEqual(await d.evaluate('window.__yose_app.db.getAllRaw("security_keys")'),keys);
+			assert.equal(await d.evaluate('window.__yose_app.db.isEncrypted()'),false); assert.equal(await d.evaluate('window.__yose_app.syncManager.privateKey'),null);
+			assert.equal(await d.evaluate('(async()=> (await import("./js/crypto.js")).hasActiveSession())()'),false);
+			await observeAppInit(d); await pin(d); await awaitAppInit(d);
+		} finally { await d.evaluate('window.__finishAssertion?.()'); await d.evaluate('Promise.allSettled(window.__masterNativeJobs67)'); await d.evaluate('window.__restores67.reverse().forEach(restore=>restore())'); }
 	});
 	for (const wrong of ['dmk','signing-key']) it(`rejects a decryptable wrap containing a different ${wrong}`, async () => {
 		const d=fixture.driver; await seed(d,[transaction('kept')]); await authenticator(d); await register(d);
@@ -167,6 +190,7 @@ describe('PRF passkey unlock in Chromium', () => {
 			const db=window.__yose_app.db, read=db.getDataMetadata.bind(db);let once=true;
 			db.getDataMetadata=async(...args)=>{const data=await read(...args);if(once){once=false;await new Promise(r=>window.__prfMetadataRelease=r);}return data;};
 		}`);
+		try {
 		await d.click('#btn-auth-webauthn'); await d.waitFor('typeof window.__prfMetadataRelease==="function"');
 		assert.equal(await d.evaluate('window.__yose_app._domInitialized && document.getElementById("auth-screen").classList.contains("hidden")'),true);
 		assert.equal(await d.textContent('#data-metadata'),'');
@@ -176,6 +200,7 @@ describe('PRF passkey unlock in Chromium', () => {
 		await d.evaluate('window.__dialogs=[];window.__nextPromptText=null');
 		await d.click('#btn-generate-key'); await waitForDialog(d,'再生成を中止しました');
 		assert.equal(await d.evaluate('window.__dialogs.some(d=>d.type==="confirm") && window.__dialogs.some(d=>d.type==="prompt")'),true);
+		} finally { await d.evaluate('window.__prfMetadataRelease?.()'); await d.evaluate('window.__prfInitPromise'); await d.evaluate('window.__yose_app.finishAppInit=window.__prfInitOriginal'); }
 	});
 	it('preserves PRF unlock after PIN changes and invalidates it on signing key regeneration', async () => {
 		const d=fixture.driver; await authenticator(d); await register(d);

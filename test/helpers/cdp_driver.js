@@ -145,13 +145,36 @@ export class HeadlessBrowserDriver {
 						for (const key of Object.keys(file.b)) file.b[key].fill(0);
 					}
 				};
+				const restoreChunk = (chunk, maps) => {
+					if (!chunk || typeof chunk.id !== 'string' || !chunk.id || !chunk.files || typeof chunk.files !== 'object' || Array.isArray(chunk.files)) throw new Error('Invalid stored coverage chunk');
+					const entries = Object.entries(chunk.files).map(([file, counters]) => {
+						if (!Number.isSafeInteger(counters?.map) || counters.map < 0 || counters.map >= maps.length) throw new Error('Invalid stored coverage map reference');
+						const schema = maps[counters.map];
+						if (!schema || typeof schema !== 'object' || Array.isArray(schema) || ['s', 'f', 'b'].some(key => Object.hasOwn(schema, key))) throw new Error('Invalid stored coverage map');
+						return [file, { ...schema, s: counters.s, f: counters.f, b: counters.b }];
+					});
+					return { id: chunk.id, coverage: JSON.stringify(Object.fromEntries(entries)) };
+				};
 				const persistCoverage = (acknowledgements = []) => {
 					if (location.origin !== coverageOrigin) return;
-					const pending = JSON.parse(sessionStorage.getItem(coverageKey) || '[]').filter(chunk => !acknowledgements.includes(chunk.id));
-					pending.push({ id: crypto.randomUUID(), coverage: JSON.stringify(globalThis.__coverage__ || {}) });
-					sessionStorage.setItem(coverageKey, JSON.stringify(pending));
+					const saved = JSON.parse(sessionStorage.getItem(coverageKey) || '{"version":1,"maps":[],"chunks":[]}');
+					if (saved?.version !== 1 || !Array.isArray(saved.maps) || !Array.isArray(saved.chunks)) throw new Error('Invalid stored coverage queue');
+					for (const chunk of saved.chunks) restoreChunk(chunk, saved.maps);
+					const chunks = saved.chunks.filter(chunk => !acknowledgements.includes(chunk.id)), maps = saved.maps;
+					// Compare complete metadata, including changed maps even when counters are zero.
+					const indices = new Map(maps.map((schema, index) => [JSON.stringify(schema), index]));
+					const files = Object.fromEntries(Object.entries(globalThis.__coverage__ || {}).map(([file, coverage]) => {
+						const schema = Object.fromEntries(Object.entries(coverage).filter(([key]) => !['s', 'f', 'b'].includes(key)));
+						const identity = JSON.stringify(schema);
+						if (!indices.has(identity)) { indices.set(identity, maps.length); maps.push(schema); }
+						return [file, { map: indices.get(identity), s: coverage.s, f: coverage.f, b: coverage.b }];
+					}));
+					chunks.push({ id: crypto.randomUUID(), files });
+					const wire = chunks.map(chunk => restoreChunk(chunk, maps));
+					// Do not reset live counters unless the complete pending queue was persisted.
+					sessionStorage.setItem(coverageKey, JSON.stringify({ version: 1, maps, chunks }));
 					resetCoverage();
-					return pending;
+					return wire;
 				};
 				window.__yoseCoverageFlush = acknowledgements => {
 					for (const chunk of persistCoverage(acknowledgements) || []) window.__yoseWriteCoverage(JSON.stringify(chunk));

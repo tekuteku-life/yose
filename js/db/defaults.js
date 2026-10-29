@@ -9,6 +9,7 @@ export const FORBIDDEN_PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'pr
 
 export const DEFAULT_MASTER_CONFIG = {
 	schema_version: 2,
+	point_payment_defaults: { category_id: 'cat_point_income', subcategory_id: 'sub_point_offset' },
 	updated_at: new Date().toISOString(),
 	accounts: [
 		{

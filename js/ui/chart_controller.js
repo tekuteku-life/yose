@@ -38,7 +38,6 @@ export class ChartController {
 		this.drop(slot);
 		const args = [slot, prefix, canvasId, fallbackId, title, type, source, options]; this.timeViews.set(slot, args);
 		const canvas = document.getElementById(canvasId), fallback = document.getElementById(fallbackId), controls = document.getElementById(`${prefix}-series`), reset = document.getElementById(`${prefix}-reset`);
-		if (!canvas || !fallback || !controls) return;
 		reset.parentElement.style.display = 'flex';
 		const datasets = source.datasets.map(dataset => {
 			const key = JSON.stringify([prefix, dataset.seriesKey]);
@@ -47,7 +46,7 @@ export class ChartController {
 			return row;
 		});
 		const toggle = index => {
-			if (this.coordinator.isKeyLocked || !source.datasets[index]) return;
+			if (this.coordinator.isKeyLocked) return;
 			const key = JSON.stringify([prefix, source.datasets[index].seriesKey]); this.selection.set(key, this.selection.get(key) === false);
 			this.drawTime(...args);
 		};
@@ -87,7 +86,7 @@ export class ChartController {
 		const palette = ['#2563eb','#059669','#d97706','#dc2626','#7c3aed','#db2777','#0891b2','#65a30d'];
 		this.drawTime('categoryTrendChart','category-trend','category-trend-chart','category-trend-fallback',`費目ごとの${trend.type === 'income' ? '収入' : '支出'}推移`,'line', {
 			labels: trend.labels, datasets: trend.series.map(row => {
-				const key = JSON.stringify([trend.type || 'expense', row.kind || 'category', row.id]);
+				const key = JSON.stringify([trend.type, row.kind, row.id]);
 				let hash = 0; for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
 				return { seriesKey: key, categoryId: row.id, label: row.name, data: row.values, borderColor: palette[hash % palette.length], fill: false, tension: 0.15 };
 			})
@@ -145,11 +144,11 @@ export class ChartController {
 
 	renderChartForAssets(totalAssetSummary) {
 		this.drop('chart'); this.timeViews.delete('chart');
-		document.getElementById('summary-series')?.replaceChildren();
-		const reset = document.getElementById('summary-reset'); if (reset) reset.parentElement.style.display = 'none';
+		document.getElementById('summary-series').replaceChildren();
+		const reset = document.getElementById('summary-reset'); reset.parentElement.style.display = 'none';
 		const canvas = document.getElementById('summary-chart');
 		const fallback = document.getElementById('chart-fallback');
-		if (!canvas) return;
+
 
 		const labels = ['流動資産 (預貯金等)', '投資資産 (証券・投信等)', '負債 (カード等)'];
 		const values = [
@@ -159,8 +158,8 @@ export class ChartController {
 		];
 		const colors = ['#2563eb', '#10b981', '#ef4444'];
 
-		if (typeof window !== 'undefined' && window.Chart) {
-			if (fallback) fallback.style.display = 'none';
+		if (window.Chart) {
+			fallback.style.display = 'none';
 			canvas.style.display = 'block';
 
 			this.destroyMainChart();
@@ -178,7 +177,7 @@ export class ChartController {
 					}
 				}
 			});
-		} else if (fallback) {
+		} else {
 			canvas.style.display = 'none';
 			fallback.style.display = 'block';
 			fallback.innerHTML = `<div>総資産: ¥${totalAssetSummary.total_assets.toLocaleString()} (純資産: ¥${totalAssetSummary.total_net_assets.toLocaleString()})</div>`;
@@ -188,7 +187,7 @@ export class ChartController {
 	renderChartForCategoryBreakdown(categoryItems = []) {
 		const canvas = document.getElementById('category-breakdown-chart');
 		const container = document.getElementById('category-breakdown-chart-container');
-		if (!canvas) return;
+
 
 		if (this.categoryBreakdownChart) {
 			this.categoryBreakdownChart.destroy();
@@ -198,11 +197,11 @@ export class ChartController {
 		const positiveItems = (categoryItems || []).filter(item => (item.amount || 0) > 0);
 		if (positiveItems.length === 0) {
 			canvas.style.display = 'none';
-			if (container) container.style.display = 'none';
+			container.style.display = 'none';
 			return;
 		}
 
-		if (container) container.style.display = 'block';
+		container.style.display = 'block';
 		canvas.style.display = 'block';
 
 		const labels = positiveItems.map(item => item.name);
@@ -213,7 +212,7 @@ export class ChartController {
 			'#f97316', '#14b8a6', '#6366f1', '#eab308'
 		];
 
-		if (typeof window !== 'undefined' && window.Chart) {
+		if (window.Chart) {
 			this.categoryBreakdownChart = new window.Chart(canvas, {
 				type: 'doughnut',
 				data: {
@@ -243,35 +242,35 @@ export class ChartController {
 
 	renderChartForTags(tagSummary) {
 		const canvas = document.getElementById('tag-chart');
-		if (!canvas) return;
+
 
 		if (this.tagChart) {
 			this.tagChart.destroy();
 			this.tagChart = null;
 		}
 
-		const tagsList = tagSummary?.tagList || (Array.isArray(tagSummary?.tags) ? tagSummary.tags : Object.values(tagSummary?.tags || {}));
+		const tagsList = tagSummary.tagList;
 
-		if (!tagsList || tagsList.length === 0) {
+		if (tagsList.length === 0) {
 			canvas.style.display = 'none';
 			return;
 		}
 
-		const topTags = tagsList.filter(t => (t.expense ?? t.expense_total ?? 0) > 0).slice(0, 8);
+		const topTags = tagsList.filter(t => t.expense > 0).slice(0, 8);
 		if (topTags.length === 0) {
 			canvas.style.display = 'none';
 			return;
 		}
 		canvas.style.display = 'block';
 
-		const labels = topTags.map(t => t.tag || t.name);
-		const data = topTags.map(t => t.expense ?? t.expense_total ?? 0);
+		const labels = topTags.map(t => t.tag);
+		const data = topTags.map(t => t.expense);
 		const palette = [
 			'#3b82f6', '#10b981', '#f59e0b', '#ef4444',
 			'#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
 		];
 
-		if (typeof window !== 'undefined' && window.Chart) {
+		if (window.Chart) {
 			this.tagChart = new window.Chart(canvas, {
 				type: 'doughnut',
 				data: {

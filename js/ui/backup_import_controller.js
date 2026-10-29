@@ -1,6 +1,6 @@
 /** Explicit complete-import confirmation and pending-operation management. */
 import { IMPORT_CONFIRMATION_WORD } from '../db/backup_replacement.js';
-import { captureRenderSession } from './render_session.js';
+import { captureRenderSession, readInRenderSession } from './render_session.js';
 
 const TYPE_NAMES = { full_backup: '全データ', transactions: '取引明細', master_config: 'マスタ設定', annual_budgets: '年間予算', summary_snapshot: '残高スナップショット' };
 
@@ -9,17 +9,23 @@ export class BackupImportController {
 		this.coordinator = coordinator;
 		this.plan = null;
 		this.busy = false;
+		this.busyOwner = null;
+	}
+
+	cancel() {
+		this.plan = null;
+		this.busyOwner = null;
+		this.busy = false;
+		document.getElementById('replacement-import-word').value = '';
+		document.getElementById('btn-confirm-replacement-import').disabled = true;
+		document.getElementById('modal-replacement-import').classList.remove('active');
 	}
 
 	setup() {
 		const modal = document.getElementById('modal-replacement-import');
 		const word = document.getElementById('replacement-import-word');
 		const button = document.getElementById('btn-confirm-replacement-import');
-		const close = () => {
-			this.plan = null;
-			word.value = '';
-			modal.classList.remove('active');
-		};
+		const close = () => this.cancel();
 		document.getElementById('btn-close-replacement-import').addEventListener('click', close);
 		document.getElementById('btn-cancel-replacement-import').addEventListener('click', close);
 		word.addEventListener('input', () => { button.disabled = this.busy || word.value !== IMPORT_CONFIRMATION_WORD; });
@@ -30,18 +36,21 @@ export class BackupImportController {
 		});
 		new MutationObserver(() => {
 			if (!modal.classList.contains('active')) {
-				this.plan = null;
+				if (this.plan) this.cancel();
 				word.value = '';
 				button.disabled = true;
 			}
 		}).observe(modal, { attributes: true, attributeFilter: ['class'] });
 	}
 
-	async preview(data) {
+	async preview(data, { isSessionValid = null } = {}) {
+		const valid = captureRenderSession(this.coordinator, isSessionValid);
+		if (!valid()) return;
 		if (this.busy || this.coordinator.syncManager.isSyncing) throw new Error('同期中です。完了後にインポートしてください。');
 		const key = this.coordinator.privateKey;
-		const plan = await this.coordinator.db.prepareReplacementImport(data, { replacePending: document.getElementById('checkbox-replace-pending-import').checked });
-		if (this.coordinator.isKeyLocked || this.coordinator.privateKey !== key || this.coordinator.syncManager.isSyncing) throw new Error('認証または同期状態が変更されました');
+		const plan = await readInRenderSession(valid, () => this.coordinator.db.prepareReplacementImport(data, { replacePending: document.getElementById('checkbox-replace-pending-import').checked }));
+		if (!valid()) return;
+		if (this.coordinator.syncManager.isSyncing) throw new Error('同期状態が変更されました');
 		this.plan = { plan, key };
 		const counts = [];
 		if (plan.data.transactions) counts.push(`明細: ${plan.data.transactions.length}件（現在の${plan.expected.transactions.length}件を置換）`);
@@ -57,30 +66,37 @@ export class BackupImportController {
 	async confirm() {
 		const selection = this.plan;
 		if (this.busy || !selection || document.getElementById('replacement-import-word').value !== IMPORT_CONFIRMATION_WORD) return;
+		const sessionValid = captureRenderSession(this.coordinator);
+		this.busyOwner = selection;
+		const owned = () => this.busyOwner === selection && sessionValid() && this.coordinator.privateKey === selection.key;
 		this.busy = true;
 		document.getElementById('btn-confirm-replacement-import').disabled = true;
 		try {
 			await this.coordinator.db.commitReplacementImport(selection.plan, {
 				confirmation: IMPORT_CONFIRMATION_WORD,
-				isSessionValid: () => this.plan === selection && document.getElementById('modal-replacement-import').classList.contains('active') && !this.coordinator.isKeyLocked && this.coordinator.privateKey === selection.key && !this.coordinator.syncManager.isSyncing
+				isSessionValid: () => owned() && this.plan === selection && document.getElementById('modal-replacement-import').classList.contains('active') && !this.coordinator.syncManager.isSyncing
 			});
+			if (!owned()) return;
 			this.plan = null;
 			document.getElementById('checkbox-replace-pending-import').checked = false;
 			document.getElementById('modal-replacement-import').classList.remove('active');
 			alert(`【${TYPE_NAMES[selection.plan.detectedType]} 完全インポート完了】\n手元の対象データを置き換えました。サーバーへの反映は送信待ちです。次回同期で反映します。`);
-			await this.coordinator.refreshAllViews();
+			await this.coordinator.refreshAllViews({ isSessionValid: owned });
 		} catch (error) {
-			if (!this.coordinator.isKeyLocked) document.getElementById('replacement-import-error').textContent = error.message;
+			if (owned()) document.getElementById('replacement-import-error').textContent = error.message;
 		} finally {
-			this.busy = false;
-			document.getElementById('btn-confirm-replacement-import').disabled = !this.plan || document.getElementById('replacement-import-word').value !== IMPORT_CONFIRMATION_WORD;
+			if (this.busyOwner === selection) {
+				this.busyOwner = null;
+				this.busy = false;
+				document.getElementById('btn-confirm-replacement-import').disabled = !this.plan || document.getElementById('replacement-import-word').value !== IMPORT_CONFIRMATION_WORD;
+			}
 		}
 	}
 
 	async renderPending({ isSessionValid = null } = {}) {
 		const valid = captureRenderSession(this.coordinator, isSessionValid);
 		if (!valid()) return;
-		const pending = await this.coordinator.db.getPendingImport();
+		const pending = await readInRenderSession(valid, () => this.coordinator.db.getPendingImport());
 		if (!valid()) return;
 		const panel = document.getElementById('pending-import-panel');
 		panel.hidden = !pending;
@@ -89,22 +105,27 @@ export class BackupImportController {
 	}
 
 	async reapprove() {
+		const manager = this.coordinator.syncManager;
+		const valid = captureRenderSession(this.coordinator, () => manager === this.coordinator.syncManager);
 		try {
-			if (this.coordinator.syncManager.isSyncing) throw new Error('同期中です。完了をお待ちください。');
-			const pending = await this.coordinator.db.getPendingImport();
+			if (!valid()) return;
+			if (manager.isSyncing) throw new Error('同期中です。完了をお待ちください。');
+			const pending = await readInRenderSession(valid, () => this.coordinator.db.getPendingImport());
+			if (!valid()) return;
 			if (!pending) return;
-			const key = this.coordinator.privateKey;
 			const word = prompt(`${TYPE_NAMES[pending.detectedType]}の完全インポートを再承認します。次回取得する最新のサーバーデータも置き換え、ファイルにない対象データは削除します。\n実行する場合は「${IMPORT_CONFIRMATION_WORD}」と正確に入力してください。`);
 			if (word === null) return;
 			if (word !== IMPORT_CONFIRMATION_WORD) throw new Error('確認の文字が一致しません');
-			if (this.coordinator.isKeyLocked || key !== this.coordinator.privateKey || this.coordinator.syncManager.isSyncing) throw new Error('認証または同期状態が変更されました');
+			if (!valid()) return;
+			if (manager.isSyncing) throw new Error('同期状態が変更されました');
 			const replacement = { ...pending };
 			delete replacement.base_version;
-			if (!await this.coordinator.db.updatePendingImport(pending, replacement, { isSessionValid: () => !this.coordinator.isKeyLocked && key === this.coordinator.privateKey && !this.coordinator.syncManager.isSyncing })) throw new Error('送信待ちデータが変更されました。確認し直してください。');
+			if (!await this.coordinator.db.updatePendingImport(pending, replacement, { isSessionValid: () => valid() && !manager.isSyncing })) throw new Error('送信待ちデータが変更されました。確認し直してください。');
+			if (!valid()) return;
 			alert('完全インポートを再承認しました。手動同期で反映してください。');
-			await this.renderPending();
+			await this.renderPending({ isSessionValid: valid });
 		} catch (error) {
-			if (!this.coordinator.isKeyLocked) alert(`再確認に失敗しました: ${error.message}`);
+			if (valid()) alert(`再確認に失敗しました: ${error.message}`);
 		}
 	}
 }

@@ -272,6 +272,7 @@ function createPendingSync({ fail = null, lock = null } = {}) {
 		updatePendingImport: async (submitted, replacement) => { updates.push(clone(replacement)); if (canonicalJsonStringify(submitted) !== canonicalJsonStringify(pending)) return false; pending = clone(replacement); return true; },
 		acknowledgePendingImport: async submitted => { if (canonicalJsonStringify(submitted) !== canonicalJsonStringify(pending)) return false; pending = null; return true; },
 		getUnsyncedTransactions: async () => [],
+		hasUnsyncedMasterConfig: async () => false,
 		getSnapshot: async () => ({}),
 		getMasterConfig: async () => master(),
 		getTransaction: async () => null,

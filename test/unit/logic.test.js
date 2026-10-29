@@ -575,6 +575,7 @@ describe('js/logic.js - Unit Tests', () => {
 
 		it('creates 2 linked records using purchase expense + point offset income (Case B)', () => {
 			const txs = createPointPaymentTransactions({
+				offsetCategoryId: 'cat_point_income', offsetSubcategoryId: 'sub_point_offset',
 				date: '2026-10-17',
 				totalAmount: 5000,
 				pointUsed: 1500,
@@ -1107,6 +1108,7 @@ describe('js/logic.js - Unit Tests', () => {
 			assert.equal(ptA[1].memo, 'ポイント利用分');
 
 			const ptB = createPointPaymentTransactions({
+				offsetCategoryId: 'cat_point_income', offsetSubcategoryId: 'sub_point_offset',
 				date: '2026-10-20',
 				totalAmount: 4000,
 				pointAmount: 500,
@@ -1370,6 +1372,7 @@ describe('js/logic.js - Unit Tests', () => {
 
 			// 17. Case B point payment with fallback actual category and tags
 			const ptBFallback = createPointPaymentTransactions({
+				offsetCategoryId: 'cat_point_income', offsetSubcategoryId: 'sub_point_offset',
 				date: '2026-06-01',
 				totalAmount: 5000,
 				pointAmount: 1000,

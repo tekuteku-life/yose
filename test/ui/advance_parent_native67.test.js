@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import { useBrowser, seed, cashflow, transaction } from '../helpers/ui_fixture.js';
+import { uiCase67, settings67 } from '../helpers/ui_workflows67.js';
+import { gateMethod, waitGate, releaseGate } from '../helpers/workflow_ui_fixture.js';
+const fixture = useBrowser();
+const raw = d => d.evaluate('(async()=>{const db=window.__yose_app.db;return {business:await db.captureImportState(),settings:await db.getAllRaw("settings"),keys:await db.getAllRaw("security_keys")};})()');
+for (const unlink of [false, true]) uiCase67(fixture, `native ${unlink ? 'unlink' : 'link'} cannot save after a real in-progress key generation replaces only the signing key`, async d => {
+	await settings67(d); await d.click('#btn-toggle-key-details');
+	await d.evaluate(`(()=>{const owner=window.__yose_app.advanceLinkController;for(const name of ['open','save']){const original=owner[name];owner[name]=function(...args){const promise=original.apply(this,args);window.__workflowJobs.push({name,promise,settled:false});promise.then(()=>{},()=>{});return promise;};window.__restores67.push(()=>owner[name]=original);}})()`);
+	await gateMethod(d, 'SubtleCrypto.prototype', 'generateKey', { afterRead: true }); await d.evaluate('window.__nextPromptText="1234"'); await d.click('#btn-generate-key'); await waitGate(d);
+	const source = transaction('native-advance-parent67', { type: 'transfer', account_id: 'acc_wallet', to_account_id: 'acc_receivable', category_id: null, actual_category_id: null });
+	const repayment = transaction('native-repayment-parent67', { type: 'transfer', account_id: 'acc_receivable', to_account_id: 'acc_bank_main', category_id: null, actual_category_id: null, ...(unlink ? { advance_source_id: source.id } : {}) });
+	await seed(d, [source, repayment]); await cashflow(d); await d.click(`#month-tx-list [data-id="${source.id}"]`); await d.waitFor(`document.getElementById('modal-edit-tx').classList.contains('active')&&document.getElementById('edit-tx-id').value===${JSON.stringify(source.id)}`); await d.click('#btn-edit-link-advance'); await d.waitFor('document.getElementById("modal-advance-link").classList.contains("active")'); await d.evaluate('Promise.allSettled(window.__workflowJobs.filter(job=>job.name==="open").map(job=>job.promise))');
+	await d.evaluate('window.__advanceParentOrigin67={key:window.__yose_app.db.encryptionKey,generation:window.__yose_app.db.keyGeneration,auth:window.__yose_app.authController.authGeneration,privateKey:window.__yose_app.privateKey}');
+	await gateMethod(d, 'window.__yose_app.db', 'encryptRecord', { afterRead: true }); await d.click(unlink ? '#btn-unlink-advance' : '#btn-save-advance-link'); await waitGate(d, 2);
+	await releaseGate(d, 0); await d.evaluate('Promise.allSettled(window.__workflowJobs.filter(job=>job.name==="generateNewKeyPair").map(job=>job.promise))');
+	assert.equal(await d.evaluate('(()=>{const app=window.__yose_app,o=window.__advanceParentOrigin67;return app.db.encryptionKey===o.key&&app.db.keyGeneration===o.generation&&app.authController.authGeneration===o.auth&&app.privateKey!==o.privateKey;})()'), true);
+	const before = await raw(d), notices = await d.evaluate('window.__workflowNotices.length'), dialogs = await d.evaluate('window.__dialogs.length'); await releaseGate(d, 1); await d.evaluate('Promise.allSettled(window.__workflowJobs.filter(job=>job.name==="save").map(job=>job.promise))');
+	assert.deepEqual(await raw(d), before, 'the current signing key belongs to another origin; financial records must remain untouched'); assert.equal(await d.evaluate('window.__workflowNotices.length'), notices); assert.equal(await d.evaluate('window.__dialogs.length'), dialogs);
+});

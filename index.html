@@ -188,6 +188,7 @@
 								<div id="display-point-self-amount" style="font-size: 1.15rem; font-weight: 700; color: var(--primary);">¥0</div>
 							</div>
 						</div>
+						<p id="point-offset-notice" class="form-hint" role="status"></p>
 					</div>
 
 					<!-- Account Selectors -->
@@ -551,6 +552,7 @@
 					<button type="button" id="btn-bulk-select-page" class="btn btn-secondary btn-sm">表示ページを選択</button>
 					<button type="button" id="btn-bulk-clear" class="btn btn-secondary btn-sm">選択解除</button>
 					<button type="button" id="btn-bulk-edit" class="btn btn-primary btn-sm" disabled>一括編集</button>
+					<button type="button" id="btn-bulk-delete" class="btn btn-danger btn-sm" disabled>選択明細を削除</button>
 				</div>
 				<div id="tx-pagination-controls-top" class="tx-pagination" role="group" aria-label="明細ページ操作（上側）" style="display:none;">
 					<button type="button" id="btn-tx-prev-page-top" class="btn btn-secondary btn-sm" aria-controls="month-tx-list">◀ 前へ</button>
@@ -733,6 +735,19 @@
 				</div>
 
 				<p class="form-hint">明細と設定マスタを送受信し、別端末の変更を取り込む。</p>
+				<p id="sync-last-result" class="sync-result" role="status" aria-live="polite" hidden></p>
+			</div>
+
+			<div class="card" id="card-point-payment-defaults">
+				<h2 class="card-title">ポイント相殺の分類</h2>
+				<p class="form-hint">ポイント口座を指定しない購入で、相殺収入に使う分類を指定します。購入の分類は入力画面で選択します。</p>
+				<div class="form-row">
+					<div class="form-group"><label class="form-label" for="select-point-offset-category">相殺収入の費目</label><select id="select-point-offset-category" class="form-control"><option value="">未設定</option></select></div>
+					<div class="form-group"><label class="form-label" for="select-point-offset-subcategory">相殺収入の内訳</label><select id="select-point-offset-subcategory" class="form-control"><option value="">内訳なし</option></select></div>
+				</div>
+				<button type="button" id="btn-save-point-defaults" class="btn btn-primary">ポイント相殺の分類を保存</button>
+				<button type="button" id="btn-reload-point-defaults" class="btn btn-secondary">保存済み設定を読み直す</button>
+				<p id="point-defaults-error" class="form-error" role="alert"></p>
 			</div>
 
 			<!-- Annual Budget & Savings Target Setting (Requirement 3.14) -->
@@ -913,7 +928,7 @@
 			<div class="card" id="card-app-update">
 				<div class="card-title">
 					<span>🔄 アプリのバージョンと更新</span>
-					<span class="badge badge-info" id="badge-current-version">v1.20.1</span>
+					<span class="badge badge-info" id="badge-current-version">v1.21.0</span>
 				</div>
 				<p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
 					PWAが最新の状態に更新されない場合は、ここでサーバー上の最新バージョンを確認し、強制的にキャッシュをクリアして再読み込みできます。

@@ -1,5 +1,31 @@
 # 外部・内部設計と既存テストの網羅性監査
 
+## 全対象の品質ゲート是正（review67）
+
+[受入是正設計](coverage_acceptance.md)を正本とし、既存設計IDごとの許容入力・異常・操作・並行性と、元原本の未実行分岐を対応付ける。review66の54対象中36未達（Line97.56%/Branch85.32%）を改善する。開始時点の不足branch hitは1283である。missing locationを元branchMapへ復元し、到達不能と未検査を混同しない。最終受入は原本を固定した4層の単一統合計測で判定する。[review67](reviews/review67.md)に工程と独立レビューを記録する。
+
+## R/E/I-3.65〜3.71 追加改善の先行監査
+
+[明細操作改善設計](transaction_workflow_improvements.md)を正本とする。review66で工程を追跡する。既存sync/master_sync/storage_atomicity/transaction_workflows/data_insights/recurring_categories/generated_integrity等のassertを再評価し、次の不足を先行検査する。
+
+| 契約 | 具体的assertと層 |
+| --- | --- |
+| 3.65 同期結果 | Unitの業務分類/安全整形、Integrationの設定のみ送受信/無変更/並行編集/取消/応答喪失、UIの変更項目/保留表示である |
+| 3.66 一括削除 | Unit/Integrationの原本CAS/関連/墓標/締め承認/全raw不変、UIの選択・取消・連打・失敗/成功である |
+| 3.67 行内確定 | Unit/Integrationの予定・明示0/未入力・他金融内容不変・関連/競合、UIの行編集との分離・busy・一覧反映である |
+| 3.68 busy/draft | 実UIの最初の読取/commit保留、フォーム全無効/spinner、取消/失敗復帰、lock/reunlock後の旧catch/finally不干渉である |
+| 3.69 性能 | 実AES/IDBの13,000件前後計測、UnitのLRU/clone/同時復号/改ざん/鍵世代、Integration/UIの差分put/delete・無変更書込0・古いACK/同期保留中のローカル反映である |
+| 3.70 予定重複 | Unitの各一致キー/日付メモ相違/1対1・未入力0・特殊役割除外、Integrationの後発手入力/ルール版/締め進行/暗号失敗、UIの生成/除外件数である |
+| 3.71 ポイント既定 | Unit/Integrationの任意ID/未設定旧schema/親子一体競合・署名GAS・取込/出力互換、UIの設定保存/相殺/専用口座・直前archive・原本保持である |
+
+工程再入で、同じCryptoKeyを再設定した際のentry keyGeneration、旧AES読取後のnative event終端、master/backup表示の上位通知、archive補助metadataの原子性を追加対象とした。予定照合は他月を含む実金融groupを除外し、生成commit後の表示失敗でも生成済み件数/除外件数と原本を維持する。締め済み月は保留中の連続修正/削除、旧ACK後の新版再送、再締めsnapshotの残高反映、新しい未保存draft保持まで実UIで検査する。背景同期の部分commit後の保留/失敗も刷新対象であり、過去lastResultと今回の結果を同一視しない。
+
+初回同期はfresh/旧項目不在/空server/明示変更と、既存明細・残高参照拒否を実暗号/署名で検査する。収集基盤はnative容量境界・未ACK再送・完全schema復元・0 counterを含む変造拒否を検査する。読み込み中の予算fixtureは実Settings描画Promise、年度、操作可能状態、入力後draftを待ち、意図的な保留試験を別途維持する。
+
+review66最終計測は同一54原本のNode1364/1364・実UI631/631成功である。Line 97.56%/Branch 85.32%、各ファイル97%は36ファイルで未達であり、機能PASSと総合受入を区別する。新規helperの未達も含む[最終計測と全未達一覧](reviews/review66_coverage.md)を正本とする。
+
+先行REDと独立レビューを受けるまで本番実装を行わない。旧計測の合格件数やカバレッジを新しい改修の受入へ流用しない。
+
 ## R/E/I-3.63 工程再入時の確認表
 
 [資産表示・個別参照・年間月締め](asset_trends_annual_closing.md)に従う。既存の候補実装・試験をそのまま承認済みとは扱わず、Phase 2/3の独立レビューで観点を再評価する。
@@ -201,3 +227,39 @@ R/E/I-3.61の全体試験で、既存の認証後準備待ちに不足を確認�
 ## R/E/I-4.9 GAS認証是正
 
 既存gas/crypto/gas_public_accessは正常署名・改ざん・登録済み鍵の上書き・通常キャッシュでの重複を検証していた。新規gas_authenticationで未設定公開鍵の先取り、非数値時刻、永続再送（障害・窓・満杯・破損・失敗・別実行）、弱い点・非正規符号・部分群を実署名と既知ベクトルで捕捉する。UIはコピーと管理登録手順、結合/システムは正当な同期・月締めと不正要求による業務不変を検証する。既存の公開登録成功試験とSyncManager登録専用試験は廃止後の契約に合わせて更新/除去する。一覧/個別読取の一時不一致でも認証書込・業務読取の前に拒否し、復旧待ち原本を保つ回帰を含む。上表のcache障害下の未検証点をローカル試験で補完するが、実GASデプロイの確認とは区別する。
+
+## review67 全対象受入是正のassert対応
+
+全54本番原本を対象とし、Line/Branch各97%・4層全成功・原本固定の条件は変更しない。36未達の位置分類、静的root/producer証明、先行と再入の正本は[coverage_acceptance](coverage_acceptance.md)、工程・失敗の区分は[review67](reviews/review67.md)である。以下は追加試験の対応であり、最終受入の合格記録ではない。
+
+|契約/対象|追加試験の直接assert|環境と境界|
+|---|---|---|
+|起動・版・公開facade|startup_entry_contracts/version_runtime_boundaries/coordinator_public_contractsはDOMContentLoaded重複の単一init、no-browser停止、既定fetch/失敗後reload、同期return/throwと非同期保留/拒否の同一性、receiver/引数/設定順を検査する。|原本VM/Nodeの公開契約である。ブラウザー初期化・操作は別UIで検査する。|
+|R/E/I-3.58/59 資産・予算・タグ|analytics_acceptance67/normalization67は外部資産旧別名100/200/300/0円、純資産960円、タグ収支、費目ごとの900円等の予算/実績/残額/率/判定、旧数値/objectの年額1000円、月130円1件/年180円2件のタグ・cross各cell・口座一致を検査する。|実Chromium/Chart.js/暗号DBである。任意引数APIの直接描画も実DOMと数値で照合する。|
+|任意collection省略の旧master|analytics_acceptance67/normalization67は正規saveMasterConfigでschema_version:2を保存し、空資産0円/登録なし、費目空表示、2026年度draft生成とenabled/readOnly、accounts/categoriesを保存に補わないこと、全raw不変を検査する。|保存済み旧形状の互換である。validatorを狭める回避ではない。updated_atの正当な付加とcollection補完を区別する。|
+|R/E/I-3.57/58 認証と表示|insight_lifecycle67/tax_lifecycle67/analytics_session_contracts67はcurrent/staleの読取・digest失敗、実lock/PINunlock後の新投資900/950円・税300000円draft、旧400/550円・通知税200000円のcommit有無、表示失敗時の保存済み区分、読取0/DOM/raw/通知不変を検査する。|実DB/AESを使う。故障/gateは依存境界へ明示注入しfinallyで実Promiseの完了と復元を保証する。|
+|R/E/I-3.14 年間目標|budget_contracts67は基準収入1000円に対する1500円目標の-500円不足/赤字、101%拒否とraw保持、内訳の一致/残100円/超過100円、前年0件の自動計算0円・未保存を検査する。|実DOMの選択/入力/保存APIである。数値・対象年・readyと実render Promiseを照合する。|
+|R/E/I-3.47 保守移行|maintenance_contracts67は互換active口座だけの候補、未入力0円予定/空メモ/取得月、移行後の口座・額・状態、旧承認/新busy/保存後描画の認証競合と全raw/選択/通知保持を検査する。|実Chromium/暗号DBの正常移行と再認証である。DB親predicate伝播はcoverage67_migration_sessionの開始時read0/実AES中失効/原子保持で別に検査する。|
+|入力部品・競合・グラフ|component_contracts67/chart_contracts67/chart_viewport_boundaries/chart_tooltip_contracts67は実focus移動、任意text/callback/hidden重複復元、scalar/削除表示、旧reject非干渉、0/空/null系列と円/割合、範囲外gesture/破棄後listener解除を検査する。|部品の任意ID構成と常設アプリrootを区別する。Viewport geometryのcomponent fixtureを実Chartのnative wheel/touch証明とは呼ばない。|
+|常設UIとoptional API|coordinator_contracts67は旧pane設定、media/abort/session API省略、Storage読取故障到達counter/既定theme/raw保持、実offline時fetch0を検査する。|実Chromiumの機能差異modelとCDP networkである。OS/本番配信の保証ではない。|
+|GAS補助月・共通validator・保存層|coverage67_sync_metadata/validator parity/logic/db/storage/native群は不正path/codeと正常対照、previous/approvedの除去前拒否、旧形状保持、IDB request/abortの原子性、同key親だけ失効時のread0/全raw保持を検査する。|署名service integrationと生成validator単体VMを分離する。mock IDBの故障model、実native IndexedDB、配布GASの境界を混同しない。|
+
+マスタ/JSON/GAS URL/PIN・立替・完全取込の開始元認証と新旧ownerの追加是正は独立レビューで継続点検する。先行RED、fixture/待機誤り、編集中の原本不一致、最終固定原本結果は別々に記録する。13,000件の性能は[review67性能](reviews/review67_performance.md)へ分離し、時間測定をカバレッジや本番応答保証へ読み替えない。
+
+|追加の再入契約|直接assertと試験|環境と境界|
+|---|---|---|
+|明細の公開操作・読取境界|transaction_public_contracts67/await_boundaries67/data_contracts67/editor_compatibility67/input_dropdown_boundaries67/list_acceptance67は新income/planned/987円draftと旧expense/confirmed/100円を区別し、全captureValues・原本・busy、読取0、旧raw保持を検査する。実hidden tabのvisibilityとscroll0も検査する。|実Chromium/暗号DBである。旧type欠落masterはreader互換であり、正規writerが受理するという主張には使用しない。|
+|一覧精算の開始元と親伝播|direct_settlement_session67/input_recovery_contracts67とadvance_parent_session67/native67はnative承認/読取/実commit/refreshを跨ぐ再認証、受取walletの開始時選択、2400円/1200円実返済、全rawと新owner保持を検査する。|公開API既定値/遅延locked callbackとnative利用者操作を区別する。unsupported旧advance_paymentは拒否を検査し、保存成功の対照には正規transferを使用する。|
+|入力modeの無効な親|input_mode_parent67はnative income切替の実master読取を保留し、false親の公開要求が正当なincome_mainへの完了を取り消さないことを検査する。|busy/session/generationを試験から代入しない。|
+|予算の保存ownerと描画owner|budget_refresh_owner67は1300円実commit・自身のrenderによるbaseline交換後もMaintenance.refreshへ有効親を伝播すること、表示故障の保存済み通知、新3000円dirty/1400円save busy保持、実native write abort時のraw不変/refresh0/保存済み通知0を検査する。|Furuの非active描画を待つ誤ったfixtureを訂正し、常時実行されるMaintenance境界へ変更した。予算自体の保存失敗とcommit後表示故障を分離する。|
+|認証epoch・初期化・同期|auth_origin67/setup_origin67/epoch_cancellation67/auth_restore_epoch67/coordinator_origin67/sync_provider_session67は実鍵再生成のauth世代先行更新、DMK所有権、own epoch遷移、旧catch/成功通知/finish非干渉、初期設定失敗後の既存PIN回復を検査する。|PIN非null条件は認証snapshotの保証ではない。実鍵の同一性とDBepochを別々に検査する。|
+|security/delete/snapshot/取込親|security_delete_session67/native67/snapshot_parent_session67/import_parent_session67とbackup_entry_session67は同鍵のまま親だけ失効するAES/IDB境界、実transaction abort、最初のawaitより前の捕捉、全key/value保持を検査する。|mockとnativeの証拠を分離する。commit済み原本の巻き戻しは要求しない。|
+|集計の末尾・category全体選択|analytics_tail_contracts67はdaily支出123円と収入0円、categories省略旧masterの税候補0、subcategories省略時のcategory全体選択/null保持を検査する。|受理された旧データを改変しない。|
+|設定の追加入口とoptional API|settings_entry_contracts67/settings_point_boundaries67/settings_capabilities67の20葉はcomponent eventのtrusted=false/実listener1、実認証世代integer/DB0、全storeのキーと値保持、新ポイントdirty/commit、archive後拒否、任意API不提供からの実reloadを検査する。[設定受入設計](settings_ui_acceptance.md)を正本とする。|先行20成功と独立Phase2・3・静的3箇所の限定Phase5完了を最終4層受入と区別する。既存予算fixtureはreadyBudget/実save/render/Summary Promiseを待ち、24000/12000円draft・DB24000円を維持して関連65成功である。|
+|設定の後続awaitと例外伝播|settings_await_boundaries67の16葉は実鍵export/期待鍵・GAS commit・432円importの確定有無、新file実text待ちのowner、新PIN/URL/point dirtyの具体値と全storeキー/値を検査する。実native登録解除の応答後と、helperの例外からcaller catchへ移るmicrotask間の実lockも含む。|実lock通知1と古い設定fault通知0を区別する。初回3fixture NG、補強後16成功、独立Phase3 PASSである。内部guardへ副作用を注入せず、実Promise継続順と実lock APIだけを制御する。|
+
+### review67 最終受入
+
+編集と別runtimeを停止した固定入力420ファイルで、公式 `npm run test:coverage` が終了値0となった。単体・結合・システム1811/1811、実Chromium UI1206/1206が成功し、失敗・取消・skipは0である。全体Line99.79%・Branch97.94%、本番54ファイル全てが各Line/Branch97%以上である。途中原本の部分診断を合算せず、最終1回の公式実行で判定した。
+
+原本一致・各ファイル値・SHAは[最終カバレッジ](reviews/review67_coverage.md)、工程再入/失敗分類と独立総合Phase5 PASSは[review67](reviews/review67.md)、13,000件の最終性能と適用範囲は[性能記録](reviews/review67_performance.md)を正本とする。test_auditorは420入力/54本番/11性能原本、1305 raw chunk、標準計算と閾値を独立確認した。ローカルの4層受入完了と、実GAS/OS認証器/実機PWA配信の未検証境界を区別する。
