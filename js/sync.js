@@ -25,10 +25,13 @@ export class SyncManager {
 	 * @param {string} [options.gasUrl]
 	 * @param {Function} [options.customFetch]
 	 * @param {Function} [options.captureSession]
+	 * @param {Function} [options.backgroundSync]
 	 */
-	constructor({ db, privateKey = null, gasUrl = '', customFetch = null, captureSession = null } = {}) {
+	constructor({ db, privateKey = null, gasUrl = '', customFetch = null, captureSession = null, backgroundSync = null } = {}) {
 		this.db = db;
 		this.captureSession = captureSession;
+		this.backgroundSync = backgroundSync;
+		this._backgroundAbort = null;
 		this.privateKey = privateKey;
 		this.gasUrl = gasUrl;
 		this.fetch = customFetch || (typeof fetch !== 'undefined' ? fetch.bind(globalThis) : null);
@@ -260,6 +263,7 @@ export class SyncManager {
 	}
 
 	setPrivateKey(key) {
+		if (key !== this.privateKey) this._backgroundAbort?.abort();
 		this.privateKey = key;
 	}
 
@@ -290,6 +294,7 @@ export class SyncManager {
 	}
 
 	detachEventListeners() {
+		this._backgroundAbort?.abort();
 		if (!this._listenersAttached || typeof window === 'undefined') return;
 		window.removeEventListener('online', this._onOnlineBound);
 		document.removeEventListener('visibilitychange', this._onVisibilityBound);
@@ -405,11 +410,60 @@ export class SyncManager {
 		return { response, count: committed.downloaded_count };
 	}
 
-	async syncBidirectional({ approveReclose = null, approveMasterConflict = null, isSessionValid = null } = {}) {
+	async syncBidirectional(options = {}) {
+		if (!this.backgroundSync || !this.privateKey || !this.gasUrl || !this.db.encryptionKey) return this.syncBidirectionalInPage(options);
 		if (this.isSyncing) return { status: 'already_syncing', synced_count: 0, downloaded_count: 0 };
-		const attempt = this.beginAttempt(isSessionValid);
+		const attempt = this.beginAttempt(options.isSessionValid || null), abort = new AbortController();
+		const session = attempt.valid;
+		attempt.valid = () => session() && !abort.signal.aborted;
+		this._backgroundAbort = abort;
+		try {
+			const expected = await this.db.captureImportState();
+			this.assertSession(attempt.valid);
+			if (expected.pending) return await this.syncBidirectionalInPage(options, attempt);
+			const archiveMonths = await this.db.getSetting('downloaded_archive_months', []);
+			this.assertSession(attempt.valid);
+			const output = await this.backgroundSync({ state: expected, archiveMonths, privateKey: this.privateKey, encryptionKey: this.db.encryptionKey, gasUrl: this.gasUrl, requestTimeoutMs: this.requestTimeoutMs }, { signal: abort.signal });
+			this.assertSession(attempt.valid);
+			if (output === null) return await this.syncBidirectionalInPage(options, attempt);
+			if (!await this.db.replaceImportBatch(expected, { ...output.state, archiveMonths: output.archiveMonths }, attempt.valid)) throw new Error('同期中に端末のデータが変更されました。編集内容と送信待ちを保持しています。サーバーで処理済みの場合があります。再同期してください。');
+			this.assertSession(attempt.valid);
+			Object.assign(attempt.result, output.result);
+			unionBusinessChanges(attempt.sent, output.changeIds.sent); unionBusinessChanges(attempt.received, output.changeIds.received);
+			this.masterConflictPaths = output.conflictPaths;
+			const oldMaster = sharedMasterConfig(await this.db.decryptRecord(expected.master));
+			const newMaster = sharedMasterConfig(await this.db.decryptRecord(output.state.master));
+			this.assertSession(attempt.valid);
+			if (canonicalJsonStringify(oldMaster) !== canonicalJsonStringify(newMaster)) for (const listener of this._masterListeners) Promise.resolve().then(() => { if (attempt.valid()) return listener(); }).catch(error => console.warn('Master view refresh failed:', error.message));
+			if (output.error) throw new Error(output.error);
+			this.lastSyncedAt = output.lastSyncedAt;
+			const confirm = (output.result.status === 'master_conflict' && options.approveMasterConflict) || (output.result.status === 'approval_required' && options.approveReclose);
+			if (confirm) {
+				await this.waitForForeground(abort.signal);
+				this.assertSession(attempt.valid);
+				return await this.syncBidirectionalInPage(options, attempt);
+			}
+			return await this.finishAttempt(attempt, output.result);
+		} catch (error) { await this.failAttempt(attempt, error); throw error; }
+		finally { if (this._backgroundAbort === abort) this._backgroundAbort = null; this.endAttempt(attempt); }
+	}
+
+	async waitForForeground(signal) {
+		if (signal.aborted) throw new Error('同期が取消またはロックされました。');
+		if (typeof document === 'undefined' || document.visibilityState === 'visible') return;
+		await new Promise((resolve, reject) => {
+			const cleanup = () => { document.removeEventListener('visibilitychange', visible); signal.removeEventListener('abort', cancel); };
+			const visible = () => { if (document.visibilityState === 'visible') { cleanup(); resolve(undefined); } };
+			const cancel = () => { cleanup(); reject(new Error('同期が取消またはロックされました。')); };
+			document.addEventListener('visibilitychange', visible); signal.addEventListener('abort', cancel, { once: true });
+		});
+	}
+
+	async syncBidirectionalInPage({ approveReclose = null, approveMasterConflict = null, isSessionValid = null }, continuing = null) {
+		if (this.isSyncing && !continuing) return { status: 'already_syncing', synced_count: 0, downloaded_count: 0 };
+		const attempt = continuing || this.beginAttempt(isSessionValid);
 		let stage = '受信';
-		let syncedCount = 0, downloadedCount = 0;
+		let syncedCount = attempt.result.synced_count, downloadedCount = attempt.result.downloaded_count;
 		let pendingCount = 0;
 		try {
 			const first = await this.downloadTransactions(approveMasterConflict, { isSessionValid: attempt.valid });
@@ -425,16 +479,16 @@ export class SyncManager {
 			this.assertSession(attempt.valid);
 			if (awaiting.length) {
 				const months = [...new Set(awaiting.flatMap(affectedMonths))].sort();
-				if (!approveReclose || !await approveReclose(awaiting, months)) return await this.finishAttempt(attempt, { status: 'approval_required', synced_count: 0, downloaded_count: first.count, pending_count: pending.length });
+				if (!approveReclose || !await approveReclose(awaiting, months)) return await this.finishAttempt(attempt, { status: 'approval_required', synced_count: syncedCount, downloaded_count: downloadedCount, pending_count: pending.length });
 				this.assertSession(attempt.valid);
 				for (const tx of awaiting) {
-					if (!await this.db.approveTransactionReclose(tx, months, { isSessionValid: attempt.valid })) return await this.finishAttempt(attempt, { status: 'approval_required', synced_count: 0, downloaded_count: first.count, pending_count: (await this.db.getUnsyncedTransactions()).length });
+					if (!await this.db.approveTransactionReclose(tx, months, { isSessionValid: attempt.valid })) return await this.finishAttempt(attempt, { status: 'approval_required', synced_count: syncedCount, downloaded_count: downloadedCount, pending_count: (await this.db.getUnsyncedTransactions()).length });
 				}
 			}
 			stage = '送信';
 			const uploaded = await this.pushPending({ isSessionValid: attempt.valid });
 			this.assertSession(attempt.valid);
-			syncedCount = uploaded.synced_count;
+			syncedCount += uploaded.synced_count;
 			downloadedCount += uploaded.downloaded_count;
 			pendingCount = (await this.db.getUnsyncedTransactions()).length;
 			stage = '再受信';
@@ -444,7 +498,7 @@ export class SyncManager {
 			pendingCount = (await this.db.getUnsyncedTransactions()).length;
 			this.assertSession(attempt.valid);
 			this.lastSyncedAt = new Date().toISOString();
-			return await this.finishAttempt(attempt, { status: 'synced', synced_count: uploaded.synced_count, downloaded_count: downloadedCount, pending_count: (await this.db.getUnsyncedTransactions()).length });
+			return await this.finishAttempt(attempt, { status: 'synced', synced_count: syncedCount, downloaded_count: downloadedCount, pending_count: (await this.db.getUnsyncedTransactions()).length });
 		} catch (error) {
 			if (error instanceof MasterConflictError) return await this.finishAttempt(attempt, this.masterConflictOutcome(error, syncedCount, downloadedCount, pendingCount, attempt));
 			const failure = new Error(`${stage}: ${error.message}`); await this.failAttempt(attempt, failure); throw failure;

@@ -5,6 +5,7 @@
 
 import { YoseDB } from '../db.js';
 import { SyncManager } from '../sync.js';
+import { createBackgroundSyncRunner } from '../background_sync_client.js';
 import { formatDate } from '../logic.js';
 import { CURRENT_APP_VERSION, checkAppVersion } from '../version.js';
 import { captureRenderSession, readInRenderSession } from './render_session.js';
@@ -99,6 +100,7 @@ export class AppCoordinator {
 			db: this.db,
 			privateKey,
 			gasUrl,
+			backgroundSync: window.matchMedia('(display-mode: standalone)').matches ? createBackgroundSyncRunner() : null,
 			captureSession: () => captureRenderSession(this, () => this.syncManager === manager)
 		});
 		this.syncManager = manager;
