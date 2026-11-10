@@ -435,7 +435,7 @@ export class HeadlessBrowserDriver {
 		`);
 	}
 
-	async waitForReady(timeoutMs = 5000) {
+	async waitForReady(timeoutMs = this.commandTimeoutMs) {
 		const start = Date.now();
 		while (Date.now() - start < timeoutMs) {
 			const state = await this.evaluate('document.readyState');

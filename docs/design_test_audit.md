@@ -1,5 +1,9 @@
 # 外部・内部設計と既存テストの網羅性監査
 
+## バックグラウンド同期（R-4.1、R-4.3、E-4.1）
+
+[同期設計](background_sync.md)を正本とする。`test/integration/background_sync.test.js`は署名付き多段通信、暗号化結果、編集/ロック時の全ストア保持、部分成功、送信後の無条件再試行拒否、確認前の件数保持をassertする。`test/unit/background_sync_client.test.js`は登録・活性化・MessageChannel・取消・応答不明の境界を検査する。`test/ui/background_sync.test.js`は実HTTP/実Service Workerで画面凍結中の送信と再受信、復帰後の同期済み/暗号化保存をassertする。インストール状態判定だけは模擬であり、Android実機と本番GASの通信は未検証である。
+
 ## 全対象の品質ゲート是正（review67）
 
 [受入是正設計](coverage_acceptance.md)を正本とし、既存設計IDごとの許容入力・異常・操作・並行性と、元原本の未実行分岐を対応付ける。review66の54対象中36未達（Line97.56%/Branch85.32%）を改善する。開始時点の不足branch hitは1283である。missing locationを元branchMapへ復元し、到達不能と未検査を混同しない。最終受入は原本を固定した4層の単一統合計測で判定する。[review67](reviews/review67.md)に工程と独立レビューを記録する。
